@@ -1,0 +1,9 @@
+.venv/
+.env
+reminders.db
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+bot_backup_*.py

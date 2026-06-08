@@ -81,3 +81,5 @@ SCHEMA_MIGRATIONS = {
 }
 
 WEEKDAY_HELP = "MON, TUE, WED, THU, FRI, SAT, SUN"
+
+TIMEZONE_LOOKUP_URL = "https://www.addevent.com/c/documentation/tools/time-zone-lookup"

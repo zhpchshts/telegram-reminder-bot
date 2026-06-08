@@ -4,12 +4,18 @@ from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.constants import VALID_WEEKDAYS, WEEKDAY_HELP
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from app.config import APP_TIMEZONE_NAME
+
+from app.constants import TIMEZONE_LOOKUP_URL, VALID_WEEKDAYS, WEEKDAY_HELP
 from app.database import (
     create_reminder_in_db,
     get_active_reminder_from_db,
     get_active_reminders_for_chat,
     mark_reminder_as_deleted,
+    get_chat_timezone,
+    set_chat_timezone,
 )
 from app.formatting import (
     format_datetime_ru,
@@ -200,6 +206,7 @@ async def start(message: Message) -> None:
         "/monthly_weekday — повтор в N-й день недели месяца\n"
         "/monthly_weekday_from — повтор в N-й день недели месяца с указанной даты\n"
         "/list — показать активные напоминания\n"
+        "/timezone — показать или задать таймзону чата\n"
         "/delete — удалить напоминание"
     )
 
@@ -233,10 +240,63 @@ async def help_command(message: Message) -> None:
         "/monthly_weekday_from 1 MON 2026-07-01 12:12 Первый понедельник месяца с июля\n\n"
         "Дни недели:\n"
         f"{WEEKDAY_HELP}\n\n"
+        "Таймзона чата:\n"
+        "/timezone — показать текущую таймзону\n"
+        "/timezone Asia/Yekaterinburg — установить таймзону\n"
+        "Узнать свою таймзону можно здесь:\n"
+        f"{TIMEZONE_LOOKUP_URL}\n\n"
         "Список:\n"
         "/list\n\n"
         "Удаление:\n"
         "/delete ID"
+    )
+
+
+@router.message(Command("timezone"))
+async def timezone_command(message: Message) -> None:
+    if not message.text:
+        await message.answer("Не вижу текст команды.")
+        return
+
+    parts = message.text.split(maxsplit=1)
+
+    if len(parts) == 1:
+        current_timezone = get_chat_timezone(message.chat.id) or APP_TIMEZONE_NAME
+
+        await message.answer(
+            "Текущая таймзона этого чата:\n\n"
+            f"{current_timezone}\n\n"
+            "Чтобы изменить таймзону, отправь команду в формате:\n"
+            "/timezone Asia/Yekaterinburg\n\n"
+            "Узнать и скопировать свою таймзону можно здесь:\n"
+            f"{TIMEZONE_LOOKUP_URL}"
+        )
+        return
+
+    timezone_name = parts[1].strip()
+
+    try:
+        ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        await message.answer(
+            "Не смог распознать таймзону.\n\n"
+            "Используй IANA-формат, например:\n"
+            "/timezone Asia/Yekaterinburg\n"
+            "/timezone Europe/Moscow\n"
+            "/timezone Asia/Almaty\n\n"
+            "Узнать и скопировать свою таймзону можно здесь:\n"
+            f"{TIMEZONE_LOOKUP_URL}"
+        )
+        return
+
+    set_chat_timezone(
+        chat_id=message.chat.id,
+        timezone=timezone_name,
+    )
+
+    await message.answer(
+        "Таймзона этого чата обновлена.\n\n"
+        f"Теперь время будет считаться как: {timezone_name}"
     )
 
 

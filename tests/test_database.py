@@ -209,3 +209,26 @@ def test_create_monthly_weekday_reminder_stores_month_week_number_and_day(
     assert reminder["schedule_type"] == "monthly_weekday"
     assert reminder["month_week_number"] == 1
     assert reminder["day_of_week"] == "MON"
+
+
+def test_get_chat_timezone_returns_none_when_not_set(monkeypatch, tmp_path) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    assert database.get_chat_timezone(100) is None
+
+
+def test_set_chat_timezone_creates_setting(monkeypatch, tmp_path) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    database.set_chat_timezone(100, "Asia/Yekaterinburg")
+
+    assert database.get_chat_timezone(100) == "Asia/Yekaterinburg"
+
+
+def test_set_chat_timezone_updates_existing_setting(monkeypatch, tmp_path) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    database.set_chat_timezone(100, "Asia/Yekaterinburg")
+    database.set_chat_timezone(100, "Europe/Moscow")
+
+    assert database.get_chat_timezone(100) == "Europe/Moscow"

@@ -1,6 +1,8 @@
 import sqlite3
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
+from app.config import APP_TIMEZONE_NAME
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -14,7 +16,6 @@ from app.database import (
 from app.formatting import format_datetime_ru, get_int, get_str
 from app.schedule_calculations import (
     get_month_day_range_for_week_number,
-    normalize_datetime,
 )
 
 
@@ -27,16 +28,19 @@ def get_next_run_at(reminder_id: int) -> datetime | None:
     if not job or not job.next_run_time:
         return None
 
-    return normalize_datetime(job.next_run_time)
+    return job.next_run_time
 
 
-def format_next_run_line(reminder_id: int) -> str:
+def format_next_run_line(
+    reminder_id: int,
+    timezone_name: str | None = None,
+) -> str:
     next_run_at = get_next_run_at(reminder_id)
 
     if not next_run_at:
         return "Следующее срабатывание: не запланировано"
 
-    return f"Следующее срабатывание: {format_datetime_ru(next_run_at)}"
+    return f"Следующее срабатывание: {format_datetime_ru(next_run_at, timezone_name)}"
 
 
 async def send_once_reminder(
@@ -77,7 +81,9 @@ def schedule_reminder(
     interval_weeks: int | None = None,
     day_of_week: str | None = None,
     month_week_number: int | None = None,
+    timezone_name: str | None = None,
 ) -> None:
+    job_timezone = ZoneInfo(timezone_name or APP_TIMEZONE_NAME)
     job_kwargs: dict[str, Any] = {
         "args": [bot, chat_id, reminder_text, reminder_id],
         "id": str(reminder_id),
@@ -89,6 +95,7 @@ def schedule_reminder(
             send_once_reminder,
             trigger="date",
             run_date=start_at,
+            timezone=job_timezone,
             **job_kwargs,
         )
         return
@@ -99,6 +106,7 @@ def schedule_reminder(
             trigger="interval",
             days=interval_days,
             start_date=start_at,
+            timezone=job_timezone,
             **job_kwargs,
         )
         return
@@ -109,6 +117,7 @@ def schedule_reminder(
             trigger="interval",
             weeks=interval_weeks,
             start_date=start_at,
+            timezone=job_timezone,
             **job_kwargs,
         )
         return
@@ -125,6 +134,7 @@ def schedule_reminder(
             hour=start_at.hour,
             minute=start_at.minute,
             start_date=start_at,
+            timezone=job_timezone,
             **job_kwargs,
         )
         return
@@ -144,6 +154,7 @@ def schedule_reminder_from_row(bot: Bot, reminder: sqlite3.Row) -> None:
         interval_weeks=reminder["interval_weeks"],
         day_of_week=reminder["day_of_week"],
         month_week_number=reminder["month_week_number"],
+        timezone_name=reminder["timezone"] or APP_TIMEZONE_NAME,
     )
 
 

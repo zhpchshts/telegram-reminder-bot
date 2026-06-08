@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.constants import (
     MONTH_NAMES_RU,
@@ -7,17 +8,21 @@ from app.constants import (
     WEEKDAY_NAMES_RU_PLURAL,
     WEEKDAY_NAMES_RU_SINGLE,
 )
-from app.schedule_calculations import normalize_datetime
 
 
-def format_datetime_ru(value: datetime) -> str:
-    normalized_value = normalize_datetime(value)
-    month_name = MONTH_NAMES_RU[normalized_value.month]
+def format_datetime_ru(
+    value: datetime,
+    timezone_name: str | None = None,
+) -> str:
+    display_value = value
 
-    return (
-        f"{normalized_value.day:02d} "
-        f"{month_name} в {normalized_value.strftime('%H:%M')}"
-    )
+    if timezone_name and value.tzinfo is not None:
+        display_value = value.astimezone(ZoneInfo(timezone_name))
+
+    display_value = display_value.replace(tzinfo=None)
+    month_name = MONTH_NAMES_RU[display_value.month]
+
+    return f"{display_value.day:02d} {month_name} в {display_value.strftime('%H:%M')}"
 
 
 def get_int(row: sqlite3.Row, key: str) -> int:
@@ -70,13 +75,15 @@ def format_period_line_from_row(reminder: sqlite3.Row) -> str:
 def format_reminder_for_list(
     reminder: sqlite3.Row,
     next_run_line: str,
+    timezone_name: str | None = None,
 ) -> str:
     reminder_id = get_int(reminder, "id")
     start_at = datetime.fromisoformat(get_str(reminder, "start_at"))
+    reminder_timezone = timezone_name or reminder["timezone"]
 
     return (
         f"#{reminder_id} — {format_period_line_from_row(reminder)}\n"
-        f"Первое срабатывание: {format_datetime_ru(start_at)}\n"
+        f"Первое срабатывание: {format_datetime_ru(start_at, reminder_timezone)}\n"
         f"{next_run_line}\n"
         f"{get_str(reminder, 'text')}"
     )

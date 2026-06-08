@@ -41,6 +41,10 @@ from app.schedule_calculations import (
 router = Router()
 
 
+def get_chat_timezone_name(chat_id: int) -> str:
+    return get_chat_timezone(chat_id) or APP_TIMEZONE_NAME
+
+
 async def split_command(
     message: Message,
     *,
@@ -100,9 +104,11 @@ async def reject_past_datetime(
     *,
     start_at: datetime,
     heading: str,
+    timezone_name: str,
     show_candidate: bool = False,
 ) -> bool:
-    now = datetime.now()
+    timezone = ZoneInfo(timezone_name)
+    now = datetime.now(timezone)
 
     if start_at > now:
         return False
@@ -111,10 +117,13 @@ async def reject_past_datetime(
 
     if show_candidate:
         lines.append(
-            f"Первое подходящее срабатывание получилось: {format_datetime_ru(start_at)}"
+            f"Первое подходящее срабатывание получилось: "
+            f"{format_datetime_ru(start_at, timezone_name)}"
         )
 
-    lines.append(f"Сейчас по времени компьютера: {now.strftime('%Y-%m-%d %H:%M')}")
+    lines.append(
+        f"Сейчас в таймзоне {timezone_name}: {format_datetime_ru(now, timezone_name)}"
+    )
     await message.answer("\n".join(lines))
 
     return True
@@ -127,6 +136,7 @@ async def create_schedule_and_confirm(
     reminder_text: str,
     schedule_type: str,
     start_at: datetime,
+    timezone_name: str,
     interval_days: int | None = None,
     interval_weeks: int | None = None,
     day_of_week: str | None = None,
@@ -141,6 +151,7 @@ async def create_schedule_and_confirm(
         interval_weeks=interval_weeks,
         day_of_week=day_of_week,
         month_week_number=month_week_number,
+        timezone=timezone_name,
     )
 
     schedule_reminder(
@@ -154,6 +165,7 @@ async def create_schedule_and_confirm(
         interval_weeks=interval_weeks,
         day_of_week=day_of_week,
         month_week_number=month_week_number,
+        timezone_name=timezone_name,
     )
 
     header = (
@@ -182,8 +194,8 @@ async def create_schedule_and_confirm(
 
     answer_lines.extend(
         [
-            f"Первое срабатывание: {format_datetime_ru(start_at)}",
-            format_next_run_line(reminder_id),
+            f"Первое срабатывание: {format_datetime_ru(start_at, timezone_name)}",
+            format_next_run_line(reminder_id, timezone_name),
             f"Текст: {reminder_text}",
         ]
     )
@@ -311,8 +323,11 @@ async def remind(message: Message, bot: Bot) -> None:
     if not parts:
         return
 
+    timezone_name = get_chat_timezone_name(message.chat.id)
+    chat_timezone = ZoneInfo(timezone_name)
+
     try:
-        start_at = parse_datetime(parts[1], parts[2])
+        start_at = parse_datetime(parts[1], parts[2], chat_timezone)
     except ValueError:
         await message.answer(
             "Не смог разобрать дату и время.\n\nНужный формат:\nГГГГ-ММ-ДД ЧЧ:ММ"
@@ -323,6 +338,7 @@ async def remind(message: Message, bot: Bot) -> None:
         message,
         start_at=start_at,
         heading="Дата и время должны быть в будущем.",
+        timezone_name=timezone_name,
     ):
         return
 
@@ -332,6 +348,7 @@ async def remind(message: Message, bot: Bot) -> None:
         reminder_text=parts[3],
         schedule_type="once",
         start_at=start_at,
+        timezone_name=timezone_name,
     )
 
 
@@ -355,8 +372,14 @@ async def every_days(message: Message, bot: Bot) -> None:
     if interval_days is None:
         return
 
+    timezone_name = get_chat_timezone_name(message.chat.id)
+    chat_timezone = ZoneInfo(timezone_name)
+
     try:
-        start_at = get_nearest_future_datetime_for_time(parts[2])
+        start_at = get_nearest_future_datetime_for_time(
+            parts[2],
+            timezone=chat_timezone,
+        )
     except ValueError:
         await message.answer("Не смог разобрать время. Нужный формат: ЧЧ:ММ")
         return
@@ -367,6 +390,7 @@ async def every_days(message: Message, bot: Bot) -> None:
         reminder_text=parts[3],
         schedule_type="every_days",
         start_at=start_at,
+        timezone_name=timezone_name,
         interval_days=interval_days,
     )
 
@@ -386,8 +410,11 @@ async def every_days_from(message: Message, bot: Bot) -> None:
     if interval_days is None:
         return
 
+    timezone_name = get_chat_timezone_name(message.chat.id)
+    chat_timezone = ZoneInfo(timezone_name)
+
     try:
-        start_at = parse_datetime(parts[2], parts[3])
+        start_at = parse_datetime(parts[2], parts[3], chat_timezone)
     except ValueError:
         await message.answer(
             "Не смог разобрать дату и время. Нужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
@@ -398,6 +425,7 @@ async def every_days_from(message: Message, bot: Bot) -> None:
         message,
         start_at=start_at,
         heading="Дата и время старта должны быть в будущем.",
+        timezone_name=timezone_name,
     ):
         return
 
@@ -407,6 +435,7 @@ async def every_days_from(message: Message, bot: Bot) -> None:
         reminder_text=parts[4],
         schedule_type="every_days",
         start_at=start_at,
+        timezone_name=timezone_name,
         interval_days=interval_days,
     )
 
@@ -433,8 +462,15 @@ async def every_week(message: Message, bot: Bot) -> None:
     if interval_weeks is None or not await validate_weekday(message, day_of_week):
         return
 
+    timezone_name = get_chat_timezone_name(message.chat.id)
+    chat_timezone = ZoneInfo(timezone_name)
+
     try:
-        start_at = get_nearest_future_weekday_datetime(day_of_week, parts[3])
+        start_at = get_nearest_future_weekday_datetime(
+            day_of_week,
+            parts[3],
+            timezone=chat_timezone,
+        )
     except ValueError:
         await message.answer("Не смог разобрать время. Нужный формат: ЧЧ:ММ")
         return
@@ -445,6 +481,7 @@ async def every_week(message: Message, bot: Bot) -> None:
         reminder_text=parts[4],
         schedule_type="every_week",
         start_at=start_at,
+        timezone_name=timezone_name,
         interval_weeks=interval_weeks,
         day_of_week=day_of_week,
     )
@@ -472,11 +509,15 @@ async def every_week_from(message: Message, bot: Bot) -> None:
     if interval_weeks is None or not await validate_weekday(message, day_of_week):
         return
 
+    timezone_name = get_chat_timezone_name(message.chat.id)
+    chat_timezone = ZoneInfo(timezone_name)
+
     try:
         start_at = get_first_weekday_datetime_on_or_after_date(
             day_of_week=day_of_week,
             date_text=parts[3],
             time_text=parts[4],
+            timezone=chat_timezone,
         )
     except ValueError:
         await message.answer(
@@ -488,6 +529,7 @@ async def every_week_from(message: Message, bot: Bot) -> None:
         message,
         start_at=start_at,
         heading="Дата и время первого срабатывания должны быть в будущем.",
+        timezone_name=timezone_name,
         show_candidate=True,
     ):
         return
@@ -498,6 +540,7 @@ async def every_week_from(message: Message, bot: Bot) -> None:
         reminder_text=parts[5],
         schedule_type="every_week",
         start_at=start_at,
+        timezone_name=timezone_name,
         interval_weeks=interval_weeks,
         day_of_week=day_of_week,
     )
@@ -531,11 +574,15 @@ async def monthly_weekday(message: Message, bot: Bot) -> None:
     if month_week_number is None or not await validate_weekday(message, day_of_week):
         return
 
+    timezone_name = get_chat_timezone_name(message.chat.id)
+    chat_timezone = ZoneInfo(timezone_name)
+
     try:
         start_at = get_nearest_monthly_weekday_datetime(
             month_week_number=month_week_number,
             day_of_week=day_of_week,
             time_text=parts[3],
+            timezone=chat_timezone,
         )
     except ValueError:
         await message.answer("Не смог разобрать время. Нужный формат: ЧЧ:ММ")
@@ -547,6 +594,7 @@ async def monthly_weekday(message: Message, bot: Bot) -> None:
         reminder_text=parts[4],
         schedule_type="monthly_weekday",
         start_at=start_at,
+        timezone_name=timezone_name,
         month_week_number=month_week_number,
         day_of_week=day_of_week,
     )
@@ -580,8 +628,11 @@ async def monthly_weekday_from(message: Message, bot: Bot) -> None:
     if month_week_number is None or not await validate_weekday(message, day_of_week):
         return
 
+    timezone_name = get_chat_timezone_name(message.chat.id)
+    chat_timezone = ZoneInfo(timezone_name)
+
     try:
-        lower_bound = parse_datetime(parts[3], parts[4])
+        lower_bound = parse_datetime(parts[3], parts[4], chat_timezone)
         start_at = get_monthly_weekday_datetime_on_or_after(
             month_week_number=month_week_number,
             day_of_week=day_of_week,
@@ -598,6 +649,7 @@ async def monthly_weekday_from(message: Message, bot: Bot) -> None:
         message,
         start_at=start_at,
         heading="Дата и время первого срабатывания должны быть в будущем.",
+        timezone_name=timezone_name,
         show_candidate=True,
     ):
         return
@@ -608,6 +660,7 @@ async def monthly_weekday_from(message: Message, bot: Bot) -> None:
         reminder_text=parts[5],
         schedule_type="monthly_weekday",
         start_at=start_at,
+        timezone_name=timezone_name,
         month_week_number=month_week_number,
         day_of_week=day_of_week,
     )

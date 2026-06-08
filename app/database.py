@@ -27,7 +27,19 @@ def init_db() -> None:
                 interval_weeks INTEGER,
                 day_of_week TEXT,
                 month_week_number INTEGER,
+                timezone TEXT,
                 created_at TEXT NOT NULL
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_settings (
+                chat_id INTEGER PRIMARY KEY,
+                timezone TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
             """
         )
@@ -54,6 +66,7 @@ def create_reminder_in_db(
     interval_weeks: int | None = None,
     day_of_week: str | None = None,
     month_week_number: int | None = None,
+    timezone: str | None = None,
 ) -> int:
     now = datetime.now().isoformat(timespec="seconds")
 
@@ -70,9 +83,10 @@ def create_reminder_in_db(
                 interval_weeks,
                 day_of_week,
                 month_week_number,
+                timezone,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -84,6 +98,7 @@ def create_reminder_in_db(
                 interval_weeks,
                 day_of_week,
                 month_week_number,
+                timezone,
                 now,
             ),
         )
@@ -142,3 +157,46 @@ def mark_reminder_as_deleted(reminder_id: int) -> None:
 
 def mark_reminder_as_missed(reminder_id: int) -> None:
     set_reminder_status(reminder_id, "missed")
+
+
+def get_chat_timezone(chat_id: int) -> str | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT timezone
+            FROM chat_settings
+            WHERE chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchone()
+
+    if not row:
+        return None
+
+    return str(row["timezone"])
+
+
+def set_chat_timezone(chat_id: int, timezone: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO chat_settings (
+                chat_id,
+                timezone,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                timezone = excluded.timezone,
+                updated_at = excluded.updated_at
+            """,
+            (
+                chat_id,
+                timezone,
+                now,
+                now,
+            ),
+        )

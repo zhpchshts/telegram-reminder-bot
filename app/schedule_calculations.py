@@ -1,5 +1,5 @@
 import calendar
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 
 from app.constants import VALID_WEEKDAYS
 
@@ -8,16 +8,32 @@ def parse_time(time_text: str):
     return datetime.strptime(time_text, "%H:%M").time()
 
 
-def parse_datetime(date_text: str, time_text: str) -> datetime:
-    return datetime.strptime(f"{date_text} {time_text}", "%Y-%m-%d %H:%M")
+def parse_datetime(
+    date_text: str,
+    time_text: str,
+    timezone: tzinfo | None = None,
+) -> datetime:
+    parsed_date = datetime.strptime(date_text, "%Y-%m-%d").date()
+
+    return datetime.combine(
+        parsed_date,
+        parse_time(time_text),
+        tzinfo=timezone,
+    )
 
 
 def get_nearest_future_datetime_for_time(
     time_text: str,
     now: datetime | None = None,
+    timezone: tzinfo | None = None,
 ) -> datetime:
-    current_time = now or datetime.now()
-    candidate = datetime.combine(current_time.date(), parse_time(time_text))
+    current_time = now or datetime.now(timezone)
+
+    candidate = datetime.combine(
+        current_time.date(),
+        parse_time(time_text),
+        tzinfo=current_time.tzinfo,
+    )
 
     return candidate if candidate > current_time else candidate + timedelta(days=1)
 
@@ -26,13 +42,16 @@ def get_nearest_future_weekday_datetime(
     day_of_week: str,
     time_text: str,
     now: datetime | None = None,
+    timezone: tzinfo | None = None,
 ) -> datetime:
-    current_time = now or datetime.now()
+    current_time = now or datetime.now(timezone)
     target_weekday = VALID_WEEKDAYS[day_of_week]
     days_ahead = (target_weekday - current_time.weekday()) % 7
+
     candidate = datetime.combine(
         current_time.date() + timedelta(days=days_ahead),
         parse_time(time_text),
+        tzinfo=current_time.tzinfo,
     )
 
     return candidate if candidate > current_time else candidate + timedelta(days=7)
@@ -42,6 +61,7 @@ def get_first_weekday_datetime_on_or_after_date(
     day_of_week: str,
     date_text: str,
     time_text: str,
+    timezone: tzinfo | None = None,
 ) -> datetime:
     start_date = datetime.strptime(date_text, "%Y-%m-%d").date()
     target_weekday = VALID_WEEKDAYS[day_of_week]
@@ -50,6 +70,7 @@ def get_first_weekday_datetime_on_or_after_date(
     return datetime.combine(
         start_date + timedelta(days=days_ahead),
         parse_time(time_text),
+        tzinfo=timezone,
     )
 
 
@@ -72,6 +93,7 @@ def find_nth_weekday_in_month(
     month_week_number: int,
     day_of_week: str,
     time_text: str,
+    timezone: tzinfo | None = None,
 ) -> datetime | None:
     target_weekday = VALID_WEEKDAYS[day_of_week]
     _, days_in_month = calendar.monthrange(year, month)
@@ -87,7 +109,11 @@ def find_nth_weekday_in_month(
         occurrence_number += 1
 
         if occurrence_number == month_week_number:
-            return datetime.combine(candidate_date.date(), parse_time(time_text))
+            return datetime.combine(
+                candidate_date.date(),
+                parse_time(time_text),
+                tzinfo=timezone,
+            )
 
     return None
 
@@ -97,12 +123,13 @@ def get_nearest_monthly_weekday_datetime(
     day_of_week: str,
     time_text: str,
     now: datetime | None = None,
+    timezone: tzinfo | None = None,
 ) -> datetime:
     return get_monthly_weekday_datetime_on_or_after(
         month_week_number=month_week_number,
         day_of_week=day_of_week,
         time_text=time_text,
-        lower_bound=now or datetime.now(),
+        lower_bound=now or datetime.now(timezone),
     )
 
 
@@ -125,6 +152,7 @@ def get_monthly_weekday_datetime_on_or_after(
             month_week_number=month_week_number,
             day_of_week=day_of_week,
             time_text=time_text,
+            timezone=lower_bound.tzinfo,
         )
 
         if candidate and candidate >= lower_bound:

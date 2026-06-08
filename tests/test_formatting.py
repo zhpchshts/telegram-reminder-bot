@@ -19,6 +19,7 @@ def make_reminder_row(
     interval_weeks: int | None = None,
     day_of_week: str | None = None,
     month_week_number: int | None = None,
+    timezone: str | None = "Asia/Yekaterinburg",
 ) -> sqlite3.Row:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
@@ -35,7 +36,8 @@ def make_reminder_row(
             ? AS interval_days,
             ? AS interval_weeks,
             ? AS day_of_week,
-            ? AS month_week_number
+            ? AS month_week_number,
+            ? AS timezone
         """,
         (
             reminder_id,
@@ -47,6 +49,7 @@ def make_reminder_row(
             interval_weeks,
             day_of_week,
             month_week_number,
+            timezone,
         ),
     ).fetchone()
 

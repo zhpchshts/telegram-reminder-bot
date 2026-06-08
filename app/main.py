@@ -11,12 +11,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.config import BOT_TOKEN
 from app.constants import (
     APSCHEDULER_WEEKDAYS,
-    MONTH_NAMES_RU,
-    ORDINAL_NAMES_RU,
     VALID_WEEKDAYS,
     WEEKDAY_HELP,
-    WEEKDAY_NAMES_RU_PLURAL,
-    WEEKDAY_NAMES_RU_SINGLE,
 )
 
 from app.database import (
@@ -41,18 +37,16 @@ from app.schedule_calculations import (
     parse_datetime,
 )
 
+from app.formatting import (
+    format_datetime_ru,
+    format_period_line,
+    format_reminder_for_list,
+    get_int,
+    get_str,
+)
+
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
-
-
-def format_datetime_ru(value: datetime) -> str:
-    normalized_value = normalize_datetime(value)
-    month_name = MONTH_NAMES_RU[normalized_value.month]
-
-    return (
-        f"{normalized_value.day:02d} "
-        f"{month_name} в {normalized_value.strftime('%H:%M')}"
-    )
 
 
 def get_next_run_at(reminder_id: int) -> datetime | None:
@@ -71,14 +65,6 @@ def format_next_run_line(reminder_id: int) -> str:
         return "Следующее срабатывание: не запланировано"
 
     return f"Следующее срабатывание: {format_datetime_ru(next_run_at)}"
-
-
-def get_int(row: sqlite3.Row, key: str) -> int:
-    return int(row[key])
-
-
-def get_str(row: sqlite3.Row, key: str) -> str:
-    return str(row[key])
 
 
 async def send_once_reminder(
@@ -186,54 +172,6 @@ def schedule_reminder_from_row(bot: Bot, reminder: sqlite3.Row) -> None:
         interval_weeks=reminder["interval_weeks"],
         day_of_week=reminder["day_of_week"],
         month_week_number=reminder["month_week_number"],
-    )
-
-
-def format_period_line(
-    *,
-    schedule_type: str,
-    interval_days: int | None = None,
-    interval_weeks: int | None = None,
-    day_of_week: str | None = None,
-    month_week_number: int | None = None,
-) -> str:
-    if schedule_type == "once":
-        return "один раз"
-
-    if schedule_type == "every_days":
-        return f"каждые {interval_days} дн."
-
-    if schedule_type == "every_week":
-        weekday_name = WEEKDAY_NAMES_RU_PLURAL.get(str(day_of_week), str(day_of_week))
-        return f"каждые {interval_weeks} нед. по {weekday_name}"
-
-    if schedule_type == "monthly_weekday":
-        ordinal_name = ORDINAL_NAMES_RU.get(int(month_week_number), str(month_week_number))
-        weekday_name = WEEKDAY_NAMES_RU_SINGLE.get(str(day_of_week), str(day_of_week))
-        return f"каждый {ordinal_name} {weekday_name} месяца"
-
-    return schedule_type
-
-
-def format_period_line_from_row(reminder: sqlite3.Row) -> str:
-    return format_period_line(
-        schedule_type=get_str(reminder, "schedule_type"),
-        interval_days=reminder["interval_days"],
-        interval_weeks=reminder["interval_weeks"],
-        day_of_week=reminder["day_of_week"],
-        month_week_number=reminder["month_week_number"],
-    )
-
-
-def format_reminder_for_list(reminder: sqlite3.Row) -> str:
-    reminder_id = get_int(reminder, "id")
-    start_at = datetime.fromisoformat(get_str(reminder, "start_at"))
-
-    return (
-        f"#{reminder_id} — {format_period_line_from_row(reminder)}\n"
-        f"Первое срабатывание: {format_datetime_ru(start_at)}\n"
-        f"{format_next_run_line(reminder_id)}\n"
-        f"{get_str(reminder, 'text')}"
     )
 
 
@@ -787,7 +725,13 @@ async def list_reminders(message: Message) -> None:
         return
 
     lines = ["Активные напоминания:\n"]
-    lines.extend(format_reminder_for_list(reminder) for reminder in chat_reminders)
+    lines.extend(
+        format_reminder_for_list(
+            reminder,
+            format_next_run_line(get_int(reminder, "id")),
+        )
+        for reminder in chat_reminders
+    )
 
     await message.answer("\n\n".join(lines))
 

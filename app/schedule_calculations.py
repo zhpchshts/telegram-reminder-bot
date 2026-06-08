@@ -12,26 +12,29 @@ def parse_datetime(date_text: str, time_text: str) -> datetime:
     return datetime.strptime(f"{date_text} {time_text}", "%Y-%m-%d %H:%M")
 
 
-def get_nearest_future_datetime_for_time(time_text: str) -> datetime:
-    now = datetime.now()
-    candidate = datetime.combine(now.date(), parse_time(time_text))
+def get_nearest_future_datetime_for_time(
+    time_text: str,
+    now: datetime | None = None,
+) -> datetime:
+    current_time = now or datetime.now()
+    candidate = datetime.combine(current_time.date(), parse_time(time_text))
 
-    return candidate if candidate > now else candidate + timedelta(days=1)
-
+    return candidate if candidate > current_time else candidate + timedelta(days=1)
 
 def get_nearest_future_weekday_datetime(
     day_of_week: str,
     time_text: str,
+    now: datetime | None = None,
 ) -> datetime:
-    now = datetime.now()
+    current_time = now or datetime.now()
     target_weekday = VALID_WEEKDAYS[day_of_week]
-    days_ahead = (target_weekday - now.weekday()) % 7
+    days_ahead = (target_weekday - current_time.weekday()) % 7
     candidate = datetime.combine(
-        now.date() + timedelta(days=days_ahead),
+        current_time.date() + timedelta(days=days_ahead),
         parse_time(time_text),
     )
 
-    return candidate if candidate > now else candidate + timedelta(days=7)
+    return candidate if candidate > current_time else candidate + timedelta(days=7)
 
 
 def get_first_weekday_datetime_on_or_after_date(
@@ -92,12 +95,13 @@ def get_nearest_monthly_weekday_datetime(
     month_week_number: int,
     day_of_week: str,
     time_text: str,
+    now: datetime | None = None,
 ) -> datetime:
     return get_monthly_weekday_datetime_on_or_after(
         month_week_number=month_week_number,
         day_of_week=day_of_week,
         time_text=time_text,
-        lower_bound=datetime.now(),
+        lower_bound=now or datetime.now(),
     )
 
 

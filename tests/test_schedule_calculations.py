@@ -8,6 +8,9 @@ from app.schedule_calculations import (
     get_monthly_weekday_datetime_on_or_after,
     parse_datetime,
     parse_time,
+    get_nearest_future_datetime_for_time,
+    get_nearest_future_weekday_datetime,
+    get_nearest_monthly_weekday_datetime,
 )
 
 
@@ -111,6 +114,75 @@ def test_get_monthly_weekday_datetime_on_or_after_next_month() -> None:
         day_of_week="MON",
         time_text="12:12",
         lower_bound=datetime(2026, 6, 2, 12, 0),
+    )
+
+    assert result == datetime(2026, 7, 6, 12, 12)
+    
+def test_get_nearest_future_datetime_for_time_same_day_future() -> None:
+    result = get_nearest_future_datetime_for_time(
+        "12:12",
+        now=datetime(2026, 6, 8, 10, 0),
+    )
+
+    assert result == datetime(2026, 6, 8, 12, 12)
+
+
+def test_get_nearest_future_datetime_for_time_next_day_when_time_passed() -> None:
+    result = get_nearest_future_datetime_for_time(
+        "12:12",
+        now=datetime(2026, 6, 8, 13, 0),
+    )
+
+    assert result == datetime(2026, 6, 9, 12, 12)
+
+
+def test_get_nearest_future_weekday_datetime_same_day_future() -> None:
+    result = get_nearest_future_weekday_datetime(
+        "MON",
+        "12:12",
+        now=datetime(2026, 6, 8, 10, 0),
+    )
+
+    assert result == datetime(2026, 6, 8, 12, 12)
+
+
+def test_get_nearest_future_weekday_datetime_next_week_when_time_passed() -> None:
+    result = get_nearest_future_weekday_datetime(
+        "MON",
+        "12:12",
+        now=datetime(2026, 6, 8, 13, 0),
+    )
+
+    assert result == datetime(2026, 6, 15, 12, 12)
+
+
+def test_get_nearest_future_weekday_datetime_next_weekday() -> None:
+    result = get_nearest_future_weekday_datetime(
+        "WED",
+        "12:12",
+        now=datetime(2026, 6, 8, 10, 0),
+    )
+
+    assert result == datetime(2026, 6, 10, 12, 12)
+
+
+def test_get_nearest_monthly_weekday_datetime_current_month() -> None:
+    result = get_nearest_monthly_weekday_datetime(
+        month_week_number=1,
+        day_of_week="MON",
+        time_text="12:12",
+        now=datetime(2026, 6, 1, 12, 0),
+    )
+
+    assert result == datetime(2026, 6, 1, 12, 12)
+
+
+def test_get_nearest_monthly_weekday_datetime_next_month_when_current_passed() -> None:
+    result = get_nearest_monthly_weekday_datetime(
+        month_week_number=1,
+        day_of_week="MON",
+        time_text="12:12",
+        now=datetime(2026, 6, 2, 12, 0),
     )
 
     assert result == datetime(2026, 7, 6, 12, 12)

@@ -1,5 +1,7 @@
 # Telegram Reminder Bot
 
+![Tests](https://github.com/zhpchshts/telegram-reminder-bot/actions/workflows/tests.yml/badge.svg)
+
 Telegram-бот для создания напоминаний с кастомным расписанием в личных чатах и группах.
 
 ## Возможности

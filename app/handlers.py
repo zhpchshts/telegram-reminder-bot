@@ -2,7 +2,7 @@ from datetime import datetime
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import LinkPreviewOptions, Message
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -39,6 +39,8 @@ from app.schedule_calculations import (
 
 
 router = Router()
+
+NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 def get_chat_timezone_name(chat_id: int) -> str:
@@ -260,7 +262,8 @@ async def help_command(message: Message) -> None:
         "Список:\n"
         "/list\n\n"
         "Удаление:\n"
-        "/delete ID"
+        "/delete ID",
+        link_preview_options=NO_LINK_PREVIEW,
     )
 
 
@@ -281,7 +284,8 @@ async def timezone_command(message: Message) -> None:
             "Чтобы изменить таймзону, отправь команду в формате:\n"
             "/timezone Asia/Yekaterinburg\n\n"
             "Узнать и скопировать свою таймзону можно здесь:\n"
-            f"{TIMEZONE_LOOKUP_URL}"
+            f"{TIMEZONE_LOOKUP_URL}",
+            link_preview_options=NO_LINK_PREVIEW,
         )
         return
 
@@ -297,7 +301,8 @@ async def timezone_command(message: Message) -> None:
             "/timezone Europe/Moscow\n"
             "/timezone Asia/Almaty\n\n"
             "Узнать и скопировать свою таймзону можно здесь:\n"
-            f"{TIMEZONE_LOOKUP_URL}"
+            f"{TIMEZONE_LOOKUP_URL}",
+            link_preview_options=NO_LINK_PREVIEW,
         )
         return
 

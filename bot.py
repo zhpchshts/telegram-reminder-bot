@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 
 from app.main import main
 

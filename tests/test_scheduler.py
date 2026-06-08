@@ -157,7 +157,9 @@ def test_schedule_monthly_weekday_reminder_adds_cron_job(monkeypatch) -> None:
 
 
 def test_schedule_monthly_weekday_requires_month_week_number_and_day() -> None:
-    with pytest.raises(ValueError, match="month_week_number and day_of_week are required"):
+    with pytest.raises(
+        ValueError, match="month_week_number and day_of_week are required"
+    ):
         schedule_reminder(
             bot=FakeBot(),
             reminder_id=5,
@@ -190,9 +192,7 @@ def test_format_next_run_line_when_job_not_found(monkeypatch) -> None:
 
 
 def test_format_next_run_line_when_job_exists(monkeypatch) -> None:
-    fake_scheduler = FakeSchedulerWithJob(
-        FakeJob(datetime(2026, 6, 8, 12, 12))
-    )
+    fake_scheduler = FakeSchedulerWithJob(FakeJob(datetime(2026, 6, 8, 12, 12)))
     monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
 
     result = format_next_run_line(1)

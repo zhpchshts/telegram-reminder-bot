@@ -21,6 +21,7 @@ def get_nearest_future_datetime_for_time(
 
     return candidate if candidate > current_time else candidate + timedelta(days=1)
 
+
 def get_nearest_future_weekday_datetime(
     day_of_week: str,
     time_text: str,

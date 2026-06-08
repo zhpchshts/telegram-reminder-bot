@@ -117,7 +117,8 @@ def test_get_monthly_weekday_datetime_on_or_after_next_month() -> None:
     )
 
     assert result == datetime(2026, 7, 6, 12, 12)
-    
+
+
 def test_get_nearest_future_datetime_for_time_same_day_future() -> None:
     result = get_nearest_future_datetime_for_time(
         "12:12",

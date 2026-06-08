@@ -50,11 +50,7 @@ async def split_command(
     parts = message.text.split(maxsplit=maxsplit)
 
     if len(parts) < min_parts:
-        answer_text = (
-            f"{missing_text}\n\n{usage_text}"
-            if missing_text
-            else usage_text
-        )
+        answer_text = f"{missing_text}\n\n{usage_text}" if missing_text else usage_text
         await message.answer(answer_text)
         return None
 
@@ -88,9 +84,7 @@ async def validate_weekday(message: Message, day_of_week: str) -> bool:
         return True
 
     await message.answer(
-        "Не понял день недели.\n\n"
-        "Поддерживаемые значения:\n"
-        f"{WEEKDAY_HELP}"
+        f"Не понял день недели.\n\nПоддерживаемые значения:\n{WEEKDAY_HELP}"
     )
     return False
 
@@ -261,9 +255,7 @@ async def remind(message: Message, bot: Bot) -> None:
         start_at = parse_datetime(parts[1], parts[2])
     except ValueError:
         await message.answer(
-            "Не смог разобрать дату и время.\n\n"
-            "Нужный формат:\n"
-            "ГГГГ-ММ-ДД ЧЧ:ММ"
+            "Не смог разобрать дату и время.\n\nНужный формат:\nГГГГ-ММ-ДД ЧЧ:ММ"
         )
         return
 
@@ -588,11 +580,7 @@ async def delete_reminder(message: Message) -> None:
         maxsplit=1,
         min_parts=2,
         usage_text=(
-            "Укажи ID напоминания.\n\n"
-            "Формат:\n"
-            "/delete ID\n\n"
-            "Пример:\n"
-            "/delete 1"
+            "Укажи ID напоминания.\n\nФормат:\n/delete ID\n\nПример:\n/delete 1"
         ),
         missing_text=None,
     )
@@ -613,8 +601,7 @@ async def delete_reminder(message: Message) -> None:
 
     if get_int(reminder, "chat_id") != message.chat.id:
         await message.answer(
-            "Это напоминание создано в другом чате. "
-            "Из этого чата его удалить нельзя."
+            "Это напоминание создано в другом чате. Из этого чата его удалить нельзя."
         )
         return
 

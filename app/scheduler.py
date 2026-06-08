@@ -165,7 +165,4 @@ async def restore_active_reminders(bot: Bot) -> None:
         schedule_reminder_from_row(bot, reminder)
         restored_count += 1
 
-    print(
-        f"Restored reminders: {restored_count}. "
-        f"Missed reminders: {missed_count}."
-    )
+    print(f"Restored reminders: {restored_count}. Missed reminders: {missed_count}.")

@@ -51,7 +51,9 @@ def test_get_active_reminder_from_db(monkeypatch, tmp_path) -> None:
     assert reminder["start_at"] == "2026-06-08T12:12:00"
 
 
-def test_get_active_reminders_for_chat_returns_only_chat_reminders(monkeypatch, tmp_path) -> None:
+def test_get_active_reminders_for_chat_returns_only_chat_reminders(
+    monkeypatch, tmp_path
+) -> None:
     use_test_db(monkeypatch, tmp_path)
 
     database.create_reminder_in_db(
@@ -165,7 +167,9 @@ def test_create_every_days_reminder_stores_interval_days(monkeypatch, tmp_path) 
     assert reminder["interval_days"] == 3
 
 
-def test_create_every_week_reminder_stores_interval_weeks_and_day(monkeypatch, tmp_path) -> None:
+def test_create_every_week_reminder_stores_interval_weeks_and_day(
+    monkeypatch, tmp_path
+) -> None:
     use_test_db(monkeypatch, tmp_path)
 
     reminder_id = database.create_reminder_in_db(
@@ -185,7 +189,9 @@ def test_create_every_week_reminder_stores_interval_weeks_and_day(monkeypatch, t
     assert reminder["day_of_week"] == "MON"
 
 
-def test_create_monthly_weekday_reminder_stores_month_week_number_and_day(monkeypatch, tmp_path) -> None:
+def test_create_monthly_weekday_reminder_stores_month_week_number_and_day(
+    monkeypatch, tmp_path
+) -> None:
     use_test_db(monkeypatch, tmp_path)
 
     reminder_id = database.create_reminder_in_db(

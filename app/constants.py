@@ -72,6 +72,7 @@ REMINDER_COLUMNS = """
     interval_weeks,
     day_of_week,
     month_week_number,
+    month_day,
     timezone
 """
 
@@ -79,6 +80,7 @@ SCHEMA_MIGRATIONS = {
     "interval_weeks": "interval_weeks INTEGER",
     "day_of_week": "day_of_week TEXT",
     "month_week_number": "month_week_number INTEGER",
+    "month_day": "month_day INTEGER",
     "timezone": "timezone TEXT",
 }
 

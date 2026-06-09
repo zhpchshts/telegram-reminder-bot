@@ -11,6 +11,8 @@ from app.schedule_calculations import (
     get_nearest_future_datetime_for_time,
     get_nearest_future_weekday_datetime,
     get_nearest_monthly_weekday_datetime,
+    get_monthly_day_datetime_on_or_after,
+    get_nearest_monthly_day_datetime,
 )
 
 
@@ -187,3 +189,43 @@ def test_get_nearest_monthly_weekday_datetime_next_month_when_current_passed() -
     )
 
     assert result == datetime(2026, 7, 6, 12, 12)
+
+
+def test_get_monthly_day_datetime_on_or_after_current_month() -> None:
+    result = get_monthly_day_datetime_on_or_after(
+        month_day=11,
+        time_text="12:12",
+        lower_bound=datetime(2026, 6, 1, 10, 0),
+    )
+
+    assert result == datetime(2026, 6, 11, 12, 12)
+
+
+def test_get_monthly_day_datetime_on_or_after_next_month_when_day_passed() -> None:
+    result = get_monthly_day_datetime_on_or_after(
+        month_day=11,
+        time_text="12:12",
+        lower_bound=datetime(2026, 6, 12, 10, 0),
+    )
+
+    assert result == datetime(2026, 7, 11, 12, 12)
+
+
+def test_get_monthly_day_datetime_on_or_after_skips_month_without_day() -> None:
+    result = get_monthly_day_datetime_on_or_after(
+        month_day=31,
+        time_text="12:12",
+        lower_bound=datetime(2026, 4, 1, 10, 0),
+    )
+
+    assert result == datetime(2026, 5, 31, 12, 12)
+
+
+def test_get_nearest_monthly_day_datetime_current_month() -> None:
+    result = get_nearest_monthly_day_datetime(
+        month_day=11,
+        time_text="12:12",
+        now=datetime(2026, 6, 1, 10, 0),
+    )
+
+    assert result == datetime(2026, 6, 11, 12, 12)

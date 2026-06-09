@@ -34,6 +34,8 @@ from app.schedule_calculations import (
     get_nearest_future_datetime_for_time,
     get_nearest_future_weekday_datetime,
     get_nearest_monthly_weekday_datetime,
+    get_monthly_day_datetime_on_or_after,
+    get_nearest_monthly_day_datetime,
     parse_datetime,
 )
 
@@ -143,6 +145,7 @@ async def create_schedule_and_confirm(
     interval_weeks: int | None = None,
     day_of_week: str | None = None,
     month_week_number: int | None = None,
+    month_day: int | None = None,
 ) -> None:
     reminder_id = create_reminder_in_db(
         chat_id=message.chat.id,
@@ -153,6 +156,7 @@ async def create_schedule_and_confirm(
         interval_weeks=interval_weeks,
         day_of_week=day_of_week,
         month_week_number=month_week_number,
+        month_day=month_day,
         timezone=timezone_name,
     )
 
@@ -167,6 +171,7 @@ async def create_schedule_and_confirm(
         interval_weeks=interval_weeks,
         day_of_week=day_of_week,
         month_week_number=month_week_number,
+        month_day=month_day,
         timezone_name=timezone_name,
     )
 
@@ -191,6 +196,7 @@ async def create_schedule_and_confirm(
                 interval_weeks=interval_weeks,
                 day_of_week=day_of_week,
                 month_week_number=month_week_number,
+                month_day=month_day,
             )
         )
 
@@ -679,6 +685,120 @@ async def monthly_weekday_from(message: Message, bot: Bot) -> None:
         timezone_name=timezone_name,
         month_week_number=month_week_number,
         day_of_week=day_of_week,
+    )
+
+
+@router.message(Command("monthly_day"))
+async def monthly_day(message: Message, bot: Bot) -> None:
+    parts = await split_command(
+        message,
+        maxsplit=3,
+        min_parts=4,
+        usage_text=(
+            "Формат:\n"
+            "/monthly_day ДЕНЬ ЧЧ:ММ Текст\n\n"
+            "Пример:\n"
+            "/monthly_day 11 12:12 Оплатить интернет"
+        ),
+    )
+    if not parts:
+        return
+
+    month_day = await parse_min_int(
+        message,
+        parts[1],
+        min_value=1,
+        max_value=31,
+        parse_error="День месяца должен быть целым числом от 1 до 31.",
+        range_error="День месяца должен быть от 1 до 31.",
+    )
+    if month_day is None:
+        return
+
+    timezone_name = get_chat_timezone_name(message.chat.id)
+    chat_timezone = ZoneInfo(timezone_name)
+
+    try:
+        start_at = get_nearest_monthly_day_datetime(
+            month_day=month_day,
+            time_text=parts[2],
+            timezone=chat_timezone,
+        )
+    except ValueError:
+        await message.answer("Не смог разобрать время. Нужный формат: ЧЧ:ММ")
+        return
+
+    await create_schedule_and_confirm(
+        message,
+        bot,
+        reminder_text=parts[3],
+        schedule_type="monthly_day",
+        start_at=start_at,
+        timezone_name=timezone_name,
+        month_day=month_day,
+    )
+
+
+@router.message(Command("monthly_day_from"))
+async def monthly_day_from(message: Message, bot: Bot) -> None:
+    parts = await split_command(
+        message,
+        maxsplit=4,
+        min_parts=5,
+        usage_text=(
+            "Формат:\n"
+            "/monthly_day_from ДЕНЬ ГГГГ-ММ-ДД ЧЧ:ММ Текст\n\n"
+            "Пример:\n"
+            "/monthly_day_from 11 2026-07-01 12:12 Оплатить интернет"
+        ),
+    )
+    if not parts:
+        return
+
+    month_day = await parse_min_int(
+        message,
+        parts[1],
+        min_value=1,
+        max_value=31,
+        parse_error="День месяца должен быть целым числом от 1 до 31.",
+        range_error="День месяца должен быть от 1 до 31.",
+    )
+    if month_day is None:
+        return
+
+    timezone_name = get_chat_timezone_name(message.chat.id)
+    chat_timezone = ZoneInfo(timezone_name)
+
+    try:
+        lower_bound = parse_datetime(parts[2], parts[3], chat_timezone)
+        start_at = get_monthly_day_datetime_on_or_after(
+            month_day=month_day,
+            time_text=parts[3],
+            lower_bound=lower_bound,
+        )
+    except ValueError:
+        await message.answer(
+            "Не смог разобрать дату или время. Нужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
+        )
+        return
+
+    if await reject_past_datetime(
+        message,
+        start_at=start_at,
+        heading="Дата и время первого срабатывания должны быть в будущем.",
+        timezone_name=timezone_name,
+        show_candidate=True,
+    ):
+        return
+
+    await create_schedule_and_confirm(
+        message,
+        bot,
+        reminder_text=parts[4],
+        schedule_type="monthly_day",
+        start_at=start_at,
+        timezone_name=timezone_name,
+        month_day=month_day,
     )
 
 

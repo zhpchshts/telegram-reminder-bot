@@ -40,6 +40,7 @@ def format_period_line(
     interval_weeks: int | None = None,
     day_of_week: str | None = None,
     month_week_number: int | None = None,
+    month_day: int | None = None,
 ) -> str:
     if schedule_type == "once":
         return "один раз"
@@ -59,6 +60,9 @@ def format_period_line(
         weekday_name = WEEKDAY_NAMES_RU_SINGLE.get(str(day_of_week), str(day_of_week))
         return f"каждый {ordinal_name} {weekday_name} месяца"
 
+    if schedule_type == "monthly_day":
+        return f"каждый месяц {month_day} числа"
+
     return schedule_type
 
 
@@ -69,6 +73,7 @@ def format_period_line_from_row(reminder: sqlite3.Row) -> str:
         interval_weeks=reminder["interval_weeks"],
         day_of_week=reminder["day_of_week"],
         month_week_number=reminder["month_week_number"],
+        month_day=reminder["month_day"],
     )
 
 

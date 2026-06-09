@@ -81,6 +81,7 @@ def schedule_reminder(
     interval_weeks: int | None = None,
     day_of_week: str | None = None,
     month_week_number: int | None = None,
+    month_day: int | None = None,
     timezone_name: str | None = None,
 ) -> None:
     job_timezone = ZoneInfo(timezone_name or APP_TIMEZONE_NAME)
@@ -139,6 +140,22 @@ def schedule_reminder(
         )
         return
 
+    if schedule_type == "monthly_day":
+        if month_day is None:
+            raise ValueError("month_day is required.")
+
+        scheduler.add_job(
+            send_repeating_reminder,
+            trigger="cron",
+            day=month_day,
+            hour=start_at.hour,
+            minute=start_at.minute,
+            start_date=start_at,
+            timezone=job_timezone,
+            **job_kwargs,
+        )
+        return
+
     raise ValueError(f"Unknown schedule_type: {schedule_type}")
 
 
@@ -154,6 +171,7 @@ def schedule_reminder_from_row(bot: Bot, reminder: sqlite3.Row) -> None:
         interval_weeks=reminder["interval_weeks"],
         day_of_week=reminder["day_of_week"],
         month_week_number=reminder["month_week_number"],
+        month_day=reminder["month_day"],
         timezone_name=reminder["timezone"] or APP_TIMEZONE_NAME,
     )
 

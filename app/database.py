@@ -27,6 +27,7 @@ def init_db() -> None:
                 interval_weeks INTEGER,
                 day_of_week TEXT,
                 month_week_number INTEGER,
+                month_day INTEGER,
                 timezone TEXT,
                 created_at TEXT NOT NULL
             )
@@ -66,6 +67,7 @@ def create_reminder_in_db(
     interval_weeks: int | None = None,
     day_of_week: str | None = None,
     month_week_number: int | None = None,
+    month_day: int | None = None,
     timezone: str | None = None,
 ) -> int:
     now = datetime.now().isoformat(timespec="seconds")
@@ -83,10 +85,11 @@ def create_reminder_in_db(
                 interval_weeks,
                 day_of_week,
                 month_week_number,
+                month_day,
                 timezone,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -98,6 +101,7 @@ def create_reminder_in_db(
                 interval_weeks,
                 day_of_week,
                 month_week_number,
+                month_day,
                 timezone,
                 now,
             ),

@@ -246,3 +246,29 @@ def test_send_repeating_reminder_sends_message() -> None:
             "text": "Повторяющееся напоминание #2:\n\nТест repeating",
         }
     ]
+
+
+def test_schedule_monthly_day_reminder_adds_cron_job(monkeypatch) -> None:
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+
+    start_at = datetime(2026, 6, 11, 12, 12)
+
+    schedule_reminder(
+        bot=FakeBot(),
+        reminder_id=7,
+        chat_id=100,
+        reminder_text="Тест monthly day",
+        schedule_type="monthly_day",
+        start_at=start_at,
+        month_day=11,
+    )
+
+    job = fake_scheduler.jobs[0]
+
+    assert job["trigger"] == "cron"
+    assert job["day"] == 11
+    assert job["hour"] == 12
+    assert job["minute"] == 12
+    assert job["start_date"] == start_at
+    assert job["id"] == "7"

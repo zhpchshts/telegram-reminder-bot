@@ -37,6 +37,11 @@ async def set_bot_commands(bot: Bot) -> None:
                 command="monthly_weekday_from",
                 description="Месячный повтор с даты",
             ),
+            BotCommand(command="monthly_day", description="Повтор в день месяца"),
+            BotCommand(
+                command="monthly_day_from",
+                description="Повтор в день месяца с даты",
+            ),
             BotCommand(command="timezone", description="Показать или задать таймзону"),
             BotCommand(command="list", description="Показать активные напоминания"),
             BotCommand(command="delete", description="Удалить напоминание"),

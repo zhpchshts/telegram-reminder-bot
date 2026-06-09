@@ -259,3 +259,21 @@ def test_get_active_reminder_for_chat_returns_only_matching_chat(
 
     assert database.get_active_reminder_for_chat(reminder_id, 100) is not None
     assert database.get_active_reminder_for_chat(reminder_id, 200) is None
+
+
+def test_create_monthly_day_reminder_stores_month_day(monkeypatch, tmp_path) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    reminder_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Одиннадцатое число месяца",
+        schedule_type="monthly_day",
+        start_at=datetime(2026, 6, 11, 12, 12),
+        month_day=11,
+    )
+
+    reminder = database.get_active_reminder_from_db(reminder_id)
+
+    assert reminder is not None
+    assert reminder["schedule_type"] == "monthly_day"
+    assert reminder["month_day"] == 11

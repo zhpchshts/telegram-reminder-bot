@@ -161,6 +161,48 @@ def get_monthly_weekday_datetime_on_or_after(
     raise RuntimeError("Could not find monthly weekday occurrence.")
 
 
+def get_nearest_monthly_day_datetime(
+    month_day: int,
+    time_text: str,
+    now: datetime | None = None,
+    timezone: tzinfo | None = None,
+) -> datetime:
+    return get_monthly_day_datetime_on_or_after(
+        month_day=month_day,
+        time_text=time_text,
+        lower_bound=now or datetime.now(timezone),
+    )
+
+
+def get_monthly_day_datetime_on_or_after(
+    month_day: int,
+    time_text: str,
+    lower_bound: datetime,
+) -> datetime:
+    for months_to_add in range(60):
+        year, month = add_months(
+            year=lower_bound.year,
+            month=lower_bound.month,
+            months_to_add=months_to_add,
+        )
+
+        _, days_in_month = calendar.monthrange(year, month)
+
+        if month_day > days_in_month:
+            continue
+
+        candidate = datetime.combine(
+            datetime(year, month, month_day).date(),
+            parse_time(time_text),
+            tzinfo=lower_bound.tzinfo,
+        )
+
+        if candidate >= lower_bound:
+            return candidate
+
+    raise RuntimeError("Could not find monthly day occurrence.")
+
+
 def normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value

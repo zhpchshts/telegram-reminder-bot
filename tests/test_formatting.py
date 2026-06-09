@@ -19,6 +19,7 @@ def make_reminder_row(
     interval_weeks: int | None = None,
     day_of_week: str | None = None,
     month_week_number: int | None = None,
+    month_day: int | None = None,
     timezone: str | None = "Asia/Yekaterinburg",
 ) -> sqlite3.Row:
     connection = sqlite3.connect(":memory:")
@@ -37,6 +38,7 @@ def make_reminder_row(
             ? AS interval_weeks,
             ? AS day_of_week,
             ? AS month_week_number,
+            ? AS month_day,
             ? AS timezone
         """,
         (
@@ -49,6 +51,7 @@ def make_reminder_row(
             interval_weeks,
             day_of_week,
             month_week_number,
+            month_day,
             timezone,
         ),
     ).fetchone()
@@ -136,3 +139,12 @@ def test_format_reminder_for_list_every_days() -> None:
         "Следующее срабатывание: 11 июня в 12:12\n"
         "Тест every days"
     )
+
+
+def test_format_period_line_monthly_day() -> None:
+    result = format_period_line(
+        schedule_type="monthly_day",
+        month_day=11,
+    )
+
+    assert result == "каждый месяц 11 числа"

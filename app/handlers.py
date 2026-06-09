@@ -196,6 +196,7 @@ async def create_schedule_and_confirm(
 
     answer_lines.extend(
         [
+            f"Таймзона: {timezone_name}",
             f"Первое срабатывание: {format_datetime_ru(start_at, timezone_name)}",
             format_next_run_line(reminder_id, timezone_name),
             f"Текст: {reminder_text}",

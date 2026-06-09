@@ -232,3 +232,12 @@ def test_set_chat_timezone_updates_existing_setting(monkeypatch, tmp_path) -> No
     database.set_chat_timezone(100, "Europe/Moscow")
 
     assert database.get_chat_timezone(100) == "Europe/Moscow"
+
+def test_chat_timezones_are_isolated(monkeypatch, tmp_path) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    database.set_chat_timezone(100, "Asia/Yekaterinburg")
+    database.set_chat_timezone(200, "Europe/Moscow")
+
+    assert database.get_chat_timezone(100) == "Asia/Yekaterinburg"
+    assert database.get_chat_timezone(200) == "Europe/Moscow"

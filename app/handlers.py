@@ -741,3 +741,23 @@ async def delete_reminder(message: Message) -> None:
     mark_reminder_as_deleted(reminder_id)
 
     await message.answer(f"Напоминание #{reminder_id} удалено.")
+
+
+@router.message()
+async def unknown_message(message: Message) -> None:
+    if not message.text:
+        return
+
+    if message.text.startswith("/"):
+        await message.answer(
+            "Не знаю такую команду.\n\n"
+            "Доступные команды можно посмотреть через /help.\n"
+            "Примеры создания напоминаний — через /examples."
+        )
+        return
+
+    await message.answer(
+        "Я пока понимаю только команды.\n\n"
+        "Доступные команды можно посмотреть через /help.\n"
+        "Примеры создания напоминаний — через /examples."
+    )

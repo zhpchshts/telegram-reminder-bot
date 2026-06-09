@@ -127,6 +127,18 @@ def get_active_reminder_from_db(reminder_id: int) -> sqlite3.Row | None:
     return reminders[0] if reminders else None
 
 
+def get_active_reminder_for_chat(
+    reminder_id: int,
+    chat_id: int,
+) -> sqlite3.Row | None:
+    reminders = fetch_active_reminders(
+        "AND id = ? AND chat_id = ?",
+        (reminder_id, chat_id),
+    )
+
+    return reminders[0] if reminders else None
+
+
 def get_active_reminders_for_chat(chat_id: int) -> list[sqlite3.Row]:
     return fetch_active_reminders("AND chat_id = ?", (chat_id,))
 

@@ -11,7 +11,7 @@ from app.config import APP_TIMEZONE_NAME
 from app.constants import TIMEZONE_LOOKUP_URL, VALID_WEEKDAYS, WEEKDAY_HELP
 from app.database import (
     create_reminder_in_db,
-    get_active_reminder_from_db,
+    get_active_reminder_for_chat,
     get_active_reminders_for_chat,
     mark_reminder_as_deleted,
     get_chat_timezone,
@@ -719,15 +719,14 @@ async def delete_reminder(message: Message) -> None:
         await message.answer("ID должен быть числом. Например: /delete 1")
         return
 
-    reminder = get_active_reminder_from_db(reminder_id)
+    reminder = get_active_reminder_for_chat(
+        reminder_id=reminder_id,
+        chat_id=message.chat.id,
+    )
 
     if not reminder:
-        await message.answer(f"Не нашёл активное напоминание с ID {reminder_id}.")
-        return
-
-    if get_int(reminder, "chat_id") != message.chat.id:
         await message.answer(
-            "Это напоминание создано в другом чате. Из этого чата его удалить нельзя."
+            f"Не нашёл активное напоминание с ID {reminder_id} в этом чате."
         )
         return
 

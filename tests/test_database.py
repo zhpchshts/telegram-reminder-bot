@@ -233,6 +233,7 @@ def test_set_chat_timezone_updates_existing_setting(monkeypatch, tmp_path) -> No
 
     assert database.get_chat_timezone(100) == "Europe/Moscow"
 
+
 def test_chat_timezones_are_isolated(monkeypatch, tmp_path) -> None:
     use_test_db(monkeypatch, tmp_path)
 
@@ -241,3 +242,20 @@ def test_chat_timezones_are_isolated(monkeypatch, tmp_path) -> None:
 
     assert database.get_chat_timezone(100) == "Asia/Yekaterinburg"
     assert database.get_chat_timezone(200) == "Europe/Moscow"
+
+
+def test_get_active_reminder_for_chat_returns_only_matching_chat(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    reminder_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Напоминание первого чата",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 12),
+    )
+
+    assert database.get_active_reminder_for_chat(reminder_id, 100) is not None
+    assert database.get_active_reminder_for_chat(reminder_id, 200) is None

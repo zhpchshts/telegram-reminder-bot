@@ -156,6 +156,23 @@ def test_tma_bootstrap_endpoint_requires_tma_auth_without_dependency_override() 
     }
 
 
+def test_tma_reminders_endpoint_requires_tma_auth_without_dependency_override() -> None:
+    previous_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides.clear()
+
+    try:
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/tma/reminders")
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Telegram init data is required.",
+    }
+
+
 def test_tma_context_endpoint_accepts_valid_tma_init_data(
     authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -597,6 +614,244 @@ def build_create_reminder_request(
         "start_at": start_at,
         "timezone_name": timezone_name,
         "interval_days": interval_days,
+    }
+
+
+def test_get_tma_reminders_endpoint_accepts_valid_tma_init_data(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_chat_ids: list[int] = []
+
+    def fake_list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
+        requested_chat_ids.append(chat_id)
+        return [
+            ReminderReadData(
+                id=42,
+                chat_id=100,
+                reminder_text="Проверить релиз",
+                schedule_type="every_days",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+                interval_days=3,
+            )
+        ]
+
+    monkeypatch.setattr(
+        api_module,
+        "list_active_reminders_for_chat",
+        fake_list_active_reminders_for_chat,
+    )
+
+    response = authenticated_client.get(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+    )
+
+    assert response.status_code == 200
+    assert requested_chat_ids == [100]
+    assert response.json() == [
+        {
+            "id": 42,
+            "chat_id": 100,
+            "reminder_text": "Проверить релиз",
+            "schedule_type": "every_days",
+            "start_at": "2099-06-10T12:12:00",
+            "timezone_name": "Asia/Yekaterinburg",
+            "interval_days": 3,
+            "interval_weeks": None,
+            "day_of_week": None,
+            "month_week_number": None,
+            "month_day": None,
+        }
+    ]
+
+
+def test_create_tma_reminder_endpoint_accepts_valid_tma_init_data(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = object()
+    app.state.bot = bot
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_create_scheduled_reminder(
+        *,
+        bot,
+        chat_id: int,
+        data,
+    ) -> int:
+        captured_calls.append(
+            {
+                "bot": bot,
+                "chat_id": chat_id,
+                "data": data,
+            }
+        )
+        return 42
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 201
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["bot"] is bot
+    assert captured_calls[0]["chat_id"] == 100
+
+    data = captured_calls[0]["data"]
+    assert data.reminder_text == "Проверить релиз"
+    assert data.schedule_type == "every_days"
+    assert data.timezone_name == "Asia/Yekaterinburg"
+    assert data.interval_days == 3
+
+    response_json = response.json()
+
+    assert response_json["id"] == 42
+    assert response_json["chat_id"] == 100
+    assert response_json["reminder_text"] == "Проверить релиз"
+    assert response_json["schedule_type"] == "every_days"
+    assert response_json["start_at"].startswith("2099-06-10T12:12:00")
+    assert response_json["timezone_name"] == "Asia/Yekaterinburg"
+    assert response_json["interval_days"] == 3
+    assert response_json["interval_weeks"] is None
+    assert response_json["day_of_week"] is None
+    assert response_json["month_week_number"] is None
+    assert response_json["month_day"] is None
+
+
+def test_get_tma_timezone_endpoint_accepts_valid_tma_init_data(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_chat_ids: list[int] = []
+
+    def fake_get_chat_timezone_name(chat_id: int) -> str:
+        requested_chat_ids.append(chat_id)
+        return "Asia/Yekaterinburg"
+
+    monkeypatch.setattr(
+        api_module,
+        "get_chat_timezone_name",
+        fake_get_chat_timezone_name,
+    )
+
+    response = authenticated_client.get(
+        "/api/tma/timezone",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+    )
+
+    assert response.status_code == 200
+    assert requested_chat_ids == [100]
+    assert response.json() == {
+        "chat_id": 100,
+        "timezone_name": "Asia/Yekaterinburg",
+    }
+
+
+def test_update_tma_timezone_endpoint_accepts_valid_tma_init_data(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_set_chat_timezone_for_chat(
+        *,
+        chat_id: int,
+        timezone_name: str,
+    ) -> bool:
+        captured_calls.append(
+            {
+                "chat_id": chat_id,
+                "timezone_name": timezone_name,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(
+        api_module,
+        "set_chat_timezone_for_chat",
+        fake_set_chat_timezone_for_chat,
+    )
+
+    response = authenticated_client.put(
+        "/api/tma/timezone",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json={"timezone_name": "Europe/Moscow"},
+    )
+
+    assert response.status_code == 200
+    assert captured_calls == [
+        {
+            "chat_id": 100,
+            "timezone_name": "Europe/Moscow",
+        }
+    ]
+    assert response.json() == {
+        "chat_id": 100,
+        "timezone_name": "Europe/Moscow",
+    }
+
+
+def test_delete_tma_reminder_endpoint_accepts_valid_tma_init_data(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, int]] = []
+
+    def fake_delete_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> bool:
+        captured_calls.append(
+            {
+                "reminder_id": reminder_id,
+                "chat_id": chat_id,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(
+        api_module,
+        "delete_active_reminder_for_chat",
+        fake_delete_active_reminder_for_chat,
+    )
+
+    response = authenticated_client.delete(
+        "/api/tma/reminders/42",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured_calls == [
+        {
+            "reminder_id": 42,
+            "chat_id": 100,
+        }
+    ]
+    assert response.json() == {
+        "id": 42,
+        "chat_id": 100,
+        "deleted": True,
     }
 
 

@@ -17,6 +17,11 @@ from app.api import (
     health,
     update_chat_timezone,
     get_tma_bootstrap,
+    create_tma_reminder,
+    delete_tma_reminder,
+    get_tma_reminders,
+    get_tma_timezone,
+    update_tma_timezone,
 )
 from app.api_models import (
     ChatTimezoneResponse,
@@ -223,6 +228,216 @@ def test_get_tma_bootstrap_returns_response(
             interval_days=3,
         )
     ]
+
+
+def test_get_tma_reminders_returns_response_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_at = datetime(2099, 6, 10, 12, 12)
+    requested_chat_ids: list[int] = []
+
+    def fake_list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
+        requested_chat_ids.append(chat_id)
+        return [
+            ReminderReadData(
+                id=42,
+                chat_id=100,
+                reminder_text="Проверить релиз",
+                schedule_type="every_days",
+                start_at=start_at,
+                timezone_name="Asia/Yekaterinburg",
+                interval_days=3,
+            )
+        ]
+
+    monkeypatch.setattr(
+        api_module,
+        "list_active_reminders_for_chat",
+        fake_list_active_reminders_for_chat,
+    )
+
+    result = get_tma_reminders(chat_id=100)
+
+    assert requested_chat_ids == [100]
+    assert result == [
+        ReminderResponse(
+            id=42,
+            chat_id=100,
+            reminder_text="Проверить релиз",
+            schedule_type="every_days",
+            start_at=start_at,
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=3,
+        )
+    ]
+
+
+def test_create_tma_reminder_returns_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_create_scheduled_reminder(
+        *,
+        bot: object,
+        chat_id: int,
+        data: ReminderCreateData,
+    ) -> int:
+        captured_calls.append(
+            {
+                "bot": bot,
+                "chat_id": chat_id,
+                "data": data,
+            }
+        )
+        return 42
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    result = create_tma_reminder(
+        chat_id=100,
+        request=ReminderCreateRequest(
+            reminder_text="Проверить релиз",
+            schedule_type="every_days",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=3,
+        ),
+        bot=BOT,
+    )
+
+    expected_data = ReminderCreateData(
+        reminder_text="Проверить релиз",
+        schedule_type="every_days",
+        start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+    assert captured_calls == [
+        {
+            "bot": BOT,
+            "chat_id": 100,
+            "data": expected_data,
+        }
+    ]
+    assert result == ReminderResponse(
+        id=42,
+        chat_id=100,
+        reminder_text="Проверить релиз",
+        schedule_type="every_days",
+        start_at=expected_data.start_at,
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+
+def test_get_tma_timezone_returns_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_chat_ids: list[int] = []
+
+    def fake_get_chat_timezone_name(chat_id: int) -> str:
+        requested_chat_ids.append(chat_id)
+        return "Asia/Yekaterinburg"
+
+    monkeypatch.setattr(
+        api_module,
+        "get_chat_timezone_name",
+        fake_get_chat_timezone_name,
+    )
+
+    result = get_tma_timezone(chat_id=100)
+
+    assert requested_chat_ids == [100]
+    assert result == ChatTimezoneResponse(
+        chat_id=100,
+        timezone_name="Asia/Yekaterinburg",
+    )
+
+
+def test_update_tma_timezone_returns_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_set_chat_timezone_for_chat(
+        *,
+        chat_id: int,
+        timezone_name: str,
+    ) -> bool:
+        captured_calls.append(
+            {
+                "chat_id": chat_id,
+                "timezone_name": timezone_name,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(
+        api_module,
+        "set_chat_timezone_for_chat",
+        fake_set_chat_timezone_for_chat,
+    )
+
+    result = update_tma_timezone(
+        chat_id=100,
+        request=ChatTimezoneUpdateRequest(timezone_name="Europe/Moscow"),
+    )
+
+    assert captured_calls == [
+        {
+            "chat_id": 100,
+            "timezone_name": "Europe/Moscow",
+        }
+    ]
+    assert result == ChatTimezoneResponse(
+        chat_id=100,
+        timezone_name="Europe/Moscow",
+    )
+
+
+def test_delete_tma_reminder_returns_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, int]] = []
+
+    def fake_delete_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> bool:
+        captured_calls.append(
+            {
+                "reminder_id": reminder_id,
+                "chat_id": chat_id,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(
+        api_module,
+        "delete_active_reminder_for_chat",
+        fake_delete_active_reminder_for_chat,
+    )
+
+    result = delete_tma_reminder(chat_id=100, reminder_id=42)
+
+    assert captured_calls == [
+        {
+            "reminder_id": 42,
+            "chat_id": 100,
+        }
+    ]
+    assert result == DeleteReminderResponse(
+        id=42,
+        chat_id=100,
+        deleted=True,
+    )
 
 
 def test_get_chat_reminders_returns_response_models(
@@ -551,3 +766,6 @@ def test_api_registers_initial_routes() -> None:
     assert "/api/tma/context" in route_paths
     assert "/api/tma/reminder-options" in route_paths
     assert "/api/tma/bootstrap" in route_paths
+    assert "/api/tma/reminders" in route_paths
+    assert "/api/tma/timezone" in route_paths
+    assert "/api/tma/reminders/{reminder_id}" in route_paths

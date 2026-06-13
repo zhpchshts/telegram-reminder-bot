@@ -135,6 +135,77 @@ def get_tma_bootstrap(
 
 
 @app.get(
+    "/api/tma/reminders",
+    response_model=list[ReminderResponse],
+)
+def get_tma_reminders(
+    chat_id: int = Depends(get_tma_chat_id),
+) -> list[ReminderResponse]:
+    return [
+        build_reminder_response(reminder)
+        for reminder in list_active_reminders_for_chat(chat_id)
+    ]
+
+
+@app.post(
+    "/api/tma/reminders",
+    response_model=ReminderResponse,
+    status_code=201,
+)
+def create_tma_reminder(
+    request: ReminderCreateRequest,
+    chat_id: int = Depends(get_tma_chat_id),
+    bot: Bot = Depends(get_bot_from_app_state),
+) -> ReminderResponse:
+    return create_reminder_for_chat(
+        request=request,
+        chat_id=chat_id,
+        bot=bot,
+    )
+
+
+@app.get(
+    "/api/tma/timezone",
+    response_model=ChatTimezoneResponse,
+)
+def get_tma_timezone(
+    chat_id: int = Depends(get_tma_chat_id),
+) -> ChatTimezoneResponse:
+    return ChatTimezoneResponse(
+        chat_id=chat_id,
+        timezone_name=get_chat_timezone_name(chat_id),
+    )
+
+
+@app.put(
+    "/api/tma/timezone",
+    response_model=ChatTimezoneResponse,
+)
+def update_tma_timezone(
+    request: ChatTimezoneUpdateRequest,
+    chat_id: int = Depends(get_tma_chat_id),
+) -> ChatTimezoneResponse:
+    return update_timezone_for_chat(
+        request=request,
+        chat_id=chat_id,
+    )
+
+
+@app.delete(
+    "/api/tma/reminders/{reminder_id}",
+    response_model=DeleteReminderResponse,
+)
+def delete_tma_reminder(
+    reminder_id: int,
+    chat_id: int = Depends(get_tma_chat_id),
+) -> DeleteReminderResponse:
+    return delete_reminder_for_chat(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+    )
+
+
+@app.get(
     "/api/chats/{chat_id}/reminders",
     response_model=list[ReminderResponse],
 )
@@ -157,36 +228,10 @@ def create_chat_reminder(
     authorized_chat_id: int = Depends(require_matching_chat_id),
     bot: Bot = Depends(get_bot_from_app_state),
 ) -> ReminderResponse:
-    try:
-        data = build_reminder_create_data(request)
-    except ZoneInfoNotFoundError as error:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid timezone name.",
-        ) from error
-
-    if is_start_at_in_past(data):
-        raise HTTPException(
-            status_code=400,
-            detail="start_at must be in the future.",
-        )
-
-    try:
-        reminder_id = create_scheduled_reminder(
-            bot=bot,
-            chat_id=authorized_chat_id,
-            data=data,
-        )
-    except ValueError as error:
-        raise HTTPException(
-            status_code=400,
-            detail=str(error),
-        ) from error
-
-    return build_created_reminder_response(
-        reminder_id=reminder_id,
+    return create_reminder_for_chat(
+        request=request,
         chat_id=authorized_chat_id,
-        data=data,
+        bot=bot,
     )
 
 
@@ -211,20 +256,9 @@ def update_chat_timezone(
     request: ChatTimezoneUpdateRequest,
     authorized_chat_id: int = Depends(require_matching_chat_id),
 ) -> ChatTimezoneResponse:
-    is_timezone_updated = set_chat_timezone_for_chat(
+    return update_timezone_for_chat(
+        request=request,
         chat_id=authorized_chat_id,
-        timezone_name=request.timezone_name,
-    )
-
-    if not is_timezone_updated:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid timezone name.",
-        )
-
-    return ChatTimezoneResponse(
-        chat_id=authorized_chat_id,
-        timezone_name=request.timezone_name,
     )
 
 
@@ -236,9 +270,81 @@ def delete_chat_reminder(
     reminder_id: int,
     authorized_chat_id: int = Depends(require_matching_chat_id),
 ) -> DeleteReminderResponse:
-    was_deleted = delete_active_reminder_for_chat(
+    return delete_reminder_for_chat(
         reminder_id=reminder_id,
         chat_id=authorized_chat_id,
+    )
+
+
+def create_reminder_for_chat(
+    *,
+    request: ReminderCreateRequest,
+    chat_id: int,
+    bot: Bot,
+) -> ReminderResponse:
+    try:
+        data = build_reminder_create_data(request)
+    except ZoneInfoNotFoundError as error:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid timezone name.",
+        ) from error
+
+    if is_start_at_in_past(data):
+        raise HTTPException(
+            status_code=400,
+            detail="start_at must be in the future.",
+        )
+
+    try:
+        reminder_id = create_scheduled_reminder(
+            bot=bot,
+            chat_id=chat_id,
+            data=data,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    return build_created_reminder_response(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+        data=data,
+    )
+
+
+def update_timezone_for_chat(
+    *,
+    request: ChatTimezoneUpdateRequest,
+    chat_id: int,
+) -> ChatTimezoneResponse:
+    is_timezone_updated = set_chat_timezone_for_chat(
+        chat_id=chat_id,
+        timezone_name=request.timezone_name,
+    )
+
+    if not is_timezone_updated:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid timezone name.",
+        )
+
+    return ChatTimezoneResponse(
+        chat_id=chat_id,
+        timezone_name=request.timezone_name,
+    )
+
+
+def delete_reminder_for_chat(
+    *,
+    reminder_id: int,
+    chat_id: int,
+) -> DeleteReminderResponse:
+    was_deleted = delete_active_reminder_for_chat(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
     )
 
     if not was_deleted:
@@ -249,6 +355,6 @@ def delete_chat_reminder(
 
     return DeleteReminderResponse(
         id=reminder_id,
-        chat_id=authorized_chat_id,
+        chat_id=chat_id,
         deleted=True,
     )

@@ -154,6 +154,7 @@ def test_build_tma_context_response() -> None:
             "title": "Home",
         },
         chat_id=100,
+        timezone_name="Asia/Yekaterinburg",
         chat_type="group",
         start_param="chat_100",
     )
@@ -170,6 +171,7 @@ def test_build_tma_context_response() -> None:
             "title": "Home",
         },
         chat_id=100,
+        timezone_name="Asia/Yekaterinburg",
         chat_type="group",
         start_param="chat_100",
     )

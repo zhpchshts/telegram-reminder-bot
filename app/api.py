@@ -97,6 +97,7 @@ def get_tma_context(
         user=init_data.user,
         chat=init_data.chat,
         chat_id=chat_id,
+        timezone_name=get_chat_timezone_name(chat_id),
         chat_type=init_data.chat_type,
         start_param=init_data.start_param,
     )

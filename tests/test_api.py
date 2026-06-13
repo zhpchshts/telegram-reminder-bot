@@ -80,12 +80,27 @@ def test_configure_cors_adds_cors_middleware() -> None:
     assert middleware.kwargs["allow_headers"] == ["*"]
 
 
-def test_get_tma_context_returns_response() -> None:
+def test_get_tma_context_returns_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_chat_ids: list[int] = []
+
+    def fake_get_chat_timezone_name(chat_id: int) -> str:
+        requested_chat_ids.append(chat_id)
+        return "Asia/Yekaterinburg"
+
+    monkeypatch.setattr(
+        api_module,
+        "get_chat_timezone_name",
+        fake_get_chat_timezone_name,
+    )
+
     result = get_tma_context(
         init_data=FakeTelegramInitData(),
         chat_id=100,
     )
 
+    assert requested_chat_ids == [100]
     assert result == TmaContextResponse(
         auth_date=1_700_000_000,
         user={
@@ -98,6 +113,7 @@ def test_get_tma_context_returns_response() -> None:
             "title": "Home",
         },
         chat_id=100,
+        timezone_name="Asia/Yekaterinburg",
         chat_type="group",
         start_param="chat_100",
     )

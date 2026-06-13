@@ -52,6 +52,7 @@ class TmaContextResponse(BaseModel):
     user: dict[str, object] | None = None
     chat: dict[str, object]
     chat_id: int
+    timezone_name: str
     chat_type: str | None = None
     start_param: str | None = None
 
@@ -145,6 +146,7 @@ def build_tma_context_response(
     user: dict[str, object] | None,
     chat: dict[str, object],
     chat_id: int,
+    timezone_name: str,
     chat_type: str | None,
     start_param: str | None,
 ) -> TmaContextResponse:
@@ -153,6 +155,7 @@ def build_tma_context_response(
         user=user,
         chat=chat,
         chat_id=chat_id,
+        timezone_name=timezone_name,
         chat_type=chat_type,
         start_param=start_param,
     )

@@ -141,7 +141,20 @@ def test_reminder_options_endpoint_requires_tma_auth_without_dependency_override
 
 def test_tma_context_endpoint_accepts_valid_tma_init_data(
     authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    requested_chat_ids: list[int] = []
+
+    def fake_get_chat_timezone_name(chat_id: int) -> str:
+        requested_chat_ids.append(chat_id)
+        return "Asia/Yekaterinburg"
+
+    monkeypatch.setattr(
+        api_module,
+        "get_chat_timezone_name",
+        fake_get_chat_timezone_name,
+    )
+
     response = authenticated_client.get(
         "/api/tma/context",
         headers={
@@ -150,6 +163,7 @@ def test_tma_context_endpoint_accepts_valid_tma_init_data(
     )
 
     assert response.status_code == 200
+    assert requested_chat_ids == [100]
     assert response.json() == {
         "auth_date": response.json()["auth_date"],
         "user": {
@@ -162,6 +176,7 @@ def test_tma_context_endpoint_accepts_valid_tma_init_data(
             "title": "Home",
         },
         "chat_id": 100,
+        "timezone_name": "Asia/Yekaterinburg",
         "chat_type": "group",
         "start_param": "chat_100",
     }

@@ -74,6 +74,8 @@ const elements = {
   reminderText: document.querySelector("#reminder-text"),
   scheduleType: document.querySelector("#schedule-type"),
   startAt: document.querySelector("#start-at"),
+  startAtHint: document.querySelector("#start-at-hint"),
+  startAtError: document.querySelector("#start-at-error"),
   timezoneName: document.querySelector("#timezone-name"),
   intervalDays: document.querySelector("#interval-days"),
   intervalWeeks: document.querySelector("#interval-weeks"),
@@ -106,6 +108,51 @@ function hideStatus() {
   elements.status.className = "status";
 }
 
+function showStartAtError(message) {
+  elements.startAtError.textContent = message;
+  elements.startAtError.hidden = false;
+  elements.startAt.setAttribute("aria-invalid", "true");
+}
+
+function clearStartAtError() {
+  elements.startAtError.textContent = "";
+  elements.startAtError.hidden = true;
+  elements.startAt.removeAttribute("aria-invalid");
+}
+
+function clearFieldErrors() {
+  clearStartAtError();
+}
+
+function focusStartAtField() {
+  elements.startAt.scrollIntoView({
+    behavior: "smooth",
+    block: "center",
+  });
+  elements.startAt.focus();
+}
+
+function buildStartAtPastMessage() {
+  const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
+
+  return `Время срабатывания уже прошло в таймзоне чата ${timezoneName}. Выбери более позднее время.`;
+}
+
+function isStartAtPastError(error) {
+  return error.message === "start_at must be in the future.";
+}
+
+function handleError(error) {
+  if (isStartAtPastError(error)) {
+    hideStatus();
+    showStartAtError(buildStartAtPastMessage());
+    focusStartAtField();
+    return;
+  }
+
+  showStatus(error.message, "error");
+}
+
 function setBusy(isBusy) {
   state.isBusy = isBusy;
 
@@ -121,12 +168,13 @@ function setBusy(isBusy) {
 function showPreview(preview) {
   const period = preview.period || "одноразовое";
   const timezoneName = preview.timezone_name || state.context?.timezone_name;
+  const formattedStartAt = formatDateTime(preview.start_at, timezoneName);
 
   elements.preview.innerHTML = `
     <strong>Предпросмотр</strong>
     <div>${escapeHtml(preview.reminder_text)}</div>
     <div class="muted">${escapeHtml(period)}</div>
-    <div class="muted">Первое срабатывание: ${formatDateTime(preview.start_at, timezoneName)}</div>
+    <div class="muted">Первое срабатывание: ${escapeHtml(formattedStartAt)} · ${escapeHtml(timezoneName)}</div>
   `;
   elements.preview.hidden = false;
 }
@@ -175,6 +223,7 @@ async function apiRequest(path, options = {}) {
 async function loadBootstrap() {
   hideStatus();
   hidePreview();
+  clearFieldErrors();
 
   const bootstrap = await apiRequest("/api/tma/bootstrap");
 
@@ -196,6 +245,13 @@ function renderContext() {
   elements.chatTitle.textContent = `${title} · ${state.context.timezone_name}`;
   elements.chatTimezoneName.value = state.context.timezone_name;
   elements.timezoneName.value = state.context.timezone_name;
+  renderStartAtHint();
+}
+
+function renderStartAtHint() {
+  const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
+
+  elements.startAtHint.textContent = `Время указывается в таймзоне чата: ${timezoneName}.`;
 }
 
 function renderDeviceTimezoneSuggestion() {
@@ -290,12 +346,16 @@ function createReminderCard(reminder) {
   title.textContent = reminder.reminder_text;
 
   const timezoneName = reminder.timezone_name || state.context?.timezone_name;
+  const formattedNextRunAt = formatDateTime(
+    reminder.next_run_at || reminder.start_at,
+    timezoneName,
+  );
 
   const meta = document.createElement("div");
   meta.className = "reminder-meta";
   meta.innerHTML = `
     <span>${escapeHtml(reminder.period || "одноразовое")}</span>
-    <span>Следующее: ${formatDateTime(reminder.next_run_at || reminder.start_at, timezoneName)}</span>
+    <span>Следующее: ${escapeHtml(formattedNextRunAt)} · ${escapeHtml(timezoneName)}</span>
   `;
 
   const actions = document.createElement("div");
@@ -430,12 +490,14 @@ function validateReminderForm() {
   const errors = [];
   const scheduleType = elements.scheduleType.value;
 
+  clearFieldErrors();
+
   if (!elements.reminderText.value.trim()) {
     errors.push("Укажи текст напоминания.");
   }
 
   if (!hasStartAtValue()) {
-    errors.push("Укажи первое срабатывание.");
+    showStartAtError("Укажи первое срабатывание.");
   }
 
   if (!elements.timezoneName.value.trim()) {
@@ -471,6 +533,12 @@ function validateReminderForm() {
 
   if (scheduleType === "monthly_day" && !elements.monthDay.value) {
     errors.push("Для расписания по дню месяца выбери день месяца.");
+  }
+
+  if (!hasStartAtValue()) {
+    hideStatus();
+    focusStartAtField();
+    return false;
   }
 
   if (errors.length) {
@@ -517,7 +585,9 @@ function startEdit(reminder) {
   elements.cancelEditButton.hidden = false;
 
   hidePreview();
+  clearFieldErrors();
   updateConditionalFields();
+  renderStartAtHint();
   showStatus(
     "Редактируешь напоминание.\nВнеси изменения и нажми «Сохранить изменения».",
   );
@@ -536,11 +606,14 @@ function resetForm() {
 
   hideStatus();
   hidePreview();
+  clearFieldErrors();
   updateConditionalFields();
+  renderStartAtHint();
 }
 
 async function previewReminder() {
   hideStatus();
+  hidePreview();
 
   if (!validateReminderForm()) {
     return;
@@ -594,6 +667,7 @@ async function useDeviceTimezone() {
 
 async function saveReminder() {
   hideStatus();
+  hidePreview();
 
   if (!validateReminderForm()) {
     return;
@@ -779,13 +853,14 @@ async function handleAsync(action) {
   try {
     await action();
   } catch (error) {
-    showStatus(error.message, "error");
+    handleError(error);
   } finally {
     setBusy(false);
   }
 }
 
 elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
+elements.startAt.addEventListener("input", clearStartAtError);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
 elements.useDeviceTimezoneButton.addEventListener("click", () =>

@@ -129,6 +129,18 @@ h2 {
   gap: 12px;
 }
 
+.field-hint {
+  color: var(--tg-theme-hint-color, #6b7280);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.field-error {
+  color: #d1242f;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
 input,
 select,
 textarea {
@@ -138,6 +150,13 @@ textarea {
   padding: 10px 12px;
   background: var(--tg-theme-bg-color, #ffffff);
   color: var(--tg-theme-text-color, #1f2328);
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: #d1242f;
+  outline-color: #d1242f;
 }
 
 textarea {

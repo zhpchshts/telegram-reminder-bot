@@ -822,7 +822,7 @@ async def list_reminders(message: Message) -> None:
         await message.answer("В этом чате нет активных напоминаний.")
         return
 
-    lines = ["Активные напоминания:\n"]
+    lines = ["<b>Активные напоминания в этом чате</b>\n"]
     lines.extend(
         format_reminder_for_list(
             reminder,
@@ -831,7 +831,7 @@ async def list_reminders(message: Message) -> None:
         for reminder in chat_reminders
     )
 
-    await message.answer("\n\n".join(lines))
+    await message.answer("\n\n".join(lines), parse_mode="HTML")
 
 
 @router.message(Command("delete"))

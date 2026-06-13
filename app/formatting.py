@@ -1,3 +1,4 @@
+import html
 import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -83,12 +84,18 @@ def format_reminder_for_list(
     timezone_name: str | None = None,
 ) -> str:
     reminder_id = get_int(reminder, "id")
+    reminder_text = html.escape(get_str(reminder, "text"))
+    period = html.escape(format_period_line_from_row(reminder))
     start_at = datetime.fromisoformat(get_str(reminder, "start_at"))
-    reminder_timezone = timezone_name or reminder["timezone"]
+    reminder_timezone = str(timezone_name or reminder["timezone"])
+    first_run = html.escape(format_datetime_ru(start_at, reminder_timezone))
+    next_run = html.escape(next_run_line)
 
     return (
-        f"#{reminder_id} — {format_period_line_from_row(reminder)}\n"
-        f"Первое срабатывание: {format_datetime_ru(start_at, reminder_timezone)}\n"
-        f"{next_run_line}\n"
-        f"{get_str(reminder, 'text')}"
+        f"<b>{reminder_text}</b>\n"
+        f"ID: <code>{reminder_id}</code>\n"
+        f"Период: {period}\n"
+        f"Первое срабатывание: {first_run}\n"
+        f"{next_run}\n"
+        f"Таймзона: <code>{html.escape(reminder_timezone)}</code>"
     )

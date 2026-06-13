@@ -112,10 +112,12 @@ def test_format_reminder_for_list_once() -> None:
     )
 
     assert result == (
-        "#10 — один раз\n"
+        "<b>Тест once</b>\n"
+        "ID: <code>10</code>\n"
+        "Период: один раз\n"
         "Первое срабатывание: 08 июня в 12:12\n"
         "Следующее срабатывание: 08 июня в 12:12\n"
-        "Тест once"
+        "Таймзона: <code>Asia/Yekaterinburg</code>"
     )
 
 
@@ -134,10 +136,12 @@ def test_format_reminder_for_list_every_days() -> None:
     )
 
     assert result == (
-        "#11 — каждые 3 дн.\n"
+        "<b>Тест every days</b>\n"
+        "ID: <code>11</code>\n"
+        "Период: каждые 3 дн.\n"
         "Первое срабатывание: 08 июня в 12:12\n"
         "Следующее срабатывание: 11 июня в 12:12\n"
-        "Тест every days"
+        "Таймзона: <code>Asia/Yekaterinburg</code>"
     )
 
 

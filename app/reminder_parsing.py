@@ -435,3 +435,15 @@ def parse_delete_command(command_text: str | None) -> int:
         return int(parts[1].strip())
     except ValueError as error:
         raise ReminderParseError("ID должен быть числом.") from error
+
+
+def parse_timezone_command(command_text: str | None) -> str | None:
+    if not command_text:
+        raise ReminderParseError("Не вижу текст команды.")
+
+    parts = command_text.split(maxsplit=1)
+
+    if len(parts) == 1:
+        return None
+
+    return parts[1].strip()

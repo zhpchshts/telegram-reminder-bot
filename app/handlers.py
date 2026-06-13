@@ -22,6 +22,7 @@ from app.reminder_parsing import (
     parse_monthly_weekday_command,
     parse_monthly_weekday_from_command,
     parse_remind_command,
+    parse_timezone_command,
 )
 from app.reminder_service import (
     build_active_reminders_list_text_for_chat,
@@ -277,13 +278,13 @@ async def examples_command(message: Message) -> None:
 
 @router.message(Command("timezone"))
 async def timezone_command(message: Message) -> None:
-    if not message.text:
-        await message.answer("Не вижу текст команды.")
+    try:
+        timezone_name = parse_timezone_command(message.text)
+    except ReminderParseError as error:
+        await message.answer(str(error))
         return
 
-    parts = message.text.split(maxsplit=1)
-
-    if len(parts) == 1:
+    if timezone_name is None:
         current_timezone = get_chat_timezone_name(message.chat.id)
 
         await message.answer(
@@ -296,8 +297,6 @@ async def timezone_command(message: Message) -> None:
             link_preview_options=NO_LINK_PREVIEW,
         )
         return
-
-    timezone_name = parts[1].strip()
 
     is_timezone_updated = set_chat_timezone_for_chat(
         chat_id=message.chat.id,

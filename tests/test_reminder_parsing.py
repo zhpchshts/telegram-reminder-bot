@@ -19,6 +19,7 @@ from app.reminder_parsing import (
     parse_monthly_weekday_command,
     parse_monthly_weekday_from_command,
     parse_remind_command,
+    parse_timezone_command,
 )
 
 TIMEZONE_NAME = "Asia/Yekaterinburg"
@@ -267,3 +268,20 @@ def test_parse_delete_command_rejects_missing_id() -> None:
 def test_parse_delete_command_rejects_non_integer_id() -> None:
     with pytest.raises(ReminderParseError, match="ID должен быть числом."):
         parse_delete_command("/delete abc")
+
+
+def test_parse_timezone_command_without_timezone() -> None:
+    assert parse_timezone_command("/timezone") is None
+
+
+def test_parse_timezone_command() -> None:
+    assert parse_timezone_command("/timezone Asia/Yekaterinburg") == TIMEZONE_NAME
+
+
+def test_parse_timezone_command_strips_timezone_spaces() -> None:
+    assert parse_timezone_command("/timezone     Europe/Moscow") == "Europe/Moscow"
+
+
+def test_parse_timezone_command_rejects_missing_command_text() -> None:
+    with pytest.raises(ReminderParseError, match="Не вижу текст команды."):
+        parse_timezone_command(None)

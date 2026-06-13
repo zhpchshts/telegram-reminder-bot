@@ -251,7 +251,7 @@ function createReminderCard(reminder) {
   deleteButton.className = "danger-button";
   deleteButton.type = "button";
   deleteButton.textContent = "Удалить";
-  deleteButton.addEventListener("click", () => deleteReminder(reminder.id));
+  deleteButton.addEventListener("click", () => deleteReminder(reminder));
 
   actions.append(editButton, deleteButton);
   card.append(title, meta, actions);
@@ -355,6 +355,10 @@ function startEdit(reminder) {
 
   hidePreview();
   updateConditionalFields();
+  showStatus(
+    "Редактируешь напоминание. Внеси изменения и нажми «Сохранить изменения».",
+  );
+
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -363,8 +367,11 @@ function resetForm() {
   elements.reminderId.value = "";
   elements.timezoneName.value = state.context?.timezone_name || "";
   setDefaultStartAt();
+
   elements.saveButton.textContent = "Сохранить";
   elements.cancelEditButton.hidden = true;
+
+  hideStatus();
   hidePreview();
   updateConditionalFields();
 }
@@ -403,10 +410,29 @@ async function saveReminder(event) {
   showStatus(isEdit ? "Напоминание обновлено." : "Напоминание создано.");
 }
 
-async function deleteReminder(reminderId) {
+function confirmAction(message) {
+  if (typeof telegram?.showConfirm === "function") {
+    return new Promise((resolve) => {
+      telegram.showConfirm(message, resolve);
+    });
+  }
+
+  return window.confirm(message);
+}
+
+function buildDeleteConfirmationMessage(reminder) {
+  return `Удалить напоминание?\n\n${reminder.reminder_text}`;
+}
+
+async function deleteReminder(reminder) {
   hideStatus();
 
-  await apiRequest(`/api/tma/reminders/${reminderId}`, {
+  const confirmed = await confirmAction(buildDeleteConfirmationMessage(reminder));
+  if (!confirmed) {
+    return;
+  }
+
+  await apiRequest(`/api/tma/reminders/${reminder.id}`, {
     method: "DELETE",
   });
 

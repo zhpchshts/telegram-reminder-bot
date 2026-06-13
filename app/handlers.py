@@ -10,11 +10,8 @@ from app.constants import TIMEZONE_LOOKUP_URL, VALID_WEEKDAYS, WEEKDAY_HELP
 
 from app.formatting import (
     format_datetime_ru,
-    format_period_line,
 )
-from app.scheduler import (
-    format_next_run_line,
-)
+
 from app.schedule_calculations import (
     get_first_weekday_datetime_on_or_after_date,
     get_monthly_weekday_datetime_on_or_after,
@@ -28,6 +25,7 @@ from app.schedule_calculations import (
 
 from app.reminder_service import (
     build_active_reminders_list_text_for_chat,
+    build_created_reminder_text,
     create_scheduled_reminder,
     delete_active_reminder_for_chat,
     get_chat_timezone_name,
@@ -151,41 +149,20 @@ async def create_schedule_and_confirm(
         timezone_name=timezone_name,
     )
 
-    header = (
-        "Одноразовое напоминание создано."
-        if schedule_type == "once"
-        else "Повторяющееся напоминание создано."
+    answer_text = build_created_reminder_text(
+        reminder_id=reminder_id,
+        reminder_text=reminder_text,
+        schedule_type=schedule_type,
+        start_at=start_at,
+        interval_days=interval_days,
+        interval_weeks=interval_weeks,
+        day_of_week=day_of_week,
+        month_week_number=month_week_number,
+        month_day=month_day,
+        timezone_name=timezone_name,
     )
 
-    answer_lines = [
-        header,
-        "",
-        f"ID: {reminder_id}",
-    ]
-
-    if schedule_type != "once":
-        answer_lines.append(
-            "Период: "
-            + format_period_line(
-                schedule_type=schedule_type,
-                interval_days=interval_days,
-                interval_weeks=interval_weeks,
-                day_of_week=day_of_week,
-                month_week_number=month_week_number,
-                month_day=month_day,
-            )
-        )
-
-    answer_lines.extend(
-        [
-            f"Таймзона: {timezone_name}",
-            f"Первое срабатывание: {format_datetime_ru(start_at, timezone_name)}",
-            format_next_run_line(reminder_id, timezone_name),
-            f"Текст: {reminder_text}",
-        ]
-    )
-
-    await message.answer("\n".join(answer_lines))
+    await message.answer(answer_text)
 
 
 @router.message(Command("start"))

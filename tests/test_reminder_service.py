@@ -5,8 +5,9 @@ import pytest
 from app import reminder_service as reminder_service_module
 from app.reminder_service import (
     build_active_reminders_list_text_for_chat,
-    delete_active_reminder_for_chat,
+    build_created_reminder_text,
     create_scheduled_reminder,
+    delete_active_reminder_for_chat,
     set_chat_timezone_for_chat,
 )
 
@@ -325,5 +326,121 @@ def test_set_chat_timezone_for_chat_saves_timezone_when_timezone_is_valid(
         {
             "chat_id": 100,
             "timezone": "Asia/Yekaterinburg",
+        }
+    ]
+
+
+def test_build_created_reminder_text_for_once_reminder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_at = datetime(2026, 6, 10, 12, 12)
+
+    def fake_format_datetime_ru(value: datetime, timezone_name: str) -> str:
+        assert value == start_at
+        assert timezone_name == "Asia/Yekaterinburg"
+        return "10.06.2026 12:12"
+
+    def fake_format_next_run_line(
+        reminder_id: int, timezone_name: str | None = None
+    ) -> str:
+        assert reminder_id == 42
+        assert timezone_name == "Asia/Yekaterinburg"
+        return "Следующее срабатывание: 10.06.2026 12:12"
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "format_datetime_ru",
+        fake_format_datetime_ru,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "format_next_run_line",
+        fake_format_next_run_line,
+    )
+
+    result = build_created_reminder_text(
+        reminder_id=42,
+        reminder_text="Проверить релиз",
+        schedule_type="once",
+        start_at=start_at,
+        timezone_name="Asia/Yekaterinburg",
+    )
+
+    assert result == (
+        "Одноразовое напоминание создано.\n"
+        "\n"
+        "ID: 42\n"
+        "Таймзона: Asia/Yekaterinburg\n"
+        "Первое срабатывание: 10.06.2026 12:12\n"
+        "Следующее срабатывание: 10.06.2026 12:12\n"
+        "Текст: Проверить релиз"
+    )
+
+
+def test_build_created_reminder_text_for_repeating_reminder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_at = datetime(2026, 6, 10, 12, 12)
+    period_calls: list[dict[str, object]] = []
+
+    def fake_format_period_line(**kwargs: object) -> str:
+        period_calls.append(kwargs)
+        return "каждые 3 дня"
+
+    def fake_format_datetime_ru(value: datetime, timezone_name: str) -> str:
+        assert value == start_at
+        assert timezone_name == "Asia/Yekaterinburg"
+        return "10.06.2026 12:12"
+
+    def fake_format_next_run_line(
+        reminder_id: int, timezone_name: str | None = None
+    ) -> str:
+        assert reminder_id == 42
+        assert timezone_name == "Asia/Yekaterinburg"
+        return "Следующее срабатывание: 13.06.2026 12:12"
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "format_period_line",
+        fake_format_period_line,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "format_datetime_ru",
+        fake_format_datetime_ru,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "format_next_run_line",
+        fake_format_next_run_line,
+    )
+
+    result = build_created_reminder_text(
+        reminder_id=42,
+        reminder_text="Проверить релиз",
+        schedule_type="every_days",
+        start_at=start_at,
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+    assert result == (
+        "Повторяющееся напоминание создано.\n"
+        "\n"
+        "ID: 42\n"
+        "Период: каждые 3 дня\n"
+        "Таймзона: Asia/Yekaterinburg\n"
+        "Первое срабатывание: 10.06.2026 12:12\n"
+        "Следующее срабатывание: 13.06.2026 12:12\n"
+        "Текст: Проверить релиз"
+    )
+    assert period_calls == [
+        {
+            "schedule_type": "every_days",
+            "interval_days": 3,
+            "interval_weeks": None,
+            "day_of_week": None,
+            "month_week_number": None,
+            "month_day": None,
         }
     ]

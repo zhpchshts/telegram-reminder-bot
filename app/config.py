@@ -10,7 +10,7 @@ load_dotenv()
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DB_PATH = Path("reminders.db")
+DB_PATH = Path(os.getenv("DB_PATH", "reminders.db"))
 APP_TIMEZONE_NAME = os.getenv("APP_TIMEZONE", "Asia/Yekaterinburg")
 APP_TIMEZONE = ZoneInfo(APP_TIMEZONE_NAME)
 

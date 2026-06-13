@@ -89,6 +89,10 @@ function setBusy(isBusy) {
   state.isBusy = isBusy;
 
   for (const button of document.querySelectorAll("button")) {
+    if (button.dataset.modalButton === "true") {
+      continue;
+    }
+
     button.disabled = isBusy;
   }
 }
@@ -586,24 +590,92 @@ async function saveReminder() {
 function confirmAction(message) {
   releaseInputFocus();
 
-  if (typeof telegram?.showConfirm === "function") {
-    return new Promise((resolve) => {
-      telegram.showConfirm(message, (confirmed) => {
-        releaseInputFocus();
-        window.setTimeout(releaseInputFocus, 0);
-        resolve(confirmed);
-      });
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.position = "fixed";
+    overlay.style.inset = "0";
+    overlay.style.zIndex = "9999";
+    overlay.style.display = "flex";
+    overlay.style.alignItems = "center";
+    overlay.style.justifyContent = "center";
+    overlay.style.padding = "20px";
+    overlay.style.background = "rgba(0, 0, 0, 0.45)";
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.style.width = "100%";
+    dialog.style.maxWidth = "420px";
+    dialog.style.boxSizing = "border-box";
+    dialog.style.padding = "20px";
+    dialog.style.borderRadius = "18px";
+    dialog.style.background = "var(--tg-theme-bg-color, #ffffff)";
+    dialog.style.color = "var(--tg-theme-text-color, #111111)";
+    dialog.style.boxShadow = "0 18px 48px rgba(0, 0, 0, 0.28)";
+
+    const title = document.createElement("h3");
+    title.textContent = "Удалить напоминание?";
+    title.style.margin = "0 0 12px";
+
+    const text = document.createElement("p");
+    text.textContent = message;
+    text.style.margin = "0 0 20px";
+    text.style.whiteSpace = "pre-wrap";
+    text.style.color = "var(--tg-theme-text-color, #111111)";
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.gap = "10px";
+    actions.style.justifyContent = "flex-end";
+
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.dataset.modalButton = "true";
+    cancelButton.className = "secondary-button";
+    cancelButton.textContent = "Отмена";
+
+    const confirmButton = document.createElement("button");
+    confirmButton.type = "button";
+    confirmButton.dataset.modalButton = "true";
+    confirmButton.className = "danger-button";
+    confirmButton.textContent = "Удалить";
+
+    const close = (result) => {
+      document.removeEventListener("keydown", handleKeydown);
+      overlay.remove();
+      releaseInputFocus();
+      resolve(result);
+    };
+
+    const handleKeydown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close(false);
+      }
+    };
+
+    cancelButton.addEventListener("click", () => close(false));
+    confirmButton.addEventListener("click", () => close(true));
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        close(false);
+      }
     });
-  }
 
-  const confirmed = window.confirm(message);
-  releaseInputFocus();
+    document.addEventListener("keydown", handleKeydown);
 
-  return confirmed;
+    actions.append(cancelButton, confirmButton);
+    dialog.append(title, text, actions);
+    overlay.append(dialog);
+    document.body.append(overlay);
+
+    confirmButton.focus();
+  });
 }
 
 function buildDeleteConfirmationMessage(reminder) {
-  return `Удалить напоминание?\n\n${reminder.reminder_text}`;
+  return reminder.reminder_text;
 }
 
 async function deleteReminder(reminder) {

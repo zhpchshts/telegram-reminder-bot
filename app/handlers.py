@@ -9,9 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.constants import TIMEZONE_LOOKUP_URL, VALID_WEEKDAYS, WEEKDAY_HELP
 from app.database import (
     create_reminder_in_db,
-    get_active_reminder_for_chat,
     get_active_reminders_for_chat,
-    mark_reminder_as_deleted,
     set_chat_timezone,
 )
 from app.formatting import (
@@ -23,7 +21,6 @@ from app.formatting import (
 from app.scheduler import (
     format_next_run_line,
     schedule_reminder,
-    scheduler,
 )
 from app.schedule_calculations import (
     get_first_weekday_datetime_on_or_after_date,
@@ -36,7 +33,10 @@ from app.schedule_calculations import (
     parse_datetime,
 )
 
-from app.reminder_service import get_chat_timezone_name
+from app.reminder_service import (
+    delete_active_reminder_for_chat,
+    get_chat_timezone_name,
+)
 
 router = Router()
 
@@ -848,23 +848,16 @@ async def delete_reminder(message: Message) -> None:
         await message.answer("ID должен быть числом. Например: /delete 1")
         return
 
-    reminder = get_active_reminder_for_chat(
+    was_deleted = delete_active_reminder_for_chat(
         reminder_id=reminder_id,
         chat_id=message.chat.id,
     )
 
-    if not reminder:
+    if not was_deleted:
         await message.answer(
             f"Не нашёл активное напоминание с ID {reminder_id} в этом чате."
         )
         return
-
-    job = scheduler.get_job(str(reminder_id))
-
-    if job:
-        scheduler.remove_job(str(reminder_id))
-
-    mark_reminder_as_deleted(reminder_id)
 
     await message.answer(f"Напоминание #{reminder_id} удалено.")
 

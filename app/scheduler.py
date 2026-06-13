@@ -13,7 +13,8 @@ from app.database import (
     mark_reminder_as_missed,
     mark_reminder_as_sent,
 )
-from app.formatting import format_datetime_ru, get_int, get_str
+from app.formatting import format_datetime_ru
+from app.reminder_mapping import build_reminder_read_data
 from app.schedule_calculations import (
     get_month_day_range_for_week_number,
 )
@@ -197,19 +198,21 @@ def schedule_reminder(
 
 
 def schedule_reminder_from_row(bot: Bot, reminder: sqlite3.Row) -> None:
+    reminder_data = build_reminder_read_data(reminder)
+
     schedule_reminder(
         bot=bot,
-        reminder_id=get_int(reminder, "id"),
-        chat_id=get_int(reminder, "chat_id"),
-        reminder_text=get_str(reminder, "text"),
-        schedule_type=get_str(reminder, "schedule_type"),
-        start_at=datetime.fromisoformat(get_str(reminder, "start_at")),
-        interval_days=reminder["interval_days"],
-        interval_weeks=reminder["interval_weeks"],
-        day_of_week=reminder["day_of_week"],
-        month_week_number=reminder["month_week_number"],
-        month_day=reminder["month_day"],
-        timezone_name=reminder["timezone"] or APP_TIMEZONE_NAME,
+        reminder_id=reminder_data.id,
+        chat_id=reminder_data.chat_id,
+        reminder_text=reminder_data.reminder_text,
+        schedule_type=reminder_data.schedule_type,
+        start_at=reminder_data.start_at,
+        interval_days=reminder_data.interval_days,
+        interval_weeks=reminder_data.interval_weeks,
+        day_of_week=reminder_data.day_of_week,
+        month_week_number=reminder_data.month_week_number,
+        month_day=reminder_data.month_day,
+        timezone_name=reminder_data.timezone_name,
     )
 
 
@@ -219,12 +222,10 @@ async def restore_active_reminders(bot: Bot) -> None:
     missed_count = 0
 
     for reminder in get_all_active_reminders():
-        reminder_id = get_int(reminder, "id")
-        schedule_type = get_str(reminder, "schedule_type")
-        start_at = datetime.fromisoformat(get_str(reminder, "start_at"))
+        reminder_data = build_reminder_read_data(reminder)
 
-        if schedule_type == "once" and start_at <= now:
-            mark_reminder_as_missed(reminder_id)
+        if reminder_data.schedule_type == "once" and reminder_data.start_at <= now:
+            mark_reminder_as_missed(reminder_data.id)
             missed_count += 1
             continue
 

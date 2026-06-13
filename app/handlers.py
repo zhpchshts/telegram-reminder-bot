@@ -6,15 +6,12 @@ from aiogram.types import LinkPreviewOptions, Message
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.config import APP_TIMEZONE_NAME
-
 from app.constants import TIMEZONE_LOOKUP_URL, VALID_WEEKDAYS, WEEKDAY_HELP
 from app.database import (
     create_reminder_in_db,
     get_active_reminder_for_chat,
     get_active_reminders_for_chat,
     mark_reminder_as_deleted,
-    get_chat_timezone,
     set_chat_timezone,
 )
 from app.formatting import (
@@ -39,14 +36,11 @@ from app.schedule_calculations import (
     parse_datetime,
 )
 
+from app.reminder_service import get_chat_timezone_name
 
 router = Router()
 
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
-
-
-def get_chat_timezone_name(chat_id: int) -> str:
-    return get_chat_timezone(chat_id) or APP_TIMEZONE_NAME
 
 
 async def split_command(

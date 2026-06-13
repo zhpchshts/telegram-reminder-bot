@@ -10,6 +10,7 @@ from app.database import (
     mark_reminder_as_deleted,
     create_reminder_in_db,
     set_chat_timezone,
+    update_reminder_in_db,
 )
 from app.formatting import (
     format_datetime_ru,
@@ -118,6 +119,63 @@ def create_scheduled_reminder(
     )
 
     return reminder_id
+
+
+def update_active_reminder_for_chat(
+    *,
+    bot: Bot,
+    reminder_id: int,
+    chat_id: int,
+    data: ReminderCreateData,
+) -> ReminderReadData | None:
+    validate_reminder_create_data(data)
+
+    reminder = get_active_reminder_for_chat(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+    )
+    if not reminder:
+        return None
+
+    is_updated = update_reminder_in_db(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+        reminder_text=data.reminder_text,
+        schedule_type=data.schedule_type,
+        start_at=data.start_at,
+        interval_days=data.interval_days,
+        interval_weeks=data.interval_weeks,
+        day_of_week=data.day_of_week,
+        month_week_number=data.month_week_number,
+        month_day=data.month_day,
+        timezone=data.timezone_name,
+    )
+    if not is_updated:
+        return None
+
+    schedule_reminder(
+        bot=bot,
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+        reminder_text=data.reminder_text,
+        schedule_type=data.schedule_type,
+        start_at=data.start_at,
+        interval_days=data.interval_days,
+        interval_weeks=data.interval_weeks,
+        day_of_week=data.day_of_week,
+        month_week_number=data.month_week_number,
+        month_day=data.month_day,
+        timezone_name=data.timezone_name,
+    )
+
+    updated_reminder = get_active_reminder_for_chat(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+    )
+    if not updated_reminder:
+        return None
+
+    return build_reminder_read_data(updated_reminder)
 
 
 def build_created_reminder_text(

@@ -32,6 +32,7 @@ from app.reminder_service import (
     get_chat_timezone_name,
     list_active_reminders_for_chat,
     set_chat_timezone_for_chat,
+    update_active_reminder_for_chat,
     validate_reminder_create_data,
 )
 
@@ -180,6 +181,24 @@ def create_tma_reminder(
     )
 
 
+@app.put(
+    "/api/tma/reminders/{reminder_id}",
+    response_model=ReminderResponse,
+)
+def update_tma_reminder(
+    reminder_id: int,
+    request: ReminderCreateRequest,
+    chat_id: int = Depends(get_tma_chat_id),
+    bot: Bot = Depends(get_bot_from_app_state),
+) -> ReminderResponse:
+    return update_reminder_for_chat(
+        reminder_id=reminder_id,
+        request=request,
+        chat_id=chat_id,
+        bot=bot,
+    )
+
+
 @app.get(
     "/api/tma/timezone",
     response_model=ChatTimezoneResponse,
@@ -245,6 +264,24 @@ def create_chat_reminder(
     bot: Bot = Depends(get_bot_from_app_state),
 ) -> ReminderResponse:
     return create_reminder_for_chat(
+        request=request,
+        chat_id=authorized_chat_id,
+        bot=bot,
+    )
+
+
+@app.put(
+    "/api/chats/{chat_id}/reminders/{reminder_id}",
+    response_model=ReminderResponse,
+)
+def update_chat_reminder(
+    reminder_id: int,
+    request: ReminderCreateRequest,
+    authorized_chat_id: int = Depends(require_matching_chat_id),
+    bot: Bot = Depends(get_bot_from_app_state),
+) -> ReminderResponse:
+    return update_reminder_for_chat(
+        reminder_id=reminder_id,
         request=request,
         chat_id=authorized_chat_id,
         bot=bot,
@@ -345,6 +382,37 @@ def create_reminder_for_chat(
         chat_id=chat_id,
         data=data,
     )
+
+
+def update_reminder_for_chat(
+    *,
+    reminder_id: int,
+    request: ReminderCreateRequest,
+    chat_id: int,
+    bot: Bot,
+) -> ReminderResponse:
+    data = build_validated_reminder_create_data(request)
+
+    try:
+        reminder = update_active_reminder_for_chat(
+            bot=bot,
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+            data=data,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    if reminder is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Reminder not found.",
+        )
+
+    return build_reminder_response(reminder)
 
 
 def update_timezone_for_chat(

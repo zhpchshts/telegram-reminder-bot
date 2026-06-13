@@ -110,6 +110,54 @@ def create_reminder_in_db(
         return int(cursor.lastrowid)
 
 
+def update_reminder_in_db(
+    *,
+    reminder_id: int,
+    chat_id: int,
+    reminder_text: str,
+    schedule_type: str,
+    start_at: datetime,
+    interval_days: int | None = None,
+    interval_weeks: int | None = None,
+    day_of_week: str | None = None,
+    month_week_number: int | None = None,
+    month_day: int | None = None,
+    timezone: str | None = None,
+) -> bool:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE reminders
+            SET
+                text = ?,
+                schedule_type = ?,
+                start_at = ?,
+                interval_days = ?,
+                interval_weeks = ?,
+                day_of_week = ?,
+                month_week_number = ?,
+                month_day = ?,
+                timezone = ?
+            WHERE id = ? AND chat_id = ? AND status = 'active'
+            """,
+            (
+                reminder_text,
+                schedule_type,
+                start_at.isoformat(timespec="seconds"),
+                interval_days,
+                interval_weeks,
+                day_of_week,
+                month_week_number,
+                month_day,
+                timezone,
+                reminder_id,
+                chat_id,
+            ),
+        )
+
+    return cursor.rowcount > 0
+
+
 def fetch_active_reminders(
     where_sql: str = "",
     params: tuple[Any, ...] = (),

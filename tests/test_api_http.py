@@ -216,6 +216,17 @@ def test_tma_reminders_endpoint_requires_tma_auth_without_dependency_override() 
             },
         ),
         (
+            "put",
+            "/api/tma/reminders/42",
+            {
+                "reminder_text": "Проверить релиз",
+                "schedule_type": "every_days",
+                "start_at": "2099-06-10T12:12:00",
+                "timezone_name": "Asia/Yekaterinburg",
+                "interval_days": 3,
+            },
+        ),
+        (
             "delete",
             "/api/tma/reminders/42",
             None,

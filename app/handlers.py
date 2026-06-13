@@ -297,7 +297,7 @@ async def timezone_command(message: Message) -> None:
     parts = message.text.split(maxsplit=1)
 
     if len(parts) == 1:
-        current_timezone = get_chat_timezone(message.chat.id) or APP_TIMEZONE_NAME
+        current_timezone = get_chat_timezone_name(message.chat.id)
 
         await message.answer(
             "Текущая таймзона этого чата:\n\n"

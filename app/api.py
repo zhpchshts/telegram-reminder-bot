@@ -12,10 +12,12 @@ from app.api_models import (
     ChatTimezoneUpdateRequest,
     DeleteReminderResponse,
     ReminderCreateRequest,
+    ReminderFormOptionsResponse,
     ReminderResponse,
     TmaContextResponse,
     build_created_reminder_response,
     build_reminder_create_data,
+    build_reminder_form_options_response,
     build_reminder_response,
     build_tma_context_response,
 )
@@ -98,6 +100,16 @@ def get_tma_context(
         chat_type=init_data.chat_type,
         start_param=init_data.start_param,
     )
+
+
+@app.get(
+    "/api/tma/reminder-options",
+    response_model=ReminderFormOptionsResponse,
+)
+def get_reminder_form_options(
+    _init_data=Depends(get_tma_init_data),
+) -> ReminderFormOptionsResponse:
+    return build_reminder_form_options_response()
 
 
 @app.get(

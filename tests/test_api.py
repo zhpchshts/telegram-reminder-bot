@@ -12,6 +12,7 @@ from app.api import (
     delete_chat_reminder,
     get_chat_reminders,
     get_chat_timezone,
+    get_reminder_form_options,
     get_tma_context,
     health,
     update_chat_timezone,
@@ -21,6 +22,7 @@ from app.api_models import (
     ChatTimezoneUpdateRequest,
     DeleteReminderResponse,
     ReminderCreateRequest,
+    ReminderFormOptionsResponse,
     ReminderResponse,
     TmaContextResponse,
 )
@@ -99,6 +101,30 @@ def test_get_tma_context_returns_response() -> None:
         chat_type="group",
         start_param="chat_100",
     )
+
+
+def test_get_reminder_form_options_returns_response() -> None:
+    result = get_reminder_form_options()
+
+    assert isinstance(result, ReminderFormOptionsResponse)
+    assert [option.value for option in result.schedule_types] == [
+        "once",
+        "every_days",
+        "every_week",
+        "monthly_weekday",
+        "monthly_day",
+    ]
+    assert [weekday.value for weekday in result.weekdays] == [
+        "MONDAY",
+        "TUESDAY",
+        "WEDNESDAY",
+        "THURSDAY",
+        "FRIDAY",
+        "SATURDAY",
+        "SUNDAY",
+    ]
+    assert result.month_week_numbers == [1, 2, 3, 4, 5]
+    assert result.month_days == list(range(1, 32))
 
 
 def test_get_chat_reminders_returns_response_models(
@@ -425,3 +451,4 @@ def test_api_registers_initial_routes() -> None:
     assert "/api/chats/{chat_id}/timezone" in route_paths
     assert "/api/chats/{chat_id}/reminders/{reminder_id}" in route_paths
     assert "/api/tma/context" in route_paths
+    assert "/api/tma/reminder-options" in route_paths

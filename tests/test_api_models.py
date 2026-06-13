@@ -12,6 +12,10 @@ from app.api_models import (
     normalize_start_at,
     TmaContextResponse,
     build_tma_context_response,
+    ReminderFormOptionsResponse,
+    ReminderScheduleTypeOption,
+    WeekdayOption,
+    build_reminder_form_options_response,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
@@ -168,4 +172,49 @@ def test_build_tma_context_response() -> None:
         chat_id=100,
         chat_type="group",
         start_param="chat_100",
+    )
+
+
+def test_build_reminder_form_options_response() -> None:
+    result = build_reminder_form_options_response()
+
+    assert result == ReminderFormOptionsResponse(
+        schedule_types=[
+            ReminderScheduleTypeOption(
+                value="once",
+                label="Одноразовое напоминание",
+                required_fields=[],
+            ),
+            ReminderScheduleTypeOption(
+                value="every_days",
+                label="Каждые N дней",
+                required_fields=["interval_days"],
+            ),
+            ReminderScheduleTypeOption(
+                value="every_week",
+                label="Каждые N недель по дню недели",
+                required_fields=["interval_weeks", "day_of_week"],
+            ),
+            ReminderScheduleTypeOption(
+                value="monthly_weekday",
+                label="Каждый месяц в N-й день недели",
+                required_fields=["month_week_number", "day_of_week"],
+            ),
+            ReminderScheduleTypeOption(
+                value="monthly_day",
+                label="Каждый месяц в день месяца",
+                required_fields=["month_day"],
+            ),
+        ],
+        weekdays=[
+            WeekdayOption(value="MONDAY", label="Понедельник"),
+            WeekdayOption(value="TUESDAY", label="Вторник"),
+            WeekdayOption(value="WEDNESDAY", label="Среда"),
+            WeekdayOption(value="THURSDAY", label="Четверг"),
+            WeekdayOption(value="FRIDAY", label="Пятница"),
+            WeekdayOption(value="SATURDAY", label="Суббота"),
+            WeekdayOption(value="SUNDAY", label="Воскресенье"),
+        ],
+        month_week_numbers=[1, 2, 3, 4, 5],
+        month_days=list(range(1, 32)),
     )

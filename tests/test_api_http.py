@@ -120,6 +120,25 @@ def test_tma_context_endpoint_requires_tma_auth_without_dependency_override() ->
     }
 
 
+def test_reminder_options_endpoint_requires_tma_auth_without_dependency_override() -> (
+    None
+):
+    previous_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides.clear()
+
+    try:
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/tma/reminder-options")
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Telegram init data is required.",
+    }
+
+
 def test_tma_context_endpoint_accepts_valid_tma_init_data(
     authenticated_client: TestClient,
 ) -> None:

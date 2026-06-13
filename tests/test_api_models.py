@@ -10,6 +10,8 @@ from app.api_models import (
     build_reminder_create_data,
     build_reminder_response,
     normalize_start_at,
+    TmaContextResponse,
+    build_tma_context_response,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
@@ -133,3 +135,37 @@ def test_delete_reminder_response() -> None:
         "chat_id": 100,
         "deleted": True,
     }
+
+
+def test_build_tma_context_response() -> None:
+    result = build_tma_context_response(
+        auth_date=1_700_000_000,
+        user={
+            "id": 123,
+            "first_name": "Eugene",
+        },
+        chat={
+            "id": 100,
+            "type": "group",
+            "title": "Home",
+        },
+        chat_id=100,
+        chat_type="group",
+        start_param="chat_100",
+    )
+
+    assert result == TmaContextResponse(
+        auth_date=1_700_000_000,
+        user={
+            "id": 123,
+            "first_name": "Eugene",
+        },
+        chat={
+            "id": 100,
+            "type": "group",
+            "title": "Home",
+        },
+        chat_id=100,
+        chat_type="group",
+        start_param="chat_100",
+    )

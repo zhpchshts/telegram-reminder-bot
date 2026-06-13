@@ -47,6 +47,15 @@ class DeleteReminderResponse(BaseModel):
     deleted: bool
 
 
+class TmaContextResponse(BaseModel):
+    auth_date: int
+    user: dict[str, object] | None = None
+    chat: dict[str, object]
+    chat_id: int
+    chat_type: str | None = None
+    start_param: str | None = None
+
+
 def normalize_start_at(
     start_at: datetime,
     timezone_name: str,
@@ -109,4 +118,23 @@ def build_created_reminder_response(
         day_of_week=data.day_of_week,
         month_week_number=data.month_week_number,
         month_day=data.month_day,
+    )
+
+
+def build_tma_context_response(
+    *,
+    auth_date: int,
+    user: dict[str, object] | None,
+    chat: dict[str, object],
+    chat_id: int,
+    chat_type: str | None,
+    start_param: str | None,
+) -> TmaContextResponse:
+    return TmaContextResponse(
+        auth_date=auth_date,
+        user=user,
+        chat=chat,
+        chat_id=chat_id,
+        chat_type=chat_type,
+        start_param=start_param,
     )

@@ -103,6 +103,51 @@ def test_chat_endpoint_requires_tma_auth_without_dependency_override() -> None:
     }
 
 
+def test_tma_context_endpoint_requires_tma_auth_without_dependency_override() -> None:
+    previous_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides.clear()
+
+    try:
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/tma/context")
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Telegram init data is required.",
+    }
+
+
+def test_tma_context_endpoint_accepts_valid_tma_init_data(
+    authenticated_client: TestClient,
+) -> None:
+    response = authenticated_client.get(
+        "/api/tma/context",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "auth_date": response.json()["auth_date"],
+        "user": {
+            "id": 123,
+            "first_name": "Eugene",
+        },
+        "chat": {
+            "id": 100,
+            "type": "group",
+            "title": "Home",
+        },
+        "chat_id": 100,
+        "chat_type": "group",
+        "start_param": "chat_100",
+    }
+
+
 def test_get_chat_reminders_endpoint_accepts_valid_tma_init_data(
     authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

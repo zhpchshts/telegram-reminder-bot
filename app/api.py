@@ -4,16 +4,18 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram import Bot
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from app.api_auth import require_matching_chat_id
+from app.api_auth import get_tma_chat_id, get_tma_init_data, require_matching_chat_id
 from app.api_models import (
     ChatTimezoneResponse,
     ChatTimezoneUpdateRequest,
     DeleteReminderResponse,
     ReminderCreateRequest,
     ReminderResponse,
+    TmaContextResponse,
     build_created_reminder_response,
     build_reminder_create_data,
     build_reminder_response,
+    build_tma_context_response,
 )
 from app.reminder_models import ReminderCreateData
 from app.reminder_service import (
@@ -57,6 +59,24 @@ def is_start_at_in_past(data: ReminderCreateData) -> bool:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get(
+    "/api/tma/context",
+    response_model=TmaContextResponse,
+)
+def get_tma_context(
+    init_data=Depends(get_tma_init_data),
+    chat_id: int = Depends(get_tma_chat_id),
+) -> TmaContextResponse:
+    return build_tma_context_response(
+        auth_date=init_data.auth_date,
+        user=init_data.user,
+        chat=init_data.chat,
+        chat_id=chat_id,
+        chat_type=init_data.chat_type,
+        start_param=init_data.start_param,
+    )
 
 
 @app.get(

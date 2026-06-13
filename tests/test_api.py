@@ -10,6 +10,7 @@ from app.api import (
     delete_chat_reminder,
     get_chat_reminders,
     get_chat_timezone,
+    get_tma_context,
     health,
     update_chat_timezone,
 )
@@ -19,14 +20,53 @@ from app.api_models import (
     DeleteReminderResponse,
     ReminderCreateRequest,
     ReminderResponse,
+    TmaContextResponse,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
 BOT = object()
 
 
+class FakeTelegramInitData:
+    auth_date = 1_700_000_000
+    user = {
+        "id": 123,
+        "first_name": "Eugene",
+    }
+    chat = {
+        "id": 100,
+        "type": "group",
+        "title": "Home",
+    }
+    chat_type = "group"
+    start_param = "chat_100"
+
+
 def test_health_returns_ok() -> None:
     assert health() == {"status": "ok"}
+
+
+def test_get_tma_context_returns_response() -> None:
+    result = get_tma_context(
+        init_data=FakeTelegramInitData(),
+        chat_id=100,
+    )
+
+    assert result == TmaContextResponse(
+        auth_date=1_700_000_000,
+        user={
+            "id": 123,
+            "first_name": "Eugene",
+        },
+        chat={
+            "id": 100,
+            "type": "group",
+            "title": "Home",
+        },
+        chat_id=100,
+        chat_type="group",
+        start_param="chat_100",
+    )
 
 
 def test_get_chat_reminders_returns_response_models(
@@ -352,3 +392,4 @@ def test_api_registers_initial_routes() -> None:
     assert "/api/chats/{chat_id}/reminders" in route_paths
     assert "/api/chats/{chat_id}/timezone" in route_paths
     assert "/api/chats/{chat_id}/reminders/{reminder_id}" in route_paths
+    assert "/api/tma/context" in route_paths

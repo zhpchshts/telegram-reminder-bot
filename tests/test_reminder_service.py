@@ -8,9 +8,10 @@ from app.reminder_service import (
     build_created_reminder_text,
     create_scheduled_reminder,
     delete_active_reminder_for_chat,
+    list_active_reminders_for_chat,
     set_chat_timezone_for_chat,
 )
-from app.reminder_models import ReminderCreateData
+from app.reminder_models import ReminderCreateData, ReminderReadData
 
 
 class FakeScheduler:
@@ -452,4 +453,52 @@ def test_build_created_reminder_text_for_repeating_reminder(
             "month_week_number": None,
             "month_day": None,
         }
+    ]
+
+
+def test_list_active_reminders_for_chat_returns_read_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_at = datetime(2099, 6, 10, 12, 12)
+    requested_chat_ids: list[int] = []
+
+    reminders = [
+        {
+            "id": 42,
+            "chat_id": 100,
+            "text": "Проверить релиз",
+            "schedule_type": "every_days",
+            "start_at": start_at.isoformat(timespec="seconds"),
+            "interval_days": 3,
+            "interval_weeks": None,
+            "day_of_week": None,
+            "month_week_number": None,
+            "month_day": None,
+            "timezone": "Asia/Yekaterinburg",
+        }
+    ]
+
+    def fake_get_active_reminders_for_chat(chat_id: int) -> list[dict[str, object]]:
+        requested_chat_ids.append(chat_id)
+        return reminders
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "get_active_reminders_for_chat",
+        fake_get_active_reminders_for_chat,
+    )
+
+    result = list_active_reminders_for_chat(chat_id=100)
+
+    assert requested_chat_ids == [100]
+    assert result == [
+        ReminderReadData(
+            id=42,
+            chat_id=100,
+            reminder_text="Проверить релиз",
+            schedule_type="every_days",
+            start_at=start_at,
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=3,
+        )
     ]

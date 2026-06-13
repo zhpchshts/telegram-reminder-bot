@@ -5,6 +5,11 @@ from fastapi import Depends, Header, HTTPException
 from app.config import BOT_TOKEN
 from app.tma_auth import TelegramInitData, TelegramInitDataError
 from app.tma_auth import validate_telegram_init_data
+from app.tma_launch import (
+    TmaLaunchContext,
+    TmaLaunchTokenError,
+    validate_tma_launch_token,
+)
 
 TMA_INIT_DATA_HEADER = "X-Telegram-Init-Data"
 
@@ -36,40 +41,50 @@ def get_tma_init_data(
 def get_tma_chat(
     init_data: TelegramInitData = Depends(get_tma_init_data),
 ) -> dict[str, object]:
-    if init_data.chat is not None:
-        return init_data.chat
+    return build_tma_chat_from_launch_context(
+        get_tma_launch_context(init_data),
+    )
 
-    if init_data.user is None:
+
+def get_tma_launch_context(
+    init_data: TelegramInitData,
+) -> TmaLaunchContext:
+    if not init_data.start_param:
         raise HTTPException(
             status_code=401,
-            detail="Telegram init data chat or user is required.",
+            detail="Telegram init data start_param is required.",
         )
 
-    user_id = init_data.user.get("id")
-    if isinstance(user_id, bool) or not isinstance(user_id, int):
+    try:
+        return validate_tma_launch_token(
+            init_data.start_param,
+            secret=BOT_TOKEN,
+        )
+    except TmaLaunchTokenError as error:
         raise HTTPException(
             status_code=401,
-            detail="Telegram init data user.id must be an integer.",
-        )
+            detail=str(error),
+        ) from error
 
-    private_chat: dict[str, object] = {
-        "id": user_id,
-        "type": "private",
+
+def build_tma_chat_from_launch_context(
+    launch_context: TmaLaunchContext,
+) -> dict[str, object]:
+    chat: dict[str, object] = {
+        "id": launch_context.chat_id,
+        "type": launch_context.chat_type,
     }
 
-    for field_name in ("first_name", "last_name", "username"):
-        field_value = init_data.user.get(field_name)
-        if isinstance(field_value, str):
-            private_chat[field_name] = field_value
+    if launch_context.chat_title:
+        chat["title"] = launch_context.chat_title
 
-    return private_chat
+    return chat
 
 
 def get_tma_chat_id(
     chat: dict[str, object] = Depends(get_tma_chat),
 ) -> int:
     chat_id = chat.get("id")
-
     if isinstance(chat_id, bool) or not isinstance(chat_id, int):
         raise HTTPException(
             status_code=401,

@@ -25,9 +25,19 @@ class CreateCommandCase:
 
 
 class FakeMessage:
-    def __init__(self, text: str) -> None:
+    def __init__(
+        self,
+        text: str,
+        *,
+        chat_type: str = "private",
+        chat_title: str | None = None,
+    ) -> None:
         self.text = text
-        self.chat = SimpleNamespace(id=CHAT_ID)
+        self.chat = SimpleNamespace(
+            id=CHAT_ID,
+            type=chat_type,
+            title=chat_title,
+        )
         self.answers: list[tuple[str, dict[str, object]]] = []
 
     async def answer(self, text: str, **kwargs: object) -> None:
@@ -424,7 +434,7 @@ def test_timezone_command_answers_invalid_timezone(
 def test_app_command_answers_not_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(handlers, "TMA_URL", None)
+    monkeypatch.setattr(handlers, "TMA_DIRECT_URL", None)
 
     message = FakeMessage("/app")
 
@@ -433,31 +443,74 @@ def test_app_command_answers_not_configured(
     assert message.answers == [
         (
             "Mini App пока не настроен.\n\n"
-            "Администратору нужно задать переменную окружения TMA_URL.",
+            "Администратору нужно задать переменную окружения TMA_DIRECT_URL.",
             {},
         )
     ]
 
 
-def test_app_command_sends_web_app_button(
+def test_app_command_sends_direct_link_button(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(handlers, "TMA_URL", "https://example.com/tma/")
+    captured_calls: list[dict[str, object]] = []
 
-    message = FakeMessage("/app")
+    def fake_create_tma_launch_token(
+        *,
+        chat_id: int,
+        chat_type: str,
+        secret: str,
+        chat_title: str | None = None,
+    ) -> str:
+        captured_calls.append(
+            {
+                "chat_id": chat_id,
+                "chat_type": chat_type,
+                "chat_title": chat_title,
+                "secret": secret,
+            }
+        )
+        return "signed-token"
+
+    monkeypatch.setattr(
+        handlers,
+        "TMA_DIRECT_URL",
+        "https://t.me/ZhpchshtsReminderBot?startapp=",
+    )
+    monkeypatch.setattr(handlers, "BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(
+        handlers,
+        "create_tma_launch_token",
+        fake_create_tma_launch_token,
+    )
+
+    message = FakeMessage(
+        "/app",
+        chat_type="supergroup",
+        chat_title="Home",
+    )
 
     asyncio.run(handlers.app_command(message))
 
+    assert captured_calls == [
+        {
+            "chat_id": CHAT_ID,
+            "chat_type": "supergroup",
+            "chat_title": "Home",
+            "secret": "test-bot-token",
+        }
+    ]
     assert len(message.answers) == 1
 
     answer_text, kwargs = message.answers[0]
+
     assert answer_text == "Открой интерфейс управления напоминаниями:"
 
     reply_markup = kwargs["reply_markup"]
     button = reply_markup.inline_keyboard[0][0]
 
     assert button.text == "Открыть Mini App"
-    assert button.web_app.url == "https://example.com/tma/"
+    assert button.url == "https://t.me/ZhpchshtsReminderBot?startapp=signed-token"
+    assert button.web_app is None
 
 
 def test_delete_reminder_deletes_active_reminder_for_chat(

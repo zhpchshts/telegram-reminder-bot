@@ -109,6 +109,17 @@ def is_start_at_in_past(data: ReminderCreateData) -> bool:
     return start_at <= now
 
 
+def get_tma_chat_type(
+    chat: dict[str, object],
+    fallback_chat_type: str | None,
+) -> str | None:
+    chat_type = chat.get("type")
+    if isinstance(chat_type, str):
+        return chat_type
+
+    return fallback_chat_type
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -129,7 +140,7 @@ def get_tma_context(
         chat=tma_chat,
         chat_id=chat_id,
         timezone_name=get_chat_timezone_name(chat_id),
-        chat_type=init_data.chat_type,
+        chat_type=get_tma_chat_type(tma_chat, init_data.chat_type),
         start_param=init_data.start_param,
     )
 
@@ -159,7 +170,7 @@ def get_tma_bootstrap(
         chat=tma_chat,
         chat_id=chat_id,
         timezone_name=get_chat_timezone_name(chat_id),
-        chat_type=init_data.chat_type,
+        chat_type=get_tma_chat_type(tma_chat, init_data.chat_type),
         start_param=init_data.start_param,
         active_reminders=list_active_reminders_for_chat(chat_id),
     )

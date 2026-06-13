@@ -11,8 +11,14 @@ from app.api_auth import (
     require_matching_chat_id,
 )
 from app.tma_auth import TelegramInitData, TelegramInitDataError
+from app.tma_launch import create_tma_launch_token
 
 BOT_TOKEN = "123456789:test-token"
+
+
+@pytest.fixture(autouse=True)
+def patch_api_auth_bot_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api_auth_module, "BOT_TOKEN", BOT_TOKEN)
 
 
 @pytest.fixture
@@ -46,14 +52,36 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+def make_launch_token(
+    *,
+    chat_id: int = -100,
+    chat_type: str = "supergroup",
+    chat_title: str | None = "Home",
+) -> str:
+    return create_tma_launch_token(
+        chat_id=chat_id,
+        chat_type=chat_type,
+        chat_title=chat_title,
+        secret=BOT_TOKEN,
+        now=1_700_000_000,
+        max_age_seconds=1_000_000_000,
+    )
+
+
 def make_init_data(
     *,
-    chat: dict[str, object] | None,
+    chat: dict[str, object] | None = None,
+    user: dict[str, object] | None = None,
+    chat_type: str | None = None,
+    start_param: str | None = None,
 ) -> TelegramInitData:
     return TelegramInitData(
         fields={"auth_date": "1700000000"},
         auth_date=1_700_000_000,
+        user=user,
         chat=chat,
+        chat_type=chat_type,
+        start_param=start_param,
     )
 
 
@@ -94,23 +122,19 @@ def test_tma_auth_dependency_returns_validated_init_data(
         fields={
             "auth_date": "1700000000",
             "user": '{"id":123,"first_name":"Eugene"}',
-            "chat": '{"id":-100,"type":"supergroup","title":"Home"}',
             "chat_type": "supergroup",
-            "start_param": "chat_-100",
+            "start_param": "signed-token",
         },
         auth_date=1_700_000_000,
         user={
             "id": 123,
             "first_name": "Eugene",
         },
-        chat={
-            "id": -100,
-            "type": "supergroup",
-            "title": "Home",
-        },
+        chat=None,
         chat_type="supergroup",
-        start_param="chat_-100",
+        start_param="signed-token",
     )
+
     captured_calls = patch_validated_init_data(monkeypatch, init_data)
 
     response = client.get(
@@ -131,13 +155,9 @@ def test_tma_auth_dependency_returns_validated_init_data(
             "id": 123,
             "first_name": "Eugene",
         },
-        "chat": {
-            "id": -100,
-            "type": "supergroup",
-            "title": "Home",
-        },
+        "chat": None,
         "chat_type": "supergroup",
-        "start_param": "chat_-100",
+        "start_param": "signed-token",
     }
 
 
@@ -179,13 +199,21 @@ def test_tma_auth_dependency_rejects_invalid_init_data(
     }
 
 
-def test_tma_chat_id_dependency_returns_chat_id(
+def test_tma_chat_id_dependency_returns_launch_token_chat_id(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     patch_validated_init_data(
         monkeypatch,
-        make_init_data(chat={"id": -100, "type": "supergroup"}),
+        make_init_data(
+            user={
+                "id": 123,
+                "first_name": "Eugene",
+            },
+            chat=None,
+            chat_type="supergroup",
+            start_param=make_launch_token(chat_id=-100, chat_type="supergroup"),
+        ),
     )
 
     response = client.get(
@@ -197,18 +225,24 @@ def test_tma_chat_id_dependency_returns_chat_id(
     assert response.json() == {"chat_id": -100}
 
 
-def test_tma_chat_id_dependency_rejects_missing_chat_and_user(
+def test_tma_chat_id_dependency_rejects_missing_start_param(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     patch_validated_init_data(
         monkeypatch,
-        TelegramInitData(
-            fields={},
-            auth_date=1_700_000_000,
-            user=None,
-            chat=None,
-            chat_type="private",
+        make_init_data(
+            user={
+                "id": 123,
+                "first_name": "Eugene",
+            },
+            chat={
+                "id": -100,
+                "type": "supergroup",
+                "title": "Home",
+            },
+            chat_type="supergroup",
+            start_param=None,
         ),
     )
 
@@ -219,17 +253,25 @@ def test_tma_chat_id_dependency_rejects_missing_chat_and_user(
 
     assert response.status_code == 401
     assert response.json() == {
-        "detail": "Telegram init data chat or user is required.",
+        "detail": "Telegram init data start_param is required.",
     }
 
 
-def test_tma_chat_id_dependency_rejects_non_int_chat_id(
+def test_tma_chat_id_dependency_rejects_invalid_launch_token(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     patch_validated_init_data(
         monkeypatch,
-        make_init_data(chat={"id": "-100", "type": "supergroup"}),
+        make_init_data(
+            user={
+                "id": 123,
+                "first_name": "Eugene",
+            },
+            chat=None,
+            chat_type="private",
+            start_param="invalid-token",
+        ),
     )
 
     response = client.get(
@@ -239,7 +281,7 @@ def test_tma_chat_id_dependency_rejects_non_int_chat_id(
 
     assert response.status_code == 401
     assert response.json() == {
-        "detail": "Telegram init data chat.id must be an integer.",
+        "detail": "TMA launch token is invalid.",
     }
 
 
@@ -249,7 +291,15 @@ def test_matching_chat_id_dependency_returns_authorized_chat_id(
 ) -> None:
     patch_validated_init_data(
         monkeypatch,
-        make_init_data(chat={"id": 100, "type": "group"}),
+        make_init_data(
+            chat=None,
+            chat_type="group",
+            start_param=make_launch_token(
+                chat_id=100,
+                chat_type="group",
+                chat_title="Home",
+            ),
+        ),
     )
 
     response = client.get(
@@ -267,7 +317,15 @@ def test_matching_chat_id_dependency_rejects_different_chat_id(
 ) -> None:
     patch_validated_init_data(
         monkeypatch,
-        make_init_data(chat={"id": 200, "type": "group"}),
+        make_init_data(
+            chat=None,
+            chat_type="group",
+            start_param=make_launch_token(
+                chat_id=200,
+                chat_type="group",
+                chat_title="Home",
+            ),
+        ),
     )
 
     response = client.get(
@@ -281,7 +339,34 @@ def test_matching_chat_id_dependency_rejects_different_chat_id(
     }
 
 
-def test_get_tma_chat_returns_signed_chat() -> None:
+def test_get_tma_chat_returns_launch_token_chat() -> None:
+    init_data = TelegramInitData(
+        fields={},
+        auth_date=1_700_000_000,
+        user={
+            "id": 123,
+            "first_name": "Eugene",
+        },
+        chat=None,
+        chat_type="private",
+        start_param=make_launch_token(
+            chat_id=-100,
+            chat_type="supergroup",
+            chat_title="Home",
+        ),
+    )
+
+    chat = get_tma_chat(init_data=init_data)
+
+    assert chat == {
+        "id": -100,
+        "type": "supergroup",
+        "title": "Home",
+    }
+    assert get_tma_chat_id(chat=chat) == -100
+
+
+def test_get_tma_chat_rejects_missing_start_param() -> None:
     init_data = TelegramInitData(
         fields={},
         auth_date=1_700_000_000,
@@ -295,72 +380,31 @@ def test_get_tma_chat_returns_signed_chat() -> None:
             "title": "Home",
         },
         chat_type="supergroup",
+        start_param=None,
     )
 
-    chat = get_tma_chat(init_data=init_data)
+    with pytest.raises(HTTPException) as error:
+        get_tma_chat(init_data=init_data)
 
-    assert chat == {
-        "id": -100,
-        "type": "supergroup",
-        "title": "Home",
-    }
-    assert get_tma_chat_id(chat=chat) == -100
+    assert error.value.status_code == 401
+    assert error.value.detail == "Telegram init data start_param is required."
 
 
-def test_get_tma_chat_falls_back_to_private_user_chat() -> None:
+def test_get_tma_chat_rejects_invalid_launch_token() -> None:
     init_data = TelegramInitData(
         fields={},
         auth_date=1_700_000_000,
         user={
             "id": 123,
             "first_name": "Eugene",
-            "username": "evsab",
         },
         chat=None,
         chat_type="private",
-    )
-
-    chat = get_tma_chat(init_data=init_data)
-
-    assert chat == {
-        "id": 123,
-        "type": "private",
-        "first_name": "Eugene",
-        "username": "evsab",
-    }
-    assert get_tma_chat_id(chat=chat) == 123
-
-
-def test_get_tma_chat_rejects_missing_chat_and_user() -> None:
-    init_data = TelegramInitData(
-        fields={},
-        auth_date=1_700_000_000,
-        user=None,
-        chat=None,
-        chat_type="private",
+        start_param="invalid-token",
     )
 
     with pytest.raises(HTTPException) as error:
         get_tma_chat(init_data=init_data)
 
     assert error.value.status_code == 401
-    assert error.value.detail == "Telegram init data chat or user is required."
-
-
-def test_get_tma_chat_rejects_invalid_user_id() -> None:
-    init_data = TelegramInitData(
-        fields={},
-        auth_date=1_700_000_000,
-        user={
-            "id": "123",
-            "first_name": "Eugene",
-        },
-        chat=None,
-        chat_type="private",
-    )
-
-    with pytest.raises(HTTPException) as error:
-        get_tma_chat(init_data=init_data)
-
-    assert error.value.status_code == 401
-    assert error.value.detail == "Telegram init data user.id must be an integer."
+    assert error.value.detail == "TMA launch token is invalid."

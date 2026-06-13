@@ -13,8 +13,20 @@ from app.api import app
 from app.api_auth import TMA_INIT_DATA_HEADER, require_matching_chat_id
 from app.reminder_models import ReminderReadData
 from app.tma_auth import calculate_init_data_hash
+from app.tma_launch import create_tma_launch_token
 
 BOT_TOKEN = "123456789:test-token"
+
+
+def build_launch_token_for_chat(chat_id: int) -> str:
+    return create_tma_launch_token(
+        chat_id=chat_id,
+        chat_type="group",
+        chat_title="Home",
+        secret=BOT_TOKEN,
+        now=1_700_000_000,
+        max_age_seconds=1_000_000_000,
+    )
 
 
 def build_signed_init_data_for_chat(chat_id: int) -> str:
@@ -37,7 +49,7 @@ def build_signed_init_data_for_chat(chat_id: int) -> str:
             separators=(",", ":"),
         ),
         "chat_type": "group",
-        "start_param": f"chat_{chat_id}",
+        "start_param": build_launch_token_for_chat(chat_id),
     }
     fields["hash"] = calculate_init_data_hash(
         fields,
@@ -306,7 +318,7 @@ def test_tma_context_endpoint_accepts_valid_tma_init_data(
         "chat_id": 100,
         "timezone_name": "Asia/Yekaterinburg",
         "chat_type": "group",
-        "start_param": "chat_100",
+        "start_param": build_launch_token_for_chat(100),
     }
 
 
@@ -373,7 +385,7 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
         "chat_id": 100,
         "timezone_name": "Asia/Yekaterinburg",
         "chat_type": "group",
-        "start_param": "chat_100",
+        "start_param": build_launch_token_for_chat(100),
     }
     assert [
         option["value"]

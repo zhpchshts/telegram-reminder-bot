@@ -9,10 +9,10 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     LinkPreviewOptions,
     Message,
-    WebAppInfo,
 )
+
 from app.constants import TIMEZONE_LOOKUP_URL, WEEKDAY_HELP
-from app.config import TMA_URL
+from app.config import BOT_TOKEN, TMA_DIRECT_URL
 from app.formatting import format_datetime_ru
 from app.reminder_models import ReminderCreateData
 from app.reminder_parsing import (
@@ -38,23 +38,39 @@ from app.reminder_service import (
     get_chat_timezone_name,
     set_chat_timezone_for_chat,
 )
+from app.tma_launch import create_tma_launch_token
 
 router = Router()
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 ParseCommand = Callable[[str | None, str], ReminderParseResult]
 
 
-def build_tma_keyboard(tma_url: str) -> InlineKeyboardMarkup:
+def build_tma_keyboard(launch_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="Открыть Mini App",
-                    web_app=WebAppInfo(url=tma_url),
+                    url=launch_url,
                 )
             ]
         ]
     )
+
+
+def build_tma_launch_url(
+    *,
+    chat_id: int,
+    chat_type: str,
+    chat_title: str | None,
+) -> str:
+    token = create_tma_launch_token(
+        chat_id=chat_id,
+        chat_type=chat_type,
+        chat_title=chat_title,
+        secret=BOT_TOKEN,
+    )
+    return f"{TMA_DIRECT_URL}{token}"
 
 
 async def reject_past_datetime(
@@ -216,16 +232,22 @@ async def start(message: Message) -> None:
 
 @router.message(Command("app"))
 async def app_command(message: Message) -> None:
-    if not TMA_URL:
+    if not TMA_DIRECT_URL:
         await message.answer(
             "Mini App пока не настроен.\n\n"
-            "Администратору нужно задать переменную окружения TMA_URL."
+            "Администратору нужно задать переменную окружения TMA_DIRECT_URL."
         )
         return
 
+    launch_url = build_tma_launch_url(
+        chat_id=message.chat.id,
+        chat_type=message.chat.type,
+        chat_title=message.chat.title,
+    )
+
     await message.answer(
         "Открой интерфейс управления напоминаниями:",
-        reply_markup=build_tma_keyboard(TMA_URL),
+        reply_markup=build_tma_keyboard(launch_url),
     )
 
 

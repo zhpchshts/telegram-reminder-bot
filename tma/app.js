@@ -49,6 +49,9 @@ const state = {
 const elements = {
   chatTitle: document.querySelector("#chat-title"),
   status: document.querySelector("#status"),
+  timezoneForm: document.querySelector("#timezone-form"),
+  chatTimezoneName: document.querySelector("#chat-timezone-name"),
+  timezoneSaveButton: document.querySelector("#timezone-save-button"),
   reloadButton: document.querySelector("#reload-button"),
   form: document.querySelector("#reminder-form"),
   formTitle: document.querySelector("#form-title"),
@@ -166,6 +169,7 @@ function renderContext() {
   const title = chat?.title || chat?.type || "Telegram chat";
 
   elements.chatTitle.textContent = `${title} · ${state.context.timezone_name}`;
+  elements.chatTimezoneName.value = state.context.timezone_name;
   elements.timezoneName.value = state.context.timezone_name;
 }
 
@@ -401,6 +405,27 @@ async function previewReminder() {
   showPreview(preview);
 }
 
+async function saveTimezone() {
+  hideStatus();
+
+  const timezoneName = elements.chatTimezoneName.value.trim();
+
+  const timezone = await apiRequest("/api/tma/timezone", {
+    method: "PUT",
+    body: JSON.stringify({
+      timezone_name: timezoneName,
+    }),
+  });
+
+  state.context.timezone_name = timezone.timezone_name;
+  elements.timezoneName.value = timezone.timezone_name;
+  elements.chatTimezoneName.value = timezone.timezone_name;
+
+  renderContext();
+  resetForm();
+  showStatus("Таймзона чата обновлена.");
+}
+
 async function saveReminder() {
   hideStatus();
 
@@ -487,6 +512,10 @@ elements.form.addEventListener("submit", (event) => {
   handleAsync(saveReminder);
 });
 elements.cancelEditButton.addEventListener("click", resetForm);
+elements.timezoneForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  handleAsync(saveTimezone);
+});
 
 telegram?.ready();
 telegram?.expand();

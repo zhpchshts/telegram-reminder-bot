@@ -1,14 +1,16 @@
-from app.constants import VALID_WEEKDAYS
-from app.reminder_mapping import build_reminder_read_data
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from aiogram import Bot
+
 from app.config import APP_TIMEZONE_NAME
+from app.constants import VALID_WEEKDAYS
 from app.database import (
+    create_reminder_in_db,
     get_active_reminder_for_chat,
     get_active_reminders_for_chat,
     get_chat_timezone,
     mark_reminder_as_deleted,
-    create_reminder_in_db,
     set_chat_timezone,
     update_reminder_in_db,
 )
@@ -17,9 +19,14 @@ from app.formatting import (
     format_period_line,
     format_reminder_read_data_for_list,
 )
-
+from app.reminder_mapping import build_reminder_read_data
 from app.reminder_models import ReminderCreateData, ReminderReadData
-from app.scheduler import format_next_run_line, scheduler, schedule_reminder
+from app.scheduler import (
+    format_next_run_line,
+    get_next_run_at,
+    scheduler,
+    schedule_reminder,
+)
 
 
 def get_chat_timezone_name(chat_id: int) -> str:
@@ -36,7 +43,6 @@ def set_chat_timezone_for_chat(*, chat_id: int, timezone_name: str) -> bool:
         chat_id=chat_id,
         timezone=timezone_name,
     )
-
     return True
 
 
@@ -80,6 +86,26 @@ def validate_reminder_create_data(data: ReminderCreateData) -> None:
         return
 
     raise ValueError("Unknown schedule_type.")
+
+
+def normalize_sort_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def get_reminder_next_run_sort_key(reminder: ReminderReadData) -> tuple[datetime, int]:
+    next_run_at = get_next_run_at(reminder.id)
+    sort_at = next_run_at or reminder.start_at
+
+    return normalize_sort_datetime(sort_at), reminder.id
+
+
+def sort_reminders_by_next_run(
+    reminders: list[ReminderReadData],
+) -> list[ReminderReadData]:
+    return sorted(reminders, key=get_reminder_next_run_sort_key)
 
 
 def create_scheduled_reminder(
@@ -225,7 +251,6 @@ def delete_active_reminder_for_chat(reminder_id: int, chat_id: int) -> bool:
         reminder_id=reminder_id,
         chat_id=chat_id,
     )
-
     if not reminder:
         return False
 
@@ -234,24 +259,25 @@ def delete_active_reminder_for_chat(reminder_id: int, chat_id: int) -> bool:
         scheduler.remove_job(str(reminder_id))
 
     mark_reminder_as_deleted(reminder_id)
-
     return True
 
 
 def list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
-    return [
+    reminders = [
         build_reminder_read_data(reminder)
         for reminder in get_active_reminders_for_chat(chat_id)
     ]
 
+    return sort_reminders_by_next_run(reminders)
+
 
 def build_active_reminders_list_text_for_chat(chat_id: int) -> str | None:
     reminders = list_active_reminders_for_chat(chat_id)
-
     if not reminders:
         return None
 
     lines = ["Активные напоминания в этом чате\n"]
+
     lines.extend(
         format_reminder_read_data_for_list(
             reminder,

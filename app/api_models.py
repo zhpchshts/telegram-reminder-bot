@@ -3,8 +3,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
-from app.reminder_models import ReminderCreateData, ReminderReadData
 from app.formatting import format_period_line
+from app.reminder_models import ReminderCreateData, ReminderReadData
 
 
 class ReminderResponse(BaseModel):
@@ -13,6 +13,7 @@ class ReminderResponse(BaseModel):
     reminder_text: str
     schedule_type: str
     start_at: datetime
+    next_run_at: datetime | None = None
     timezone_name: str
     is_repeating: bool
     period: str
@@ -105,16 +106,22 @@ def normalize_start_at(
     return start_at.astimezone(timezone)
 
 
+def get_reminder_next_run_at(reminder_id: int) -> datetime | None:
+    from app.scheduler import get_next_run_at
+
+    return get_next_run_at(reminder_id)
+
+
 def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
-    return ReminderResponse(
-        id=reminder.id,
-        chat_id=reminder.chat_id,
-        reminder_text=reminder.reminder_text,
-        schedule_type=reminder.schedule_type,
-        start_at=reminder.start_at,
-        timezone_name=reminder.timezone_name,
-        is_repeating=reminder.schedule_type != "once",
-        period=build_reminder_period(
+    response_data = {
+        "id": reminder.id,
+        "chat_id": reminder.chat_id,
+        "reminder_text": reminder.reminder_text,
+        "schedule_type": reminder.schedule_type,
+        "start_at": reminder.start_at,
+        "timezone_name": reminder.timezone_name,
+        "is_repeating": reminder.schedule_type != "once",
+        "period": build_reminder_period(
             schedule_type=reminder.schedule_type,
             interval_days=reminder.interval_days,
             interval_weeks=reminder.interval_weeks,
@@ -122,12 +129,18 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
             month_week_number=reminder.month_week_number,
             month_day=reminder.month_day,
         ),
-        interval_days=reminder.interval_days,
-        interval_weeks=reminder.interval_weeks,
-        day_of_week=reminder.day_of_week,
-        month_week_number=reminder.month_week_number,
-        month_day=reminder.month_day,
-    )
+        "interval_days": reminder.interval_days,
+        "interval_weeks": reminder.interval_weeks,
+        "day_of_week": reminder.day_of_week,
+        "month_week_number": reminder.month_week_number,
+        "month_day": reminder.month_day,
+    }
+
+    next_run_at = get_reminder_next_run_at(reminder.id)
+    if next_run_at is not None:
+        response_data["next_run_at"] = next_run_at
+
+    return ReminderResponse(**response_data)
 
 
 def build_reminder_create_data(
@@ -193,15 +206,15 @@ def build_created_reminder_response(
     chat_id: int,
     data: ReminderCreateData,
 ) -> ReminderResponse:
-    return ReminderResponse(
-        id=reminder_id,
-        chat_id=chat_id,
-        reminder_text=data.reminder_text,
-        schedule_type=data.schedule_type,
-        start_at=data.start_at,
-        timezone_name=data.timezone_name,
-        is_repeating=data.schedule_type != "once",
-        period=build_reminder_period(
+    response_data = {
+        "id": reminder_id,
+        "chat_id": chat_id,
+        "reminder_text": data.reminder_text,
+        "schedule_type": data.schedule_type,
+        "start_at": data.start_at,
+        "timezone_name": data.timezone_name,
+        "is_repeating": data.schedule_type != "once",
+        "period": build_reminder_period(
             schedule_type=data.schedule_type,
             interval_days=data.interval_days,
             interval_weeks=data.interval_weeks,
@@ -209,12 +222,18 @@ def build_created_reminder_response(
             month_week_number=data.month_week_number,
             month_day=data.month_day,
         ),
-        interval_days=data.interval_days,
-        interval_weeks=data.interval_weeks,
-        day_of_week=data.day_of_week,
-        month_week_number=data.month_week_number,
-        month_day=data.month_day,
-    )
+        "interval_days": data.interval_days,
+        "interval_weeks": data.interval_weeks,
+        "day_of_week": data.day_of_week,
+        "month_week_number": data.month_week_number,
+        "month_day": data.month_day,
+    }
+
+    next_run_at = get_reminder_next_run_at(reminder_id)
+    if next_run_at is not None:
+        response_data["next_run_at"] = next_run_at
+
+    return ReminderResponse(**response_data)
 
 
 def build_tma_context_response(

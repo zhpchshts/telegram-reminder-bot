@@ -15,9 +15,7 @@ function getTelegramInitData() {
   const searchParams = new URLSearchParams(window.location.search);
 
   return (
-    hashParams.get("tgWebAppData") ||
-    searchParams.get("tgWebAppData") ||
-    ""
+    hashParams.get("tgWebAppData") || searchParams.get("tgWebAppData") || ""
   );
 }
 
@@ -99,10 +97,10 @@ function showPreview(preview) {
   const period = preview.period || "одноразовое";
 
   elements.preview.innerHTML = `
-    <strong>Предпросмотр</strong>
-    <p>${escapeHtml(preview.reminder_text)}</p>
-    <p>${escapeHtml(period)}</p>
-    <p>${formatDateTime(preview.start_at)}</p>
+    <strong>Предпросмотр</strong><br>
+    ${escapeHtml(preview.reminder_text)}<br>
+    ${escapeHtml(period)}<br>
+    Первое срабатывание: ${formatDateTime(preview.start_at)}
   `;
   elements.preview.hidden = false;
 }
@@ -153,9 +151,10 @@ async function loadBootstrap() {
   hidePreview();
 
   const bootstrap = await apiRequest("/api/tma/bootstrap");
+
   state.context = bootstrap.context;
   state.reminderOptions = bootstrap.reminder_options;
-  state.reminders = bootstrap.active_reminders;
+  state.reminders = sortReminders(bootstrap.active_reminders);
 
   renderContext();
   renderOptions();
@@ -246,7 +245,7 @@ function createReminderCard(reminder) {
   meta.className = "reminder-meta";
   meta.innerHTML = `
     <span>${escapeHtml(reminder.period || "одноразовое")}</span>
-    <span>${formatDateTime(reminder.start_at)}</span>
+    <span>Следующее: ${formatDateTime(reminder.next_run_at || reminder.start_at)}</span>
   `;
 
   const actions = document.createElement("div");
@@ -272,6 +271,33 @@ function createReminderCard(reminder) {
   return card;
 }
 
+function sortReminders(reminders) {
+  return [...reminders].sort((left, right) => {
+    const leftTime = getReminderSortTime(left);
+    const rightTime = getReminderSortTime(right);
+
+    if (leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    return Number(left.id) - Number(right.id);
+  });
+}
+
+function getReminderSortTime(reminder) {
+  const value = reminder.next_run_at || reminder.start_at;
+  if (!value) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const time = new Date(value).getTime();
+  if (Number.isNaN(time)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return time;
+}
+
 function updateConditionalFields() {
   const type = elements.scheduleType.value;
 
@@ -283,6 +309,7 @@ function updateConditionalFields() {
 
 function buildRequestPayload() {
   const scheduleType = elements.scheduleType.value;
+
   const payload = {
     reminder_text: elements.reminderText.value.trim(),
     schedule_type: scheduleType,
@@ -330,6 +357,7 @@ function isPositiveIntegerValue(value) {
   }
 
   const number = Number(value);
+
   return Number.isInteger(number) && number >= 1;
 }
 
@@ -445,6 +473,7 @@ function startEdit(reminder) {
   elements.scheduleType.value = reminder.schedule_type;
   elements.startAt.value = toDateTimeLocalValue(reminder.start_at);
   elements.timezoneName.value = reminder.timezone_name;
+
   elements.intervalDays.value = reminder.interval_days || "";
   elements.intervalWeeks.value = reminder.interval_weeks || "";
   elements.dayOfWeek.value = reminder.day_of_week || "";
@@ -469,6 +498,7 @@ function resetForm() {
   elements.reminderId.value = "";
   elements.formTitle.textContent = "Создать напоминание";
   elements.timezoneName.value = state.context?.timezone_name || "";
+
   setDefaultStartAt();
 
   elements.saveButton.textContent = "Сохранить";
@@ -572,10 +602,19 @@ async function deleteReminder(reminder) {
 }
 
 function formatDateTime(value) {
+  if (!value) {
+    return "не запланировано";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "некорректная дата";
+  }
+
   return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function toDateTimeLocalValue(value) {
@@ -605,11 +644,14 @@ elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap)
 elements.startAt.addEventListener("focus", updateStartAtMin);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
+
 elements.form.addEventListener("submit", (event) => {
   event.preventDefault();
   handleAsync(saveReminder);
 });
+
 elements.cancelEditButton.addEventListener("click", resetForm);
+
 elements.timezoneForm.addEventListener("submit", (event) => {
   event.preventDefault();
   handleAsync(saveTimezone);

@@ -19,17 +19,17 @@ from app.api_models import (
     DeleteReminderResponse,
     ReminderCreateRequest,
     ReminderFormOptionsResponse,
+    ReminderPreviewResponse,
     ReminderResponse,
     TmaBootstrapResponse,
     TmaContextResponse,
     build_created_reminder_response,
     build_reminder_create_data,
     build_reminder_form_options_response,
+    build_reminder_preview_response,
     build_reminder_response,
     build_tma_bootstrap_response,
     build_tma_context_response,
-    ReminderPreviewResponse,
-    build_reminder_preview_response,
 )
 from app.config import API_ALLOWED_ORIGINS
 from app.reminder_models import ReminderCreateData
@@ -88,7 +88,6 @@ mount_tma_static_files(app, TMA_STATIC_DIR)
 
 def get_bot_from_app_state(request: Request) -> Bot:
     bot = getattr(request.app.state, "bot", None)
-
     if bot is None:
         raise HTTPException(
             status_code=503,
@@ -158,6 +157,7 @@ def get_reminder_form_options(
 @app.get(
     "/api/tma/bootstrap",
     response_model=TmaBootstrapResponse,
+    response_model_exclude_unset=True,
 )
 def get_tma_bootstrap(
     init_data=Depends(get_tma_init_data),
@@ -192,6 +192,7 @@ def preview_tma_reminder(
 @app.get(
     "/api/tma/reminders",
     response_model=list[ReminderResponse],
+    response_model_exclude_unset=True,
 )
 def get_tma_reminders(
     chat_id: int = Depends(get_tma_chat_id),
@@ -205,6 +206,7 @@ def get_tma_reminders(
 @app.post(
     "/api/tma/reminders",
     response_model=ReminderResponse,
+    response_model_exclude_unset=True,
     status_code=201,
 )
 def create_tma_reminder(
@@ -222,6 +224,7 @@ def create_tma_reminder(
 @app.put(
     "/api/tma/reminders/{reminder_id}",
     response_model=ReminderResponse,
+    response_model_exclude_unset=True,
 )
 def update_tma_reminder(
     reminder_id: int,
@@ -281,6 +284,7 @@ def delete_tma_reminder(
 @app.get(
     "/api/chats/{chat_id}/reminders",
     response_model=list[ReminderResponse],
+    response_model_exclude_unset=True,
 )
 def get_chat_reminders(
     authorized_chat_id: int = Depends(require_matching_chat_id),
@@ -294,6 +298,7 @@ def get_chat_reminders(
 @app.post(
     "/api/chats/{chat_id}/reminders",
     response_model=ReminderResponse,
+    response_model_exclude_unset=True,
     status_code=201,
 )
 def create_chat_reminder(
@@ -311,6 +316,7 @@ def create_chat_reminder(
 @app.put(
     "/api/chats/{chat_id}/reminders/{reminder_id}",
     response_model=ReminderResponse,
+    response_model_exclude_unset=True,
 )
 def update_chat_reminder(
     reminder_id: int,
@@ -462,7 +468,6 @@ def update_timezone_for_chat(
         chat_id=chat_id,
         timezone_name=request.timezone_name,
     )
-
     if not is_timezone_updated:
         raise HTTPException(
             status_code=400,
@@ -484,7 +489,6 @@ def delete_reminder_for_chat(
         reminder_id=reminder_id,
         chat_id=chat_id,
     )
-
     if not was_deleted:
         raise HTTPException(
             status_code=404,

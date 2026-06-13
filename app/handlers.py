@@ -127,28 +127,8 @@ async def create_schedule_and_confirm(
     message: Message,
     bot: Bot,
     *,
-    reminder_text: str,
-    schedule_type: str,
-    start_at: datetime,
-    timezone_name: str,
-    interval_days: int | None = None,
-    interval_weeks: int | None = None,
-    day_of_week: str | None = None,
-    month_week_number: int | None = None,
-    month_day: int | None = None,
+    data: ReminderCreateData,
 ) -> None:
-    data = ReminderCreateData(
-        reminder_text=reminder_text,
-        schedule_type=schedule_type,
-        start_at=start_at,
-        timezone_name=timezone_name,
-        interval_days=interval_days,
-        interval_weeks=interval_weeks,
-        day_of_week=day_of_week,
-        month_week_number=month_week_number,
-        month_day=month_day,
-    )
-
     reminder_id = create_scheduled_reminder(
         bot=bot,
         chat_id=message.chat.id,
@@ -328,10 +308,12 @@ async def remind(message: Message, bot: Bot) -> None:
     await create_schedule_and_confirm(
         message,
         bot,
-        reminder_text=parts[3],
-        schedule_type="once",
-        start_at=start_at,
-        timezone_name=timezone_name,
+        data=ReminderCreateData(
+            reminder_text=parts[3],
+            schedule_type="once",
+            start_at=start_at,
+            timezone_name=timezone_name,
+        ),
     )
 
 
@@ -370,11 +352,13 @@ async def every_days(message: Message, bot: Bot) -> None:
     await create_schedule_and_confirm(
         message,
         bot,
-        reminder_text=parts[3],
-        schedule_type="every_days",
-        start_at=start_at,
-        timezone_name=timezone_name,
-        interval_days=interval_days,
+        data=ReminderCreateData(
+            reminder_text=parts[3],
+            schedule_type="every_days",
+            start_at=start_at,
+            timezone_name=timezone_name,
+            interval_days=interval_days,
+        ),
     )
 
 
@@ -415,11 +399,13 @@ async def every_days_from(message: Message, bot: Bot) -> None:
     await create_schedule_and_confirm(
         message,
         bot,
-        reminder_text=parts[4],
-        schedule_type="every_days",
-        start_at=start_at,
-        timezone_name=timezone_name,
-        interval_days=interval_days,
+        data=ReminderCreateData(
+            reminder_text=parts[3],
+            schedule_type="every_days",
+            start_at=start_at,
+            timezone_name=timezone_name,
+            interval_days=interval_days,
+        ),
     )
 
 
@@ -461,12 +447,14 @@ async def every_week(message: Message, bot: Bot) -> None:
     await create_schedule_and_confirm(
         message,
         bot,
-        reminder_text=parts[4],
-        schedule_type="every_week",
-        start_at=start_at,
-        timezone_name=timezone_name,
-        interval_weeks=interval_weeks,
-        day_of_week=day_of_week,
+        data=ReminderCreateData(
+            reminder_text=parts[4],
+            schedule_type="every_week",
+            start_at=start_at,
+            timezone_name=timezone_name,
+            interval_weeks=interval_weeks,
+            day_of_week=day_of_week,
+        ),
     )
 
 
@@ -520,12 +508,14 @@ async def every_week_from(message: Message, bot: Bot) -> None:
     await create_schedule_and_confirm(
         message,
         bot,
-        reminder_text=parts[5],
-        schedule_type="every_week",
-        start_at=start_at,
-        timezone_name=timezone_name,
-        interval_weeks=interval_weeks,
-        day_of_week=day_of_week,
+        data=ReminderCreateData(
+            reminder_text=parts[5],
+            schedule_type="every_week",
+            start_at=start_at,
+            timezone_name=timezone_name,
+            interval_weeks=interval_weeks,
+            day_of_week=day_of_week,
+        ),
     )
 
 
@@ -574,12 +564,14 @@ async def monthly_weekday(message: Message, bot: Bot) -> None:
     await create_schedule_and_confirm(
         message,
         bot,
-        reminder_text=parts[4],
-        schedule_type="monthly_weekday",
-        start_at=start_at,
-        timezone_name=timezone_name,
-        month_week_number=month_week_number,
-        day_of_week=day_of_week,
+        data=ReminderCreateData(
+            reminder_text=parts[4],
+            schedule_type="monthly_weekday",
+            start_at=start_at,
+            timezone_name=timezone_name,
+            month_week_number=month_week_number,
+            day_of_week=day_of_week,
+        ),
     )
 
 
@@ -640,12 +632,14 @@ async def monthly_weekday_from(message: Message, bot: Bot) -> None:
     await create_schedule_and_confirm(
         message,
         bot,
-        reminder_text=parts[5],
-        schedule_type="monthly_weekday",
-        start_at=start_at,
-        timezone_name=timezone_name,
-        month_week_number=month_week_number,
-        day_of_week=day_of_week,
+        data=ReminderCreateData(
+            reminder_text=parts[5],
+            schedule_type="monthly_weekday",
+            start_at=start_at,
+            timezone_name=timezone_name,
+            month_week_number=month_week_number,
+            day_of_week=day_of_week,
+        ),
     )
 
 
@@ -692,11 +686,13 @@ async def monthly_day(message: Message, bot: Bot) -> None:
     await create_schedule_and_confirm(
         message,
         bot,
-        reminder_text=parts[3],
-        schedule_type="monthly_day",
-        start_at=start_at,
-        timezone_name=timezone_name,
-        month_day=month_day,
+        data=ReminderCreateData(
+            reminder_text=parts[3],
+            schedule_type="monthly_day",
+            start_at=start_at,
+            timezone_name=timezone_name,
+            month_day=month_day,
+        ),
     )
 
 
@@ -755,11 +751,13 @@ async def monthly_day_from(message: Message, bot: Bot) -> None:
     await create_schedule_and_confirm(
         message,
         bot,
-        reminder_text=parts[4],
-        schedule_type="monthly_day",
-        start_at=start_at,
-        timezone_name=timezone_name,
-        month_day=month_day,
+        data=ReminderCreateData(
+            reminder_text=parts[4],
+            schedule_type="monthly_day",
+            start_at=start_at,
+            timezone_name=timezone_name,
+            month_day=month_day,
+        ),
     )
 
 

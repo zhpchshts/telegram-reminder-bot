@@ -21,6 +21,7 @@ HEALTHCHECK_INTERVAL_MINUTES = int(os.getenv("HEALTHCHECK_INTERVAL_MINUTES", "36
 
 API_HOST = os.getenv("API_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("API_PORT", "8000"))
+TMA_URL = os.getenv("TMA_URL")
 API_ALLOWED_ORIGINS_TEXT = os.getenv("API_ALLOWED_ORIGINS", "")
 API_ALLOWED_ORIGINS = [
     origin.strip() for origin in API_ALLOWED_ORIGINS_TEXT.split(",") if origin.strip()

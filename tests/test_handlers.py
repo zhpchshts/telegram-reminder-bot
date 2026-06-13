@@ -421,6 +421,45 @@ def test_timezone_command_answers_invalid_timezone(
     assert "link_preview_options" in kwargs
 
 
+def test_app_command_answers_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(handlers, "TMA_URL", None)
+
+    message = FakeMessage("/app")
+
+    asyncio.run(handlers.app_command(message))
+
+    assert message.answers == [
+        (
+            "Mini App пока не настроен.\n\n"
+            "Администратору нужно задать переменную окружения TMA_URL.",
+            {},
+        )
+    ]
+
+
+def test_app_command_sends_web_app_button(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(handlers, "TMA_URL", "https://example.com/tma/")
+
+    message = FakeMessage("/app")
+
+    asyncio.run(handlers.app_command(message))
+
+    assert len(message.answers) == 1
+
+    answer_text, kwargs = message.answers[0]
+    assert answer_text == "Открой интерфейс управления напоминаниями:"
+
+    reply_markup = kwargs["reply_markup"]
+    button = reply_markup.inline_keyboard[0][0]
+
+    assert button.text == "Открыть Mini App"
+    assert button.web_app.url == "https://example.com/tma/"
+
+
 def test_delete_reminder_deletes_active_reminder_for_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

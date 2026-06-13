@@ -4,9 +4,15 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
-from aiogram.types import LinkPreviewOptions, Message
-
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+    Message,
+    WebAppInfo,
+)
 from app.constants import TIMEZONE_LOOKUP_URL, WEEKDAY_HELP
+from app.config import TMA_URL
 from app.formatting import format_datetime_ru
 from app.reminder_models import ReminderCreateData
 from app.reminder_parsing import (
@@ -34,10 +40,21 @@ from app.reminder_service import (
 )
 
 router = Router()
-
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
-
 ParseCommand = Callable[[str | None, str], ReminderParseResult]
+
+
+def build_tma_keyboard(tma_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Открыть Mini App",
+                    web_app=WebAppInfo(url=tma_url),
+                )
+            ]
+        ]
+    )
 
 
 async def reject_past_datetime(
@@ -175,11 +192,13 @@ async def handle_create_command(
 @router.message(Command("start"))
 async def start(message: Message) -> None:
     await message.answer(
-        "Привет. Я бот для напоминаний.\n\n"
+        "Привет.\n"
+        "Я бот для напоминаний.\n\n"
         "Доступные команды:\n"
         "/start — запустить бота\n"
         "/help — показать справку\n"
         "/examples — показать примеры команд\n"
+        "/app — открыть Mini App\n"
         "/remind — создать одноразовое напоминание\n"
         "/every_days — повтор каждые N дней\n"
         "/every_days_from — повтор каждые N дней с указанной даты\n"
@@ -195,11 +214,27 @@ async def start(message: Message) -> None:
     )
 
 
+@router.message(Command("app"))
+async def app_command(message: Message) -> None:
+    if not TMA_URL:
+        await message.answer(
+            "Mini App пока не настроен.\n\n"
+            "Администратору нужно задать переменную окружения TMA_URL."
+        )
+        return
+
+    await message.answer(
+        "Открой интерфейс управления напоминаниями:",
+        reply_markup=build_tma_keyboard(TMA_URL),
+    )
+
+
 @router.message(Command("help"))
 async def help_command(message: Message) -> None:
     await message.answer(
         "Краткая справка по боту.\n\n"
         "Основные команды:\n"
+        "/app — открыть Mini App для управления напоминаниями\n"
         "/timezone — показать или задать таймзону текущего чата\n"
         "/examples — показать примеры создания напоминаний\n"
         "/list — показать активные напоминания текущего чата\n"

@@ -242,13 +242,12 @@ def test_send_repeating_reminder_sends_message() -> None:
         )
     )
 
-
-assert bot.messages == [
-    {
-        "chat_id": 100,
-        "text": "Тест repeating",
-    }
-]
+    assert bot.messages == [
+        {
+            "chat_id": 100,
+            "text": "Тест repeating",
+        }
+    ]
 
 
 def test_schedule_monthly_day_reminder_adds_cron_job(monkeypatch) -> None:

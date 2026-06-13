@@ -57,7 +57,7 @@ def test_get_chat_reminders_returns_response_models(
         fake_list_active_reminders_for_chat,
     )
 
-    result = get_chat_reminders(chat_id=100)
+    result = get_chat_reminders(authorized_chat_id=100)
 
     assert requested_chat_ids == [100]
     assert result == [
@@ -100,7 +100,7 @@ def test_create_chat_reminder_returns_response(
     )
 
     result = create_chat_reminder(
-        chat_id=100,
+        authorized_chat_id=100,
         request=ReminderCreateRequest(
             reminder_text="Проверить релиз",
             schedule_type="every_days",
@@ -140,7 +140,7 @@ def test_create_chat_reminder_returns_response(
 def test_create_chat_reminder_rejects_invalid_timezone() -> None:
     with pytest.raises(HTTPException) as error:
         create_chat_reminder(
-            chat_id=100,
+            authorized_chat_id=100,
             request=ReminderCreateRequest(
                 reminder_text="Проверить релиз",
                 schedule_type="once",
@@ -157,7 +157,7 @@ def test_create_chat_reminder_rejects_invalid_timezone() -> None:
 def test_create_chat_reminder_rejects_past_start_at() -> None:
     with pytest.raises(HTTPException) as error:
         create_chat_reminder(
-            chat_id=100,
+            authorized_chat_id=100,
             request=ReminderCreateRequest(
                 reminder_text="Проверить релиз",
                 schedule_type="once",
@@ -174,7 +174,7 @@ def test_create_chat_reminder_rejects_past_start_at() -> None:
 def test_create_chat_reminder_rejects_invalid_schedule_data() -> None:
     with pytest.raises(HTTPException) as error:
         create_chat_reminder(
-            chat_id=100,
+            authorized_chat_id=100,
             request=ReminderCreateRequest(
                 reminder_text="Проверить релиз",
                 schedule_type="every_days",
@@ -203,7 +203,7 @@ def test_get_chat_timezone_returns_response(
         fake_get_chat_timezone_name,
     )
 
-    result = get_chat_timezone(chat_id=100)
+    result = get_chat_timezone(authorized_chat_id=100)
 
     assert requested_chat_ids == [100]
     assert result == ChatTimezoneResponse(
@@ -237,7 +237,7 @@ def test_update_chat_timezone_returns_response(
     )
 
     result = update_chat_timezone(
-        chat_id=100,
+        authorized_chat_id=100,
         request=ChatTimezoneUpdateRequest(timezone_name="Europe/Moscow"),
     )
 
@@ -273,7 +273,7 @@ def test_update_chat_timezone_rejects_invalid_timezone(
 
     with pytest.raises(HTTPException) as error:
         update_chat_timezone(
-            chat_id=100,
+            authorized_chat_id=100,
             request=ChatTimezoneUpdateRequest(timezone_name="Wrong/Timezone"),
         )
 
@@ -305,7 +305,7 @@ def test_delete_chat_reminder_returns_response(
         fake_delete_active_reminder_for_chat,
     )
 
-    result = delete_chat_reminder(chat_id=100, reminder_id=42)
+    result = delete_chat_reminder(authorized_chat_id=100, reminder_id=42)
 
     assert captured_calls == [
         {
@@ -339,7 +339,7 @@ def test_delete_chat_reminder_rejects_unknown_reminder(
     )
 
     with pytest.raises(HTTPException) as error:
-        delete_chat_reminder(chat_id=100, reminder_id=42)
+        delete_chat_reminder(authorized_chat_id=100, reminder_id=42)
 
     assert error.value.status_code == 404
     assert error.value.detail == "Reminder not found."

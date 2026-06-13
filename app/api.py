@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram import Bot
 from fastapi import Depends, FastAPI, HTTPException, Request
 
+from app.api_auth import require_matching_chat_id
 from app.api_models import (
     ChatTimezoneResponse,
     ChatTimezoneUpdateRequest,
@@ -43,6 +44,7 @@ def get_bot_from_app_state(request: Request) -> Bot:
 
 def is_start_at_in_past(data: ReminderCreateData) -> bool:
     timezone = ZoneInfo(data.timezone_name)
+
     now = datetime.now(timezone)
     start_at = data.start_at
 
@@ -61,10 +63,12 @@ def health() -> dict[str, str]:
     "/api/chats/{chat_id}/reminders",
     response_model=list[ReminderResponse],
 )
-def get_chat_reminders(chat_id: int) -> list[ReminderResponse]:
+def get_chat_reminders(
+    authorized_chat_id: int = Depends(require_matching_chat_id),
+) -> list[ReminderResponse]:
     return [
         build_reminder_response(reminder)
-        for reminder in list_active_reminders_for_chat(chat_id)
+        for reminder in list_active_reminders_for_chat(authorized_chat_id)
     ]
 
 
@@ -74,8 +78,8 @@ def get_chat_reminders(chat_id: int) -> list[ReminderResponse]:
     status_code=201,
 )
 def create_chat_reminder(
-    chat_id: int,
     request: ReminderCreateRequest,
+    authorized_chat_id: int = Depends(require_matching_chat_id),
     bot: Bot = Depends(get_bot_from_app_state),
 ) -> ReminderResponse:
     try:
@@ -95,7 +99,7 @@ def create_chat_reminder(
     try:
         reminder_id = create_scheduled_reminder(
             bot=bot,
-            chat_id=chat_id,
+            chat_id=authorized_chat_id,
             data=data,
         )
     except ValueError as error:
@@ -106,7 +110,7 @@ def create_chat_reminder(
 
     return build_created_reminder_response(
         reminder_id=reminder_id,
-        chat_id=chat_id,
+        chat_id=authorized_chat_id,
         data=data,
     )
 
@@ -115,10 +119,12 @@ def create_chat_reminder(
     "/api/chats/{chat_id}/timezone",
     response_model=ChatTimezoneResponse,
 )
-def get_chat_timezone(chat_id: int) -> ChatTimezoneResponse:
+def get_chat_timezone(
+    authorized_chat_id: int = Depends(require_matching_chat_id),
+) -> ChatTimezoneResponse:
     return ChatTimezoneResponse(
-        chat_id=chat_id,
-        timezone_name=get_chat_timezone_name(chat_id),
+        chat_id=authorized_chat_id,
+        timezone_name=get_chat_timezone_name(authorized_chat_id),
     )
 
 
@@ -127,11 +133,11 @@ def get_chat_timezone(chat_id: int) -> ChatTimezoneResponse:
     response_model=ChatTimezoneResponse,
 )
 def update_chat_timezone(
-    chat_id: int,
     request: ChatTimezoneUpdateRequest,
+    authorized_chat_id: int = Depends(require_matching_chat_id),
 ) -> ChatTimezoneResponse:
     is_timezone_updated = set_chat_timezone_for_chat(
-        chat_id=chat_id,
+        chat_id=authorized_chat_id,
         timezone_name=request.timezone_name,
     )
 
@@ -142,7 +148,7 @@ def update_chat_timezone(
         )
 
     return ChatTimezoneResponse(
-        chat_id=chat_id,
+        chat_id=authorized_chat_id,
         timezone_name=request.timezone_name,
     )
 
@@ -151,10 +157,13 @@ def update_chat_timezone(
     "/api/chats/{chat_id}/reminders/{reminder_id}",
     response_model=DeleteReminderResponse,
 )
-def delete_chat_reminder(chat_id: int, reminder_id: int) -> DeleteReminderResponse:
+def delete_chat_reminder(
+    reminder_id: int,
+    authorized_chat_id: int = Depends(require_matching_chat_id),
+) -> DeleteReminderResponse:
     was_deleted = delete_active_reminder_for_chat(
         reminder_id=reminder_id,
-        chat_id=chat_id,
+        chat_id=authorized_chat_id,
     )
 
     if not was_deleted:
@@ -165,6 +174,6 @@ def delete_chat_reminder(chat_id: int, reminder_id: int) -> DeleteReminderRespon
 
     return DeleteReminderResponse(
         id=reminder_id,
-        chat_id=chat_id,
+        chat_id=authorized_chat_id,
         deleted=True,
     )

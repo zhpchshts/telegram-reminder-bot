@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from datetime import datetime
 
 import pytest
@@ -6,11 +7,23 @@ from fastapi.testclient import TestClient
 from app import api as api_module
 from app.api import app
 from app.reminder_models import ReminderReadData
+from app.api_auth import require_matching_chat_id
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
+def client() -> Iterator[TestClient]:
+    def fake_require_matching_chat_id(chat_id: int) -> int:
+        return chat_id
+
+    previous_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[require_matching_chat_id] = fake_require_matching_chat_id
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
 
 
 def test_health_endpoint_returns_ok(client: TestClient) -> None:
@@ -18,6 +31,23 @@ def test_health_endpoint_returns_ok(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_chat_endpoint_requires_tma_auth_without_dependency_override() -> None:
+    previous_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides.clear()
+
+    try:
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/chats/100/reminders")
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Telegram init data is required.",
+    }
 
 
 def test_get_chat_reminders_endpoint_returns_json(

@@ -173,6 +173,59 @@ def test_tma_reminders_endpoint_requires_tma_auth_without_dependency_override() 
     }
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        (
+            "post",
+            "/api/tma/reminders",
+            {
+                "reminder_text": "Проверить релиз",
+                "schedule_type": "every_days",
+                "start_at": "2099-06-10T12:12:00",
+                "timezone_name": "Asia/Yekaterinburg",
+                "interval_days": 3,
+            },
+        ),
+        (
+            "put",
+            "/api/tma/timezone",
+            {
+                "timezone_name": "Europe/Moscow",
+            },
+        ),
+        (
+            "delete",
+            "/api/tma/reminders/42",
+            None,
+        ),
+    ],
+)
+def test_tma_scoped_write_endpoints_require_tma_auth_without_dependency_override(
+    method: str,
+    path: str,
+    json_body: dict[str, object] | None,
+) -> None:
+    previous_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides.clear()
+
+    request_kwargs = {}
+    if json_body is not None:
+        request_kwargs["json"] = json_body
+
+    try:
+        with TestClient(app) as test_client:
+            response = getattr(test_client, method)(path, **request_kwargs)
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Telegram init data is required.",
+    }
+
+
 def test_tma_context_endpoint_accepts_valid_tma_init_data(
     authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

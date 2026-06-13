@@ -8,5 +8,9 @@ services:
       - .env
     environment:
       DB_PATH: /data/reminders.db
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./reminders.db:/data/reminders.db

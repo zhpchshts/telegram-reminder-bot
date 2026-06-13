@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Напоминания</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div>
+          <h1>Напоминания</h1>
+          <p id="chat-title" class="muted">Загрузка чата...</p>
+        </div>
+        <button id="reload-button" class="secondary-button" type="button">
+          Обновить
+        </button>
+      </header>
+
+      <section id="status" class="status" hidden></section>
+
+      <section class="card">
+        <h2>Создать напоминание</h2>
+
+        <form id="reminder-form" class="form">
+          <input id="reminder-id" type="hidden" />
+
+          <label class="field">
+            <span>Текст</span>
+            <textarea
+              id="reminder-text"
+              name="reminder_text"
+              rows="3"
+              placeholder="Например: заказать воду"
+              required
+            ></textarea>
+          </label>
+
+          <label class="field">
+            <span>Тип расписания</span>
+            <select id="schedule-type" name="schedule_type" required>
+              <option value="once">Один раз</option>
+              <option value="every_days">Каждые N дней</option>
+              <option value="every_week">Каждые N недель</option>
+              <option value="monthly_weekday">N-й день недели месяца</option>
+              <option value="monthly_day">День месяца</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Первое срабатывание</span>
+            <input id="start-at" name="start_at" type="datetime-local" required />
+          </label>
+
+          <label class="field">
+            <span>Таймзона</span>
+            <input
+              id="timezone-name"
+              name="timezone_name"
+              type="text"
+              placeholder="Asia/Yekaterinburg"
+              required
+            />
+          </label>
+
+          <div id="interval-days-field" class="field conditional-field">
+            <label>
+              <span>Интервал в днях</span>
+              <input id="interval-days" name="interval_days" type="number" min="1" />
+            </label>
+          </div>
+
+          <div id="weekly-fields" class="field-grid conditional-field">
+            <label class="field">
+              <span>Интервал в неделях</span>
+              <input id="interval-weeks" name="interval_weeks" type="number" min="1" />
+            </label>
+
+            <label class="field">
+              <span>День недели</span>
+              <select id="day-of-week" name="day_of_week">
+                <option value="">Не выбрано</option>
+              </select>
+            </label>
+          </div>
+
+          <div id="monthly-weekday-fields" class="field-grid conditional-field">
+            <label class="field">
+              <span>Неделя месяца</span>
+              <select id="month-week-number" name="month_week_number">
+                <option value="">Не выбрано</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>День недели</span>
+              <select id="month-day-of-week" name="month_day_of_week">
+                <option value="">Не выбрано</option>
+              </select>
+            </label>
+          </div>
+
+          <div id="month-day-field" class="field conditional-field">
+            <label>
+              <span>День месяца</span>
+              <select id="month-day" name="month_day">
+                <option value="">Не выбрано</option>
+              </select>
+            </label>
+          </div>
+
+          <section id="preview" class="preview" hidden></section>
+
+          <div class="actions">
+            <button id="preview-button" class="secondary-button" type="button">
+              Предпросмотр
+            </button>
+            <button id="save-button" class="primary-button" type="submit">
+              Сохранить
+            </button>
+            <button id="cancel-edit-button" class="secondary-button" type="button" hidden>
+              Отменить
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Активные напоминания</h2>
+        <div id="reminders-list" class="reminders-list">
+          <p class="muted">Загрузка...</p>
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -1,6 +1,11 @@
 from datetime import datetime
 
-from app.api_models import ReminderResponse, build_reminder_response
+from app.api_models import (
+    ChatTimezoneResponse,
+    ChatTimezoneUpdateRequest,
+    ReminderResponse,
+    build_reminder_response,
+)
 from app.reminder_models import ReminderReadData
 
 
@@ -28,3 +33,21 @@ def test_build_reminder_response() -> None:
         timezone_name="Asia/Yekaterinburg",
         interval_days=3,
     )
+
+
+def test_chat_timezone_response() -> None:
+    assert ChatTimezoneResponse(
+        chat_id=100,
+        timezone_name="Asia/Yekaterinburg",
+    ).model_dump() == {
+        "chat_id": 100,
+        "timezone_name": "Asia/Yekaterinburg",
+    }
+
+
+def test_chat_timezone_update_request() -> None:
+    assert ChatTimezoneUpdateRequest(
+        timezone_name="Europe/Moscow",
+    ).model_dump() == {
+        "timezone_name": "Europe/Moscow",
+    }

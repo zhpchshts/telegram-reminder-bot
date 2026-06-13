@@ -1,7 +1,16 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
-from app.api_models import ReminderResponse, build_reminder_response
-from app.reminder_service import list_active_reminders_for_chat
+from app.api_models import (
+    ChatTimezoneResponse,
+    ChatTimezoneUpdateRequest,
+    ReminderResponse,
+    build_reminder_response,
+)
+from app.reminder_service import (
+    get_chat_timezone_name,
+    list_active_reminders_for_chat,
+    set_chat_timezone_for_chat,
+)
 
 app = FastAPI(
     title="Telegram Reminder Bot API",
@@ -23,3 +32,39 @@ def get_chat_reminders(chat_id: int) -> list[ReminderResponse]:
         build_reminder_response(reminder)
         for reminder in list_active_reminders_for_chat(chat_id)
     ]
+
+
+@app.get(
+    "/api/chats/{chat_id}/timezone",
+    response_model=ChatTimezoneResponse,
+)
+def get_chat_timezone(chat_id: int) -> ChatTimezoneResponse:
+    return ChatTimezoneResponse(
+        chat_id=chat_id,
+        timezone_name=get_chat_timezone_name(chat_id),
+    )
+
+
+@app.put(
+    "/api/chats/{chat_id}/timezone",
+    response_model=ChatTimezoneResponse,
+)
+def update_chat_timezone(
+    chat_id: int,
+    request: ChatTimezoneUpdateRequest,
+) -> ChatTimezoneResponse:
+    is_timezone_updated = set_chat_timezone_for_chat(
+        chat_id=chat_id,
+        timezone_name=request.timezone_name,
+    )
+
+    if not is_timezone_updated:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid timezone name.",
+        )
+
+    return ChatTimezoneResponse(
+        chat_id=chat_id,
+        timezone_name=request.timezone_name,
+    )

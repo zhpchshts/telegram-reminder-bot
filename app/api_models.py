@@ -33,3 +33,12 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
         month_week_number=reminder.month_week_number,
         month_day=reminder.month_day,
     )
+
+
+class ChatTimezoneResponse(BaseModel):
+    chat_id: int
+    timezone_name: str
+
+
+class ChatTimezoneUpdateRequest(BaseModel):
+    timezone_name: str

@@ -59,6 +59,7 @@ async def main() -> None:
     await set_bot_commands(bot)
 
     scheduler.start()
+    restore_active_reminders(bot)
 
     if HEALTHCHECK_CHAT_ID is not None:
         schedule_healthcheck(
@@ -66,8 +67,6 @@ async def main() -> None:
             chat_id=HEALTHCHECK_CHAT_ID,
             interval_minutes=HEALTHCHECK_INTERVAL_MINUTES,
         )
-
-    restore_active_reminders(bot)
 
     await dp.start_polling(bot)
 

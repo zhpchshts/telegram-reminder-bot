@@ -5,21 +5,22 @@ from app.api_models import (
     ChatTimezoneUpdateRequest,
     DeleteReminderResponse,
     ReminderCreateRequest,
+    ReminderFormOptionsResponse,
+    ReminderPreviewResponse,
     ReminderResponse,
+    ReminderScheduleTypeOption,
+    TmaBootstrapResponse,
+    TmaContextResponse,
+    WeekdayOption,
     build_created_reminder_response,
     build_reminder_create_data,
-    build_reminder_response,
-    normalize_start_at,
-    TmaContextResponse,
-    build_tma_context_response,
-    ReminderFormOptionsResponse,
-    ReminderScheduleTypeOption,
-    WeekdayOption,
     build_reminder_form_options_response,
-    TmaBootstrapResponse,
-    build_tma_bootstrap_response,
-    ReminderPreviewResponse,
+    build_reminder_period,
     build_reminder_preview_response,
+    build_reminder_response,
+    build_tma_bootstrap_response,
+    build_tma_context_response,
+    normalize_start_at,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
@@ -46,6 +47,8 @@ def test_build_reminder_response() -> None:
         schedule_type="every_days",
         start_at=start_at,
         timezone_name="Asia/Yekaterinburg",
+        is_repeating=True,
+        period="каждые 3 дн.",
         interval_days=3,
     )
 
@@ -111,6 +114,8 @@ def test_build_created_reminder_response() -> None:
         schedule_type="every_days",
         start_at=start_at,
         timezone_name="Asia/Yekaterinburg",
+        is_repeating=True,
+        period="каждые 3 дн.",
         interval_days=3,
     )
 
@@ -283,6 +288,8 @@ def test_build_tma_bootstrap_response() -> None:
                 schedule_type="every_days",
                 start_at=start_at,
                 timezone_name="Asia/Yekaterinburg",
+                is_repeating=True,
+                period="каждые 3 дн.",
                 interval_days=3,
             )
         ],
@@ -331,4 +338,18 @@ def test_build_reminder_preview_response_for_once_reminder() -> None:
         timezone_name="Asia/Yekaterinburg",
         is_repeating=False,
         period=None,
+    )
+
+
+def test_build_reminder_period_for_once_reminder() -> None:
+    assert build_reminder_period(schedule_type="once") == "один раз"
+
+
+def test_build_reminder_period_for_repeating_reminder() -> None:
+    assert (
+        build_reminder_period(
+            schedule_type="every_days",
+            interval_days=3,
+        )
+        == "каждые 3 дн."
     )

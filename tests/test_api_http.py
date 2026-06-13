@@ -39,7 +39,6 @@ def build_signed_init_data_for_chat(chat_id: int) -> str:
         "chat_type": "group",
         "start_param": f"chat_{chat_id}",
     }
-
     fields["hash"] = calculate_init_data_hash(
         fields,
         bot_token=BOT_TOKEN,
@@ -374,6 +373,8 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
+            "is_repeating": True,
+            "period": "каждые 3 дн.",
             "interval_days": 3,
             "interval_weeks": None,
             "day_of_week": None,
@@ -467,6 +468,8 @@ def test_get_chat_reminders_endpoint_accepts_valid_tma_init_data(
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
+            "is_repeating": True,
+            "period": "каждые 3 дн.",
             "interval_days": 3,
             "interval_weeks": None,
             "day_of_week": None,
@@ -544,6 +547,8 @@ def test_get_chat_reminders_endpoint_returns_json(
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
+            "is_repeating": True,
+            "period": "каждые 3 дн.",
             "interval_days": 3,
             "interval_weeks": None,
             "day_of_week": None,
@@ -776,6 +781,8 @@ def test_get_tma_reminders_endpoint_accepts_valid_tma_init_data(
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
+            "is_repeating": True,
+            "period": "каждые 3 дн.",
             "interval_days": 3,
             "interval_weeks": None,
             "day_of_week": None,
@@ -841,6 +848,8 @@ def test_create_tma_reminder_endpoint_accepts_valid_tma_init_data(
     assert response_json["schedule_type"] == "every_days"
     assert response_json["start_at"].startswith("2099-06-10T12:12:00")
     assert response_json["timezone_name"] == "Asia/Yekaterinburg"
+    assert response_json["is_repeating"] is True
+    assert response_json["period"] == "каждые 3 дн."
     assert response_json["interval_days"] == 3
     assert response_json["interval_weeks"] is None
     assert response_json["day_of_week"] is None
@@ -1126,7 +1135,6 @@ def test_create_chat_reminder_endpoint_returns_json(
 ) -> None:
     bot = object()
     app.state.bot = bot
-
     captured_calls: list[dict[str, object]] = []
 
     def fake_create_scheduled_reminder(
@@ -1167,12 +1175,15 @@ def test_create_chat_reminder_endpoint_returns_json(
     assert data.interval_days == 3
 
     response_json = response.json()
+
     assert response_json["id"] == 42
     assert response_json["chat_id"] == 100
     assert response_json["reminder_text"] == "Проверить релиз"
     assert response_json["schedule_type"] == "every_days"
     assert response_json["start_at"].startswith("2099-06-10T12:12:00")
     assert response_json["timezone_name"] == "Asia/Yekaterinburg"
+    assert response_json["is_repeating"] is True
+    assert response_json["period"] == "каждые 3 дн."
     assert response_json["interval_days"] == 3
     assert response_json["interval_weeks"] is None
     assert response_json["day_of_week"] is None
@@ -1262,7 +1273,6 @@ def test_create_chat_reminder_endpoint_accepts_valid_tma_init_data(
 ) -> None:
     bot = object()
     app.state.bot = bot
-
     captured_calls: list[dict[str, object]] = []
 
     def fake_create_scheduled_reminder(
@@ -1300,7 +1310,6 @@ def test_create_chat_reminder_endpoint_accepts_valid_tma_init_data(
     assert captured_calls[0]["chat_id"] == 100
 
     data = captured_calls[0]["data"]
-
     assert data.reminder_text == "Проверить релиз"
     assert data.schedule_type == "every_days"
     assert data.timezone_name == "Asia/Yekaterinburg"
@@ -1314,6 +1323,8 @@ def test_create_chat_reminder_endpoint_accepts_valid_tma_init_data(
     assert response_json["schedule_type"] == "every_days"
     assert response_json["start_at"].startswith("2099-06-10T12:12:00")
     assert response_json["timezone_name"] == "Asia/Yekaterinburg"
+    assert response_json["is_repeating"] is True
+    assert response_json["period"] == "каждые 3 дн."
     assert response_json["interval_days"] == 3
     assert response_json["interval_weeks"] is None
     assert response_json["day_of_week"] is None

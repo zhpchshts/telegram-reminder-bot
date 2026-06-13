@@ -1,7 +1,7 @@
 from datetime import datetime
 
 import pytest
-from fastapi import HTTPException, FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import api as api_module
@@ -9,20 +9,20 @@ from app.api import (
     app,
     configure_cors,
     create_chat_reminder,
+    create_tma_reminder,
     delete_chat_reminder,
+    delete_tma_reminder,
     get_chat_reminders,
     get_chat_timezone,
     get_reminder_form_options,
-    get_tma_context,
-    health,
-    update_chat_timezone,
     get_tma_bootstrap,
-    create_tma_reminder,
-    delete_tma_reminder,
+    get_tma_context,
     get_tma_reminders,
     get_tma_timezone,
-    update_tma_timezone,
+    health,
     preview_tma_reminder,
+    update_chat_timezone,
+    update_tma_timezone,
 )
 from app.api_models import (
     ChatTimezoneResponse,
@@ -30,10 +30,10 @@ from app.api_models import (
     DeleteReminderResponse,
     ReminderCreateRequest,
     ReminderFormOptionsResponse,
-    ReminderResponse,
-    TmaContextResponse,
-    TmaBootstrapResponse,
     ReminderPreviewResponse,
+    ReminderResponse,
+    TmaBootstrapResponse,
+    TmaContextResponse,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
@@ -227,6 +227,8 @@ def test_get_tma_bootstrap_returns_response(
             schedule_type="every_days",
             start_at=start_at,
             timezone_name="Asia/Yekaterinburg",
+            is_repeating=True,
+            period="каждые 3 дн.",
             interval_days=3,
         )
     ]
@@ -269,6 +271,8 @@ def test_get_tma_reminders_returns_response_models(
             schedule_type="every_days",
             start_at=start_at,
             timezone_name="Asia/Yekaterinburg",
+            is_repeating=True,
+            period="каждые 3 дн.",
             interval_days=3,
         )
     ]
@@ -356,6 +360,8 @@ def test_create_tma_reminder_returns_response(
         schedule_type="every_days",
         start_at=expected_data.start_at,
         timezone_name="Asia/Yekaterinburg",
+        is_repeating=True,
+        period="каждые 3 дн.",
         interval_days=3,
     )
 
@@ -469,7 +475,6 @@ def test_get_chat_reminders_returns_response_models(
 ) -> None:
     start_at = datetime(2099, 6, 10, 12, 12)
     requested_chat_ids: list[int] = []
-
     reminders = [
         ReminderReadData(
             id=42,
@@ -503,6 +508,8 @@ def test_get_chat_reminders_returns_response_models(
             schedule_type="every_days",
             start_at=start_at,
             timezone_name="Asia/Yekaterinburg",
+            is_repeating=True,
+            period="каждые 3 дн.",
             interval_days=3,
         )
     ]
@@ -568,6 +575,8 @@ def test_create_chat_reminder_returns_response(
         schedule_type="every_days",
         start_at=expected_data.start_at,
         timezone_name="Asia/Yekaterinburg",
+        is_repeating=True,
+        period="каждые 3 дн.",
         interval_days=3,
     )
 

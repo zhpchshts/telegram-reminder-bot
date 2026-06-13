@@ -14,6 +14,8 @@ class ReminderResponse(BaseModel):
     schedule_type: str
     start_at: datetime
     timezone_name: str
+    is_repeating: bool
+    period: str
     interval_days: int | None = None
     interval_weeks: int | None = None
     day_of_week: str | None = None
@@ -111,6 +113,15 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
         schedule_type=reminder.schedule_type,
         start_at=reminder.start_at,
         timezone_name=reminder.timezone_name,
+        is_repeating=reminder.schedule_type != "once",
+        period=build_reminder_period(
+            schedule_type=reminder.schedule_type,
+            interval_days=reminder.interval_days,
+            interval_weeks=reminder.interval_weeks,
+            day_of_week=reminder.day_of_week,
+            month_week_number=reminder.month_week_number,
+            month_day=reminder.month_day,
+        ),
         interval_days=reminder.interval_days,
         interval_weeks=reminder.interval_weeks,
         day_of_week=reminder.day_of_week,
@@ -135,13 +146,35 @@ def build_reminder_create_data(
     )
 
 
+def build_reminder_period(
+    *,
+    schedule_type: str,
+    interval_days: int | None = None,
+    interval_weeks: int | None = None,
+    day_of_week: str | None = None,
+    month_week_number: int | None = None,
+    month_day: int | None = None,
+) -> str:
+    return format_period_line(
+        schedule_type=schedule_type,
+        interval_days=interval_days,
+        interval_weeks=interval_weeks,
+        day_of_week=day_of_week,
+        month_week_number=month_week_number,
+        month_day=month_day,
+    )
+
+
 def build_reminder_preview_response(
     data: ReminderCreateData,
 ) -> ReminderPreviewResponse:
-    period = None
-
-    if data.schedule_type != "once":
-        period = format_period_line(
+    return ReminderPreviewResponse(
+        reminder_text=data.reminder_text,
+        schedule_type=data.schedule_type,
+        start_at=data.start_at,
+        timezone_name=data.timezone_name,
+        is_repeating=data.schedule_type != "once",
+        period=build_reminder_period(
             schedule_type=data.schedule_type,
             interval_days=data.interval_days,
             interval_weeks=data.interval_weeks,
@@ -149,14 +182,8 @@ def build_reminder_preview_response(
             month_week_number=data.month_week_number,
             month_day=data.month_day,
         )
-
-    return ReminderPreviewResponse(
-        reminder_text=data.reminder_text,
-        schedule_type=data.schedule_type,
-        start_at=data.start_at,
-        timezone_name=data.timezone_name,
-        is_repeating=data.schedule_type != "once",
-        period=period,
+        if data.schedule_type != "once"
+        else None,
     )
 
 
@@ -173,6 +200,15 @@ def build_created_reminder_response(
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         timezone_name=data.timezone_name,
+        is_repeating=data.schedule_type != "once",
+        period=build_reminder_period(
+            schedule_type=data.schedule_type,
+            interval_days=data.interval_days,
+            interval_weeks=data.interval_weeks,
+            day_of_week=data.day_of_week,
+            month_week_number=data.month_week_number,
+            month_day=data.month_day,
+        ),
         interval_days=data.interval_days,
         interval_weeks=data.interval_weeks,
         day_of_week=data.day_of_week,

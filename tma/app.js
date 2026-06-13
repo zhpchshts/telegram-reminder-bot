@@ -93,6 +93,18 @@ function setBusy(isBusy) {
   }
 }
 
+function releaseInputFocus() {
+  const activeElement = document.activeElement;
+
+  if (activeElement && typeof activeElement.blur === "function") {
+    activeElement.blur();
+  }
+
+  if (typeof telegram?.hideKeyboard === "function") {
+    telegram.hideKeyboard();
+  }
+}
+
 function showPreview(preview) {
   const period = preview.period || "одноразовое";
 
@@ -572,13 +584,22 @@ async function saveReminder() {
 }
 
 function confirmAction(message) {
+  releaseInputFocus();
+
   if (typeof telegram?.showConfirm === "function") {
     return new Promise((resolve) => {
-      telegram.showConfirm(message, resolve);
+      telegram.showConfirm(message, (confirmed) => {
+        releaseInputFocus();
+        window.setTimeout(releaseInputFocus, 0);
+        resolve(confirmed);
+      });
     });
   }
 
-  return window.confirm(message);
+  const confirmed = window.confirm(message);
+  releaseInputFocus();
+
+  return confirmed;
 }
 
 function buildDeleteConfirmationMessage(reminder) {
@@ -587,6 +608,7 @@ function buildDeleteConfirmationMessage(reminder) {
 
 async function deleteReminder(reminder) {
   hideStatus();
+  releaseInputFocus();
 
   const confirmed = await confirmAction(buildDeleteConfirmationMessage(reminder));
   if (!confirmed) {

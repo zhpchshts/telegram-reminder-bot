@@ -9,14 +9,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.constants import TIMEZONE_LOOKUP_URL, VALID_WEEKDAYS, WEEKDAY_HELP
 from app.database import (
     create_reminder_in_db,
-    get_active_reminders_for_chat,
     set_chat_timezone,
 )
 from app.formatting import (
     format_datetime_ru,
     format_period_line,
-    format_reminder_for_list,
-    get_int,
 )
 from app.scheduler import (
     format_next_run_line,
@@ -34,6 +31,7 @@ from app.schedule_calculations import (
 )
 
 from app.reminder_service import (
+    build_active_reminders_list_text_for_chat,
     delete_active_reminder_for_chat,
     get_chat_timezone_name,
 )
@@ -810,22 +808,13 @@ async def monthly_day_from(message: Message, bot: Bot) -> None:
 
 @router.message(Command("list"))
 async def list_reminders(message: Message) -> None:
-    chat_reminders = get_active_reminders_for_chat(message.chat.id)
+    answer_text = build_active_reminders_list_text_for_chat(message.chat.id)
 
-    if not chat_reminders:
+    if answer_text is None:
         await message.answer("В этом чате нет активных напоминаний.")
         return
 
-    lines = ["<b>Активные напоминания в этом чате</b>\n"]
-    lines.extend(
-        format_reminder_for_list(
-            reminder,
-            format_next_run_line(get_int(reminder, "id")),
-        )
-        for reminder in chat_reminders
-    )
-
-    await message.answer("\n\n".join(lines), parse_mode="HTML")
+    await message.answer(answer_text, parse_mode="HTML")
 
 
 @router.message(Command("delete"))

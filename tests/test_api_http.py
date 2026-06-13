@@ -1,13 +1,51 @@
 from collections.abc import Iterator
 from datetime import datetime
+import json
+from time import time
+from urllib.parse import urlencode
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import api as api_module
+from app import api_auth as api_auth_module
 from app.api import app
+from app.api_auth import TMA_INIT_DATA_HEADER, require_matching_chat_id
 from app.reminder_models import ReminderReadData
-from app.api_auth import require_matching_chat_id
+from app.tma_auth import calculate_init_data_hash
+
+BOT_TOKEN = "123456789:test-token"
+
+
+def build_signed_init_data_for_chat(chat_id: int) -> str:
+    fields = {
+        "auth_date": str(int(time())),
+        "query_id": "AAEAAAE",
+        "user": json.dumps(
+            {
+                "id": 123,
+                "first_name": "Eugene",
+            },
+            separators=(",", ":"),
+        ),
+        "chat": json.dumps(
+            {
+                "id": chat_id,
+                "type": "group",
+                "title": "Home",
+            },
+            separators=(",", ":"),
+        ),
+        "chat_type": "group",
+        "start_param": f"chat_{chat_id}",
+    }
+
+    fields["hash"] = calculate_init_data_hash(
+        fields,
+        bot_token=BOT_TOKEN,
+    )
+
+    return urlencode(fields)
 
 
 @pytest.fixture
@@ -17,6 +55,21 @@ def client() -> Iterator[TestClient]:
 
     previous_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[require_matching_chat_id] = fake_require_matching_chat_id
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
+
+
+@pytest.fixture
+def authenticated_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setattr(api_auth_module, "BOT_TOKEN", BOT_TOKEN)
+
+    previous_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides.clear()
 
     try:
         with TestClient(app) as test_client:
@@ -48,6 +101,88 @@ def test_chat_endpoint_requires_tma_auth_without_dependency_override() -> None:
     assert response.json() == {
         "detail": "Telegram init data is required.",
     }
+
+
+def test_get_chat_reminders_endpoint_accepts_valid_tma_init_data(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_chat_ids: list[int] = []
+
+    def fake_list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
+        requested_chat_ids.append(chat_id)
+        return [
+            ReminderReadData(
+                id=42,
+                chat_id=100,
+                reminder_text="Проверить релиз",
+                schedule_type="every_days",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+                interval_days=3,
+            )
+        ]
+
+    monkeypatch.setattr(
+        api_module,
+        "list_active_reminders_for_chat",
+        fake_list_active_reminders_for_chat,
+    )
+
+    response = authenticated_client.get(
+        "/api/chats/100/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+    )
+
+    assert response.status_code == 200
+    assert requested_chat_ids == [100]
+    assert response.json() == [
+        {
+            "id": 42,
+            "chat_id": 100,
+            "reminder_text": "Проверить релиз",
+            "schedule_type": "every_days",
+            "start_at": "2099-06-10T12:12:00",
+            "timezone_name": "Asia/Yekaterinburg",
+            "interval_days": 3,
+            "interval_weeks": None,
+            "day_of_week": None,
+            "month_week_number": None,
+            "month_day": None,
+        }
+    ]
+
+
+def test_chat_endpoint_rejects_tma_init_data_from_another_chat(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_chat_ids: list[int] = []
+
+    def fake_list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
+        requested_chat_ids.append(chat_id)
+        return []
+
+    monkeypatch.setattr(
+        api_module,
+        "list_active_reminders_for_chat",
+        fake_list_active_reminders_for_chat,
+    )
+
+    response = authenticated_client.get(
+        "/api/chats/100/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=200),
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Telegram init data chat_id does not match requested chat_id.",
+    }
+    assert requested_chat_ids == []
 
 
 def test_get_chat_reminders_endpoint_returns_json(
@@ -411,3 +546,68 @@ def test_create_chat_reminder_endpoint_returns_service_validation_error(
 
     assert response.status_code == 400
     assert response.json() == {"detail": "reminder_text is required."}
+
+
+def test_create_chat_reminder_endpoint_accepts_valid_tma_init_data(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = object()
+    app.state.bot = bot
+
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_create_scheduled_reminder(
+        *,
+        bot,
+        chat_id: int,
+        data,
+    ) -> int:
+        captured_calls.append(
+            {
+                "bot": bot,
+                "chat_id": chat_id,
+                "data": data,
+            }
+        )
+        return 42
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    response = authenticated_client.post(
+        "/api/chats/100/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 201
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["bot"] is bot
+    assert captured_calls[0]["chat_id"] == 100
+
+    data = captured_calls[0]["data"]
+
+    assert data.reminder_text == "Проверить релиз"
+    assert data.schedule_type == "every_days"
+    assert data.timezone_name == "Asia/Yekaterinburg"
+    assert data.interval_days == 3
+
+    response_json = response.json()
+
+    assert response_json["id"] == 42
+    assert response_json["chat_id"] == 100
+    assert response_json["reminder_text"] == "Проверить релиз"
+    assert response_json["schedule_type"] == "every_days"
+    assert response_json["start_at"].startswith("2099-06-10T12:12:00")
+    assert response_json["timezone_name"] == "Asia/Yekaterinburg"
+    assert response_json["interval_days"] == 3
+    assert response_json["interval_weeks"] is None
+    assert response_json["day_of_week"] is None
+    assert response_json["month_week_number"] is None
+    assert response_json["month_day"] is None

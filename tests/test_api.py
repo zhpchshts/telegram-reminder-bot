@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from app import api as api_module
 from app.api import (
     app,
+    create_chat_reminder,
     delete_chat_reminder,
     get_chat_reminders,
     get_chat_timezone,
@@ -16,9 +17,12 @@ from app.api_models import (
     ChatTimezoneResponse,
     ChatTimezoneUpdateRequest,
     DeleteReminderResponse,
+    ReminderCreateRequest,
     ReminderResponse,
 )
-from app.reminder_models import ReminderReadData
+from app.reminder_models import ReminderCreateData, ReminderReadData
+
+BOT = object()
 
 
 def test_health_returns_ok() -> None:
@@ -67,6 +71,104 @@ def test_get_chat_reminders_returns_response_models(
             interval_days=3,
         )
     ]
+
+
+def test_create_chat_reminder_returns_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_create_scheduled_reminder(
+        *,
+        bot: object,
+        chat_id: int,
+        data: ReminderCreateData,
+    ) -> int:
+        captured_calls.append(
+            {
+                "bot": bot,
+                "chat_id": chat_id,
+                "data": data,
+            }
+        )
+        return 42
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    result = create_chat_reminder(
+        chat_id=100,
+        request=ReminderCreateRequest(
+            reminder_text="Проверить релиз",
+            schedule_type="every_days",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=3,
+        ),
+        bot=BOT,
+    )
+
+    expected_data = ReminderCreateData(
+        reminder_text="Проверить релиз",
+        schedule_type="every_days",
+        start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+    assert captured_calls == [
+        {
+            "bot": BOT,
+            "chat_id": 100,
+            "data": expected_data,
+        }
+    ]
+    assert result == ReminderResponse(
+        id=42,
+        chat_id=100,
+        reminder_text="Проверить релиз",
+        schedule_type="every_days",
+        start_at=expected_data.start_at,
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+
+def test_create_chat_reminder_rejects_invalid_timezone() -> None:
+    with pytest.raises(HTTPException) as error:
+        create_chat_reminder(
+            chat_id=100,
+            request=ReminderCreateRequest(
+                reminder_text="Проверить релиз",
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Wrong/Timezone",
+            ),
+            bot=BOT,
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.detail == "Invalid timezone name."
+
+
+def test_create_chat_reminder_rejects_past_start_at() -> None:
+    with pytest.raises(HTTPException) as error:
+        create_chat_reminder(
+            chat_id=100,
+            request=ReminderCreateRequest(
+                reminder_text="Проверить релиз",
+                schedule_type="once",
+                start_at=datetime(2000, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            bot=BOT,
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.detail == "start_at must be in the future."
 
 
 def test_get_chat_timezone_returns_response(

@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 from app.config import APP_TIMEZONE_NAME
@@ -20,6 +20,43 @@ from app.schedule_calculations import (
 
 
 scheduler = AsyncIOScheduler()
+
+
+async def send_healthcheck(
+    bot: Bot,
+    chat_id: int,
+) -> None:
+    now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    active_reminders_count = len(get_all_active_reminders())
+    scheduled_jobs_count = len(scheduler.get_jobs())
+    scheduler_status = "running" if scheduler.running else "stopped"
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "✅ Бот работает.\n\n"
+            f"Время сервера UTC: {now_utc}\n"
+            f"Scheduler: {scheduler_status}\n"
+            f"Запланированных jobs: {scheduled_jobs_count}\n"
+            f"Активных напоминаний в базе: {active_reminders_count}"
+        ),
+    )
+
+
+def schedule_healthcheck(
+    bot: Bot,
+    chat_id: int,
+    interval_minutes: int,
+) -> None:
+    scheduler.add_job(
+        send_healthcheck,
+        trigger="interval",
+        minutes=interval_minutes,
+        args=[bot, chat_id],
+        id="healthcheck",
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),
+    )
 
 
 def get_next_run_at(reminder_id: int) -> datetime | None:

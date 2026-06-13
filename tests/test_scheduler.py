@@ -6,7 +6,9 @@ import pytest
 from app import scheduler as scheduler_module
 from app.scheduler import (
     format_next_run_line,
+    schedule_healthcheck,
     schedule_reminder,
+    send_healthcheck,
     send_once_reminder,
     send_repeating_reminder,
 )
@@ -272,3 +274,63 @@ def test_schedule_monthly_day_reminder_adds_cron_job(monkeypatch) -> None:
     assert job["minute"] == 12
     assert job["start_date"] == start_at
     assert job["id"] == "7"
+
+
+def test_schedule_healthcheck_adds_interval_job(monkeypatch) -> None:
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+
+    bot = FakeBot()
+
+    schedule_healthcheck(
+        bot=bot,
+        chat_id=100,
+        interval_minutes=360,
+    )
+
+    assert len(fake_scheduler.jobs) == 1
+
+    job = fake_scheduler.jobs[0]
+
+    assert job["func"] == send_healthcheck
+    assert job["trigger"] == "interval"
+    assert job["minutes"] == 360
+    assert job["args"] == [bot, 100]
+    assert job["id"] == "healthcheck"
+    assert job["replace_existing"] is True
+    assert "next_run_time" in job
+
+
+def test_send_healthcheck_sends_status_message(monkeypatch) -> None:
+    class FakeHealthScheduler:
+        running = True
+
+        def get_jobs(self):
+            return [object(), object(), object()]
+
+    bot = FakeBot()
+
+    monkeypatch.setattr(scheduler_module, "scheduler", FakeHealthScheduler())
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_all_active_reminders",
+        lambda: [object(), object()],
+    )
+
+    asyncio.run(
+        send_healthcheck(
+            bot=bot,
+            chat_id=100,
+        )
+    )
+
+    assert len(bot.messages) == 1
+
+    message = bot.messages[0]
+
+    assert message["chat_id"] == 100
+    assert "✅ Бот работает." in message["text"]
+    assert "Время сервера UTC:" in message["text"]
+    assert "Scheduler: running" in message["text"]
+    assert "Запланированных jobs: 3" in message["text"]
+    assert "Активных напоминаний в базе: 2" in message["text"]

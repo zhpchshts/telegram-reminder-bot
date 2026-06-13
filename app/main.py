@@ -3,10 +3,10 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 
-from app.config import BOT_TOKEN
+from app.config import BOT_TOKEN, HEALTHCHECK_CHAT_ID, HEALTHCHECK_INTERVAL_MINUTES
 from app.database import init_db
 from app.handlers import router
-from app.scheduler import restore_active_reminders, scheduler
+from app.scheduler import restore_active_reminders, schedule_healthcheck, scheduler
 
 
 async def set_bot_commands(bot: Bot) -> None:
@@ -59,7 +59,15 @@ async def main() -> None:
     await set_bot_commands(bot)
 
     scheduler.start()
-    await restore_active_reminders(bot)
+
+    if HEALTHCHECK_CHAT_ID is not None:
+        schedule_healthcheck(
+            bot=bot,
+            chat_id=HEALTHCHECK_CHAT_ID,
+            interval_minutes=HEALTHCHECK_INTERVAL_MINUTES,
+        )
+
+    restore_active_reminders(bot)
 
     await dp.start_polling(bot)
 

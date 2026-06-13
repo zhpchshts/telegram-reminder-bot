@@ -330,3 +330,182 @@ def test_create_command_answers_parse_error(
             {},
         )
     ]
+
+
+def test_timezone_command_answers_current_timezone() -> None:
+    message = FakeMessage("/timezone")
+
+    asyncio.run(handlers.timezone_command(message))
+
+    assert len(message.answers) == 1
+
+    answer_text, kwargs = message.answers[0]
+
+    assert "Текущая таймзона этого чата:" in answer_text
+    assert TIMEZONE_NAME in answer_text
+    assert "/timezone Asia/Yekaterinburg" in answer_text
+    assert "link_preview_options" in kwargs
+
+
+def test_timezone_command_updates_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_set_chat_timezone_for_chat(
+        *,
+        chat_id: int,
+        timezone_name: str,
+    ) -> bool:
+        captured_calls.append(
+            {
+                "chat_id": chat_id,
+                "timezone_name": timezone_name,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(
+        handlers,
+        "set_chat_timezone_for_chat",
+        fake_set_chat_timezone_for_chat,
+    )
+
+    message = FakeMessage("/timezone Europe/Moscow")
+
+    asyncio.run(handlers.timezone_command(message))
+
+    assert captured_calls == [
+        {
+            "chat_id": CHAT_ID,
+            "timezone_name": "Europe/Moscow",
+        }
+    ]
+    assert message.answers == [
+        (
+            "Таймзона этого чата обновлена.\n\n"
+            "Теперь новые напоминания будут создаваться в таймзоне: Europe/Moscow\n\n"
+            "Уже созданные напоминания останутся в той таймзоне, "
+            "которая была установлена на момент их создания.",
+            {},
+        )
+    ]
+
+
+def test_timezone_command_answers_invalid_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_set_chat_timezone_for_chat(
+        *,
+        chat_id: int,
+        timezone_name: str,
+    ) -> bool:
+        assert chat_id == CHAT_ID
+        assert timezone_name == "Wrong/Timezone"
+        return False
+
+    monkeypatch.setattr(
+        handlers,
+        "set_chat_timezone_for_chat",
+        fake_set_chat_timezone_for_chat,
+    )
+
+    message = FakeMessage("/timezone Wrong/Timezone")
+
+    asyncio.run(handlers.timezone_command(message))
+
+    assert len(message.answers) == 1
+
+    answer_text, kwargs = message.answers[0]
+
+    assert answer_text.startswith("Не смог распознать таймзону.")
+    assert "/timezone Asia/Yekaterinburg" in answer_text
+    assert "link_preview_options" in kwargs
+
+
+def test_delete_reminder_deletes_active_reminder_for_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, int]] = []
+
+    def fake_delete_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> bool:
+        captured_calls.append(
+            {
+                "reminder_id": reminder_id,
+                "chat_id": chat_id,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(
+        handlers,
+        "delete_active_reminder_for_chat",
+        fake_delete_active_reminder_for_chat,
+    )
+
+    message = FakeMessage("/delete 123")
+
+    asyncio.run(handlers.delete_reminder(message))
+
+    assert captured_calls == [
+        {
+            "reminder_id": 123,
+            "chat_id": CHAT_ID,
+        }
+    ]
+    assert message.answers == [("Напоминание #123 удалено.", {})]
+
+
+def test_delete_reminder_answers_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_delete_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> bool:
+        assert reminder_id == 123
+        assert chat_id == CHAT_ID
+        return False
+
+    monkeypatch.setattr(
+        handlers,
+        "delete_active_reminder_for_chat",
+        fake_delete_active_reminder_for_chat,
+    )
+
+    message = FakeMessage("/delete 123")
+
+    asyncio.run(handlers.delete_reminder(message))
+
+    assert message.answers == [
+        ("Не нашёл активное напоминание с ID 123 в этом чате.", {})
+    ]
+
+
+def test_delete_reminder_answers_missing_id() -> None:
+    message = FakeMessage("/delete")
+
+    asyncio.run(handlers.delete_reminder(message))
+
+    assert message.answers == [
+        (
+            "Укажи ID напоминания.\n\nФормат:\n/delete ID\n\nПример:\n/delete 1",
+            {},
+        )
+    ]
+
+
+def test_delete_reminder_answers_non_integer_id() -> None:
+    message = FakeMessage("/delete abc")
+
+    asyncio.run(handlers.delete_reminder(message))
+
+    assert message.answers == [
+        (
+            "ID должен быть числом.\nНапример: /delete 1",
+            {},
+        )
+    ]

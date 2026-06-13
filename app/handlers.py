@@ -40,28 +40,6 @@ NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 ParseCommand = Callable[[str | None, str], ReminderParseResult]
 
 
-async def split_command(
-    message: Message,
-    *,
-    maxsplit: int,
-    min_parts: int,
-    usage_text: str,
-    missing_text: str | None = "Не хватает данных.",
-) -> list[str] | None:
-    if not message.text:
-        await message.answer("Не вижу текст команды.")
-        return None
-
-    parts = message.text.split(maxsplit=maxsplit)
-
-    if len(parts) < min_parts:
-        answer_text = f"{missing_text}\n\n{usage_text}" if missing_text else usage_text
-        await message.answer(answer_text)
-        return None
-
-    return parts
-
-
 async def reject_past_datetime(
     message: Message,
     *,

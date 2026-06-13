@@ -4,19 +4,19 @@
 
 ## Текущий прод-контур
 
-Бот развёрнут на VPS с Ubuntu и работает как `systemd`-сервис.
+Бот работает на VPS с Ubuntu через Docker Compose.
 
 Основные параметры:
 
 ```text
-OS: Ubuntu
-Runtime: Python 3
-Process manager: systemd
+Runtime: Docker Compose
+Container: telegram-reminder-bot
+Image: telegram-reminder-bot:latest
 Database: SQLite
 Bot mode: long polling
 ```
 
-Бот не использует webhook, домен и SSL-сертификат. Для работы ему нужен исходящий доступ к Telegram Bot API:
+Бот не использует webhook, домен, SSL-сертификат и входящие HTTP-порты. Для работы нужен только исходящий доступ к Telegram Bot API:
 
 ```text
 api.telegram.org:443
@@ -25,32 +25,25 @@ api.telegram.org:443
 ## Основные пути на сервере
 
 ```text
-Проект:       /opt/telegram-reminder-bot
-.env:         /opt/telegram-reminder-bot/.env
-SQLite DB:    /opt/telegram-reminder-bot/reminders.db
-Backups:      /opt/telegram-reminder-bot-backups
-Deploy script:/opt/deploy-telegram-reminder-bot.sh
-Backup script:/opt/backup-telegram-reminder-bot.sh
+Проект:        /opt/telegram-reminder-bot
+.env:          /opt/telegram-reminder-bot/.env
+SQLite DB:     /opt/telegram-reminder-bot/reminders.db
+Backups:       /opt/telegram-reminder-bot-backups
+Deploy script: /opt/deploy-telegram-reminder-bot.sh
+Backup script: /opt/backup-telegram-reminder-bot.sh
+Compose file:  /opt/telegram-reminder-bot/docker-compose.yml
 ```
 
-## Сервисы systemd
-
-Основной сервис бота:
+SQLite-база хранится на хосте:
 
 ```text
-telegram-reminder-bot.service
+/opt/telegram-reminder-bot/reminders.db
 ```
 
-Сервис бэкапа:
+В контейнер она монтируется как:
 
 ```text
-telegram-reminder-bot-backup.service
-```
-
-Таймер ежедневного бэкапа:
-
-```text
-telegram-reminder-bot-backup.timer
+/data/reminders.db
 ```
 
 ## Подключение к серверу
@@ -61,18 +54,25 @@ ssh root@SERVER_IP
 
 `SERVER_IP` нужно заменить на IP сервера.
 
-Вход по паролю отключён. Подключение должно выполняться по SSH-ключу.
+Вход по паролю отключён. Подключение выполняется по SSH-ключу.
 
 ## Проверить статус бота
 
 ```bash
-systemctl status telegram-reminder-bot
+cd /opt/telegram-reminder-bot
+docker compose ps
 ```
 
 Ожидаемое состояние:
 
 ```text
-Active: active (running)
+telegram-reminder-bot   telegram-reminder-bot:latest   "python bot.py"   bot   ...   Up
+```
+
+Проверить контейнер напрямую:
+
+```bash
+docker ps
 ```
 
 ## Посмотреть логи бота
@@ -80,58 +80,52 @@ Active: active (running)
 Последние 100 строк:
 
 ```bash
-journalctl -u telegram-reminder-bot -n 100 --no-pager
+docker logs --tail 100 telegram-reminder-bot
 ```
 
 Логи в режиме live:
 
 ```bash
-journalctl -u telegram-reminder-bot -f
+docker logs -f telegram-reminder-bot
 ```
+
+После старта в логах должно быть сообщение вида:
+
+```text
+Restored reminders: 9. Missed reminders: 0.
+```
+
+Число восстановленных напоминаний зависит от текущего состояния базы.
 
 ## Перезапустить бота
 
 ```bash
-systemctl restart telegram-reminder-bot
+cd /opt/telegram-reminder-bot
+docker compose restart
 ```
 
-Проверить после перезапуска:
+После перезапуска проверить:
 
 ```bash
-systemctl status telegram-reminder-bot
+docker compose ps
+docker logs --tail 80 telegram-reminder-bot
 ```
 
 ## Остановить бота
 
 ```bash
-systemctl stop telegram-reminder-bot
+cd /opt/telegram-reminder-bot
+docker compose stop
 ```
 
 ## Запустить бота
 
 ```bash
-systemctl start telegram-reminder-bot
+cd /opt/telegram-reminder-bot
+docker compose up -d
 ```
 
-## Проверить доступ до Telegram API
-
-```bash
-python3 - << 'PY'
-import socket
-socket.create_connection(("api.telegram.org", 443), timeout=10)
-print("ok")
-PY
-```
-
-Ожидаемый результат:
-
-```text
-ok
-```
-
-Если команда не возвращает `ok`, бот не сможет работать через long polling.
-
-## Ручной деплой новой версии
+## Деплой новой версии
 
 Обычный деплой выполняется скриптом:
 
@@ -142,21 +136,76 @@ ok
 Скрипт делает:
 
 1. Создаёт backup базы.
-2. Останавливает сервис бота.
-3. Выполняет `git pull`.
-4. Обновляет зависимости.
-5. Запускает проверки:
+2. Останавливает и отключает старый systemd-сервис Python-бота.
+3. Выполняет `git pull --ff-only`.
+4. Собирает Docker image через `docker compose build`.
+5. Запускает проверки внутри Docker image:
 
    * `ruff format --check .`
    * `ruff check .`
    * `pytest`
-6. Запускает сервис бота.
-7. Показывает статус сервиса.
+6. Пересоздаёт контейнер через `docker compose up -d --force-recreate`.
+7. Показывает статус Docker Compose.
+8. Показывает последние логи контейнера.
 
-После деплоя нужно проверить бота в Telegram:
+После деплоя проверить:
+
+```bash
+cd /opt/telegram-reminder-bot
+docker compose ps
+docker logs --tail 80 telegram-reminder-bot
+```
+
+И проверить бота в Telegram:
 
 ```text
 /list
+```
+
+## Старый systemd-сервис
+
+Старый Python-сервис должен быть отключён и остановлен:
+
+```bash
+systemctl is-enabled telegram-reminder-bot.service || true
+systemctl is-active telegram-reminder-bot.service || true
+```
+
+Ожидаемо:
+
+```text
+disabled
+inactive
+```
+
+Не запускать старый `telegram-reminder-bot.service` одновременно с Docker-контейнером. Оба процесса будут использовать один и тот же `BOT_TOKEN`, из-за чего long polling может конфликтовать.
+
+## Healthcheck
+
+Бот отправляет периодические healthcheck-сообщения в `chat_id`, указанный в `.env`:
+
+```env
+HEALTHCHECK_CHAT_ID=...
+HEALTHCHECK_INTERVAL_MINUTES=360
+```
+
+Если `HEALTHCHECK_CHAT_ID` не задан, healthcheck-сообщения отключены.
+
+Ожидаемое сообщение:
+
+```text
+✅ Бот работает.
+
+Время сервера UTC: ...
+Scheduler: running
+Запланированных jobs: ...
+Активных напоминаний в базе: ...
+```
+
+Для текущей модели:
+
+```text
+Запланированных jobs = активные напоминания + 1 healthcheck job
 ```
 
 ## Ручной backup базы
@@ -165,13 +214,13 @@ ok
 /opt/backup-telegram-reminder-bot.sh
 ```
 
-Проверить созданные backup-файлы:
+Проверить backup-файлы:
 
 ```bash
 ls -la /opt/telegram-reminder-bot-backups
 ```
 
-Размер папки с backup-файлами:
+Проверить размер папки с backup-файлами:
 
 ```bash
 du -sh /opt/telegram-reminder-bot-backups
@@ -179,7 +228,7 @@ du -sh /opt/telegram-reminder-bot-backups
 
 ## Автоматический backup
 
-Backup запускается ежедневно через `systemd timer`.
+Backup запускается ежедневно через systemd timer.
 
 Проверить статус таймера:
 
@@ -201,22 +250,97 @@ journalctl -u telegram-reminder-bot-backup.service -n 50 --no-pager
 
 Backup-файлы старше 14 дней удаляются автоматически.
 
-## Проверить свободное место на диске
+## `.env`
+
+Файл находится здесь:
+
+```text
+/opt/telegram-reminder-bot/.env
+```
+
+Пример содержимого:
+
+```env
+BOT_TOKEN=real_telegram_bot_token
+APP_TIMEZONE=Asia/Yekaterinburg
+DB_PATH=reminders.db
+HEALTHCHECK_CHAT_ID=
+HEALTHCHECK_INTERVAL_MINUTES=360
+```
+
+На сервере для Docker Compose `DB_PATH` переопределяется в `docker-compose.yml`:
+
+```yaml
+environment:
+  DB_PATH: /data/reminders.db
+```
+
+Права на `.env`:
+
+```bash
+ls -la /opt/telegram-reminder-bot/.env
+```
+
+Ожидаемо:
+
+```text
+-rw------- 1 reminderbot reminderbot ... .env
+```
+
+Не выводить содержимое `.env` в консоль и не отправлять его в чаты.
+
+## Проверки проекта в Docker
+
+```bash
+cd /opt/telegram-reminder-bot
+
+docker run --rm -e BOT_TOKEN=dummy telegram-reminder-bot:latest ruff format --check .
+docker run --rm -e BOT_TOKEN=dummy telegram-reminder-bot:latest ruff check .
+docker run --rm -e BOT_TOKEN=dummy telegram-reminder-bot:latest pytest
+```
+
+## Проверить доступ до Telegram API
+
+```bash
+python3 - << 'PY'
+import socket
+
+socket.create_connection(("api.telegram.org", 443), timeout=10)
+print("ok")
+PY
+```
+
+Ожидаемый результат:
+
+```text
+ok
+```
+
+Если команда не возвращает `ok`, бот не сможет работать через long polling.
+
+## Проверить свободное место
 
 ```bash
 df -h
 ```
 
-Проверить размер проекта:
+Размер проекта:
 
 ```bash
 du -sh /opt/telegram-reminder-bot
 ```
 
-Проверить размер backup-папки:
+Размер backup-папки:
 
 ```bash
 du -sh /opt/telegram-reminder-bot-backups
+```
+
+Docker-образы и контейнеры:
+
+```bash
+docker images
+docker ps -a
 ```
 
 ## Проверить firewall
@@ -230,7 +354,6 @@ ufw status verbose
 ```text
 Status: active
 Default: deny (incoming), allow (outgoing)
-
 22/tcp (OpenSSH) ALLOW IN Anywhere
 22/tcp (OpenSSH (v6)) ALLOW IN Anywhere (v6)
 ```
@@ -254,75 +377,20 @@ permitrootlogin without-password
 
 `permitrootlogin without-password` означает, что root-вход по паролю запрещён, но вход по SSH-ключу разрешён.
 
-## Где лежит `.env`
-
-```text
-/opt/telegram-reminder-bot/.env
-```
-
-Файл должен содержать:
-
-```env
-BOT_TOKEN=real_telegram_bot_token
-APP_TIMEZONE=Asia/Yekaterinburg
-```
-
-Права на `.env`:
-
-```bash
-ls -la /opt/telegram-reminder-bot/.env
-```
-
-Ожидаемо:
-
-```text
--rw------- 1 reminderbot reminderbot ... .env
-```
-
-Не выводить содержимое `.env` в консоль и не отправлять его в чаты.
-
-## Проверки проекта на сервере
-
-```bash
-runuser -u reminderbot -- bash -lc 'cd /opt/telegram-reminder-bot && . .venv/bin/activate && ruff format --check . && ruff check . && pytest'
-```
-
-## Ручной запуск без systemd
-
-Использовать только для диагностики, когда сервис остановлен.
-
-Остановить сервис:
-
-```bash
-systemctl stop telegram-reminder-bot
-```
-
-Запустить вручную:
-
-```bash
-runuser -u reminderbot -- bash -lc 'cd /opt/telegram-reminder-bot && . .venv/bin/activate && python bot.py'
-```
-
-Остановить ручной запуск:
-
-```text
-Ctrl + C
-```
-
-После диагностики снова запустить сервис:
-
-```bash
-systemctl start telegram-reminder-bot
-```
-
 ## Важное правило
 
 Не запускать одновременно два экземпляра бота.
 
-Если бот уже работает как `systemd`-сервис, не нужно параллельно запускать:
+Нельзя одновременно запускать:
 
 ```bash
-python bot.py
+docker compose up -d
+```
+
+и:
+
+```bash
+systemctl start telegram-reminder-bot.service
 ```
 
 Иначе Telegram long polling может конфликтовать между двумя процессами.

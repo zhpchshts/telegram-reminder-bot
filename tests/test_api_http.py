@@ -228,3 +228,156 @@ def test_delete_chat_reminder_endpoint_rejects_unknown_reminder(
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Reminder not found."}
+
+
+def build_create_reminder_request(
+    *,
+    reminder_text: str = "Проверить релиз",
+    schedule_type: str = "every_days",
+    start_at: str = "2099-06-10T12:12:00",
+    timezone_name: str = "Asia/Yekaterinburg",
+    interval_days: int | None = 3,
+) -> dict[str, object]:
+    return {
+        "reminder_text": reminder_text,
+        "schedule_type": schedule_type,
+        "start_at": start_at,
+        "timezone_name": timezone_name,
+        "interval_days": interval_days,
+    }
+
+
+def test_create_chat_reminder_endpoint_returns_json(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = object()
+    app.state.bot = bot
+
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_create_scheduled_reminder(
+        *,
+        bot,
+        chat_id: int,
+        data,
+    ) -> int:
+        captured_calls.append(
+            {
+                "bot": bot,
+                "chat_id": chat_id,
+                "data": data,
+            }
+        )
+        return 42
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    response = client.post(
+        "/api/chats/100/reminders",
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 201
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["bot"] is bot
+    assert captured_calls[0]["chat_id"] == 100
+
+    data = captured_calls[0]["data"]
+    assert data.reminder_text == "Проверить релиз"
+    assert data.schedule_type == "every_days"
+    assert data.timezone_name == "Asia/Yekaterinburg"
+    assert data.interval_days == 3
+
+    response_json = response.json()
+    assert response_json["id"] == 42
+    assert response_json["chat_id"] == 100
+    assert response_json["reminder_text"] == "Проверить релиз"
+    assert response_json["schedule_type"] == "every_days"
+    assert response_json["start_at"].startswith("2099-06-10T12:12:00")
+    assert response_json["timezone_name"] == "Asia/Yekaterinburg"
+    assert response_json["interval_days"] == 3
+    assert response_json["interval_weeks"] is None
+    assert response_json["day_of_week"] is None
+    assert response_json["month_week_number"] is None
+    assert response_json["month_day"] is None
+
+
+def test_create_chat_reminder_endpoint_requires_configured_bot(
+    client: TestClient,
+) -> None:
+    app.state.bot = None
+
+    response = client.post(
+        "/api/chats/100/reminders",
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Bot is not configured for API."}
+
+
+def test_create_chat_reminder_endpoint_rejects_invalid_timezone(
+    client: TestClient,
+) -> None:
+    app.state.bot = object()
+
+    response = client.post(
+        "/api/chats/100/reminders",
+        json=build_create_reminder_request(
+            timezone_name="Wrong/Timezone",
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid timezone name."}
+
+
+def test_create_chat_reminder_endpoint_rejects_start_at_in_past(
+    client: TestClient,
+) -> None:
+    app.state.bot = object()
+
+    response = client.post(
+        "/api/chats/100/reminders",
+        json=build_create_reminder_request(
+            start_at="2000-01-01T00:00:00",
+            timezone_name="UTC",
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "start_at must be in the future."}
+
+
+def test_create_chat_reminder_endpoint_returns_service_validation_error(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.bot = object()
+
+    def fake_create_scheduled_reminder(
+        *,
+        bot,
+        chat_id: int,
+        data,
+    ) -> int:
+        raise ValueError("reminder_text is required.")
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    response = client.post(
+        "/api/chats/100/reminders",
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "reminder_text is required."}

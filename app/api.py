@@ -3,6 +3,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from app.config import API_ALLOWED_ORIGINS
 
 from app.api_auth import get_tma_chat_id, get_tma_init_data, require_matching_chat_id
 from app.api_models import (
@@ -30,6 +32,25 @@ app = FastAPI(
     title="Telegram Reminder Bot API",
     version="0.1.0",
 )
+
+
+def configure_cors(
+    fastapi_app: FastAPI,
+    allowed_origins: list[str],
+) -> None:
+    if not allowed_origins:
+        return
+
+    fastapi_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+configure_cors(app, API_ALLOWED_ORIGINS)
 
 
 def get_bot_from_app_state(request: Request) -> Bot:

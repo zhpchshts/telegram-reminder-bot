@@ -1,11 +1,13 @@
 from datetime import datetime
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import api as api_module
 from app.api import (
     app,
+    configure_cors,
     create_chat_reminder,
     delete_chat_reminder,
     get_chat_reminders,
@@ -44,6 +46,36 @@ class FakeTelegramInitData:
 
 def test_health_returns_ok() -> None:
     assert health() == {"status": "ok"}
+
+
+def test_configure_cors_skips_empty_origins() -> None:
+    fastapi_app = FastAPI()
+
+    configure_cors(fastapi_app, [])
+
+    assert fastapi_app.user_middleware == []
+
+
+def test_configure_cors_adds_cors_middleware() -> None:
+    fastapi_app = FastAPI()
+
+    configure_cors(
+        fastapi_app,
+        ["https://example.com", "https://tma.example.com"],
+    )
+
+    assert len(fastapi_app.user_middleware) == 1
+
+    middleware = fastapi_app.user_middleware[0]
+
+    assert middleware.cls is CORSMiddleware
+    assert middleware.kwargs["allow_origins"] == [
+        "https://example.com",
+        "https://tma.example.com",
+    ]
+    assert middleware.kwargs["allow_credentials"] is True
+    assert middleware.kwargs["allow_methods"] == ["*"]
+    assert middleware.kwargs["allow_headers"] == ["*"]
 
 
 def test_get_tma_context_returns_response() -> None:

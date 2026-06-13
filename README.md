@@ -246,11 +246,23 @@ pip install -r requirements.txt
 ```env
 BOT_TOKEN=your_telegram_bot_token
 APP_TIMEZONE=Asia/Yekaterinburg
+DB_PATH=reminders.db
+
+# Optional: chat_id for periodic healthcheck messages.
+# Leave empty to disable healthcheck.
+HEALTHCHECK_CHAT_ID=
+
+# Optional: healthcheck interval in minutes.
+HEALTHCHECK_INTERVAL_MINUTES=360
 ```
+
 
 `BOT_TOKEN` можно получить у Telegram-бота `@BotFather`.
 
 `APP_TIMEZONE` используется как таймзона по умолчанию для чатов, где пользователь ещё не вызвал `/timezone`.
+`DB_PATH` задаёт путь к SQLite-базе. По умолчанию используется `reminders.db`.
+
+`HEALTHCHECK_CHAT_ID` и `HEALTHCHECK_INTERVAL_MINUTES` нужны для периодических служебных сообщений о том, что бот работает. Если `HEALTHCHECK_CHAT_ID` не задан, healthcheck-сообщения не отправляются.
 
 ### 4. Запустить бота
 
@@ -284,6 +296,9 @@ ruff format .
 * Проверки проекта запускаются через Ruff и pytest.
 * GitHub Actions автоматически запускает проверку форматирования, Ruff и pytest при push.
 * Подробная инструкция по эксплуатации, обновлению и backup-копиям описана в [`DEPLOY.md`](DEPLOY.md).
+* В production бот запускается через Docker Compose.
+* Бот работает через long polling, webhook не используется.
+* Поддерживается periodic healthcheck в заданный Telegram chat_id.
 
 ## Структура проекта
 
@@ -304,6 +319,12 @@ telegram-reminder-bot/
     test_formatting.py
     test_schedule_calculations.py
     test_scheduler.py
+  scripts/
+    deploy-docker.sh
+  .dockerignore
+  Dockerfile
+  docker-compose.yml
+  DEPLOY.md
   bot.py
   requirements.txt
   pyproject.toml

@@ -68,40 +68,6 @@ def format_period_line(
     return schedule_type
 
 
-def format_period_line_from_row(reminder: sqlite3.Row) -> str:
-    return format_period_line(
-        schedule_type=get_str(reminder, "schedule_type"),
-        interval_days=reminder["interval_days"],
-        interval_weeks=reminder["interval_weeks"],
-        day_of_week=reminder["day_of_week"],
-        month_week_number=reminder["month_week_number"],
-        month_day=reminder["month_day"],
-    )
-
-
-def format_reminder_for_list(
-    reminder: sqlite3.Row,
-    next_run_line: str,
-    timezone_name: str | None = None,
-) -> str:
-    reminder_id = get_int(reminder, "id")
-    reminder_text = html.escape(get_str(reminder, "text"))
-    period = html.escape(format_period_line_from_row(reminder))
-    start_at = datetime.fromisoformat(get_str(reminder, "start_at"))
-    reminder_timezone = str(timezone_name or reminder["timezone"])
-    first_run = html.escape(format_datetime_ru(start_at, reminder_timezone))
-    next_run = html.escape(next_run_line)
-
-    return (
-        f"<b>{reminder_text}</b>\n"
-        f"ID: <code>{reminder_id}</code>\n"
-        f"Период: {period}\n"
-        f"Первое срабатывание: {first_run}\n"
-        f"{next_run}\n"
-        f"Таймзона: <code>{html.escape(reminder_timezone)}</code>"
-    )
-
-
 def format_reminder_read_data_for_list(
     reminder: ReminderReadData,
     next_run_line: str,

@@ -400,7 +400,7 @@ async def every_days_from(message: Message, bot: Bot) -> None:
         message,
         bot,
         data=ReminderCreateData(
-            reminder_text=parts[3],
+            reminder_text=parts[4],
             schedule_type="every_days",
             start_at=start_at,
             timezone_name=timezone_name,

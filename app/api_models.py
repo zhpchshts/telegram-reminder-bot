@@ -75,6 +75,12 @@ class ReminderFormOptionsResponse(BaseModel):
     month_days: list[int]
 
 
+class TmaBootstrapResponse(BaseModel):
+    context: TmaContextResponse
+    reminder_options: ReminderFormOptionsResponse
+    active_reminders: list[ReminderResponse]
+
+
 def normalize_start_at(
     start_at: datetime,
     timezone_name: str,
@@ -201,4 +207,32 @@ def build_reminder_form_options_response() -> ReminderFormOptionsResponse:
         ],
         month_week_numbers=[1, 2, 3, 4, 5],
         month_days=list(range(1, 32)),
+    )
+
+
+def build_tma_bootstrap_response(
+    *,
+    auth_date: int,
+    user: dict[str, object] | None,
+    chat: dict[str, object],
+    chat_id: int,
+    timezone_name: str,
+    chat_type: str | None,
+    start_param: str | None,
+    active_reminders: list[ReminderReadData],
+) -> TmaBootstrapResponse:
+    return TmaBootstrapResponse(
+        context=build_tma_context_response(
+            auth_date=auth_date,
+            user=user,
+            chat=chat,
+            chat_id=chat_id,
+            timezone_name=timezone_name,
+            chat_type=chat_type,
+            start_param=start_param,
+        ),
+        reminder_options=build_reminder_form_options_response(),
+        active_reminders=[
+            build_reminder_response(reminder) for reminder in active_reminders
+        ],
     )

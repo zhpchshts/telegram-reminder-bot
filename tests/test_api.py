@@ -16,6 +16,7 @@ from app.api import (
     get_tma_context,
     health,
     update_chat_timezone,
+    get_tma_bootstrap,
 )
 from app.api_models import (
     ChatTimezoneResponse,
@@ -25,6 +26,7 @@ from app.api_models import (
     ReminderFormOptionsResponse,
     ReminderResponse,
     TmaContextResponse,
+    TmaBootstrapResponse,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
@@ -141,6 +143,86 @@ def test_get_reminder_form_options_returns_response() -> None:
     ]
     assert result.month_week_numbers == [1, 2, 3, 4, 5]
     assert result.month_days == list(range(1, 32))
+
+
+def test_get_tma_bootstrap_returns_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_at = datetime(2099, 6, 10, 12, 12)
+    requested_timezone_chat_ids: list[int] = []
+    requested_reminder_chat_ids: list[int] = []
+
+    def fake_get_chat_timezone_name(chat_id: int) -> str:
+        requested_timezone_chat_ids.append(chat_id)
+        return "Asia/Yekaterinburg"
+
+    def fake_list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
+        requested_reminder_chat_ids.append(chat_id)
+        return [
+            ReminderReadData(
+                id=42,
+                chat_id=100,
+                reminder_text="Проверить релиз",
+                schedule_type="every_days",
+                start_at=start_at,
+                timezone_name="Asia/Yekaterinburg",
+                interval_days=3,
+            )
+        ]
+
+    monkeypatch.setattr(
+        api_module,
+        "get_chat_timezone_name",
+        fake_get_chat_timezone_name,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "list_active_reminders_for_chat",
+        fake_list_active_reminders_for_chat,
+    )
+
+    result = get_tma_bootstrap(
+        init_data=FakeTelegramInitData(),
+        chat_id=100,
+    )
+
+    assert requested_timezone_chat_ids == [100]
+    assert requested_reminder_chat_ids == [100]
+    assert isinstance(result, TmaBootstrapResponse)
+    assert result.context == TmaContextResponse(
+        auth_date=1_700_000_000,
+        user={
+            "id": 123,
+            "first_name": "Eugene",
+        },
+        chat={
+            "id": 100,
+            "type": "group",
+            "title": "Home",
+        },
+        chat_id=100,
+        timezone_name="Asia/Yekaterinburg",
+        chat_type="group",
+        start_param="chat_100",
+    )
+    assert [option.value for option in result.reminder_options.schedule_types] == [
+        "once",
+        "every_days",
+        "every_week",
+        "monthly_weekday",
+        "monthly_day",
+    ]
+    assert result.active_reminders == [
+        ReminderResponse(
+            id=42,
+            chat_id=100,
+            reminder_text="Проверить релиз",
+            schedule_type="every_days",
+            start_at=start_at,
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=3,
+        )
+    ]
 
 
 def test_get_chat_reminders_returns_response_models(
@@ -468,3 +550,4 @@ def test_api_registers_initial_routes() -> None:
     assert "/api/chats/{chat_id}/reminders/{reminder_id}" in route_paths
     assert "/api/tma/context" in route_paths
     assert "/api/tma/reminder-options" in route_paths
+    assert "/api/tma/bootstrap" in route_paths

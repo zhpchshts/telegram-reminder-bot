@@ -4,7 +4,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram import Bot
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import API_ALLOWED_ORIGINS
 
 from app.api_auth import get_tma_chat_id, get_tma_init_data, require_matching_chat_id
 from app.api_models import (
@@ -14,13 +13,16 @@ from app.api_models import (
     ReminderCreateRequest,
     ReminderFormOptionsResponse,
     ReminderResponse,
+    TmaBootstrapResponse,
     TmaContextResponse,
     build_created_reminder_response,
     build_reminder_create_data,
     build_reminder_form_options_response,
     build_reminder_response,
+    build_tma_bootstrap_response,
     build_tma_context_response,
 )
+from app.config import API_ALLOWED_ORIGINS
 from app.reminder_models import ReminderCreateData
 from app.reminder_service import (
     create_scheduled_reminder,
@@ -69,10 +71,9 @@ def get_bot_from_app_state(request: Request) -> Bot:
 
 def is_start_at_in_past(data: ReminderCreateData) -> bool:
     timezone = ZoneInfo(data.timezone_name)
-
     now = datetime.now(timezone)
-    start_at = data.start_at
 
+    start_at = data.start_at
     if start_at.tzinfo is None:
         start_at = start_at.replace(tzinfo=timezone)
 
@@ -111,6 +112,26 @@ def get_reminder_form_options(
     _init_data=Depends(get_tma_init_data),
 ) -> ReminderFormOptionsResponse:
     return build_reminder_form_options_response()
+
+
+@app.get(
+    "/api/tma/bootstrap",
+    response_model=TmaBootstrapResponse,
+)
+def get_tma_bootstrap(
+    init_data=Depends(get_tma_init_data),
+    chat_id: int = Depends(get_tma_chat_id),
+) -> TmaBootstrapResponse:
+    return build_tma_bootstrap_response(
+        auth_date=init_data.auth_date,
+        user=init_data.user,
+        chat=init_data.chat,
+        chat_id=chat_id,
+        timezone_name=get_chat_timezone_name(chat_id),
+        chat_type=init_data.chat_type,
+        start_param=init_data.start_param,
+        active_reminders=list_active_reminders_for_chat(chat_id),
+    )
 
 
 @app.get(

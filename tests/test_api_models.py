@@ -16,6 +16,8 @@ from app.api_models import (
     ReminderScheduleTypeOption,
     WeekdayOption,
     build_reminder_form_options_response,
+    TmaBootstrapResponse,
+    build_tma_bootstrap_response,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
@@ -219,4 +221,67 @@ def test_build_reminder_form_options_response() -> None:
         ],
         month_week_numbers=[1, 2, 3, 4, 5],
         month_days=list(range(1, 32)),
+    )
+
+
+def test_build_tma_bootstrap_response() -> None:
+    start_at = datetime(2099, 6, 10, 12, 12)
+
+    result = build_tma_bootstrap_response(
+        auth_date=1_700_000_000,
+        user={
+            "id": 123,
+            "first_name": "Eugene",
+        },
+        chat={
+            "id": 100,
+            "type": "group",
+            "title": "Home",
+        },
+        chat_id=100,
+        timezone_name="Asia/Yekaterinburg",
+        chat_type="group",
+        start_param="chat_100",
+        active_reminders=[
+            ReminderReadData(
+                id=42,
+                chat_id=100,
+                reminder_text="Проверить релиз",
+                schedule_type="every_days",
+                start_at=start_at,
+                timezone_name="Asia/Yekaterinburg",
+                interval_days=3,
+            )
+        ],
+    )
+
+    assert result == TmaBootstrapResponse(
+        context=TmaContextResponse(
+            auth_date=1_700_000_000,
+            user={
+                "id": 123,
+                "first_name": "Eugene",
+            },
+            chat={
+                "id": 100,
+                "type": "group",
+                "title": "Home",
+            },
+            chat_id=100,
+            timezone_name="Asia/Yekaterinburg",
+            chat_type="group",
+            start_param="chat_100",
+        ),
+        reminder_options=build_reminder_form_options_response(),
+        active_reminders=[
+            ReminderResponse(
+                id=42,
+                chat_id=100,
+                reminder_text="Проверить релиз",
+                schedule_type="every_days",
+                start_at=start_at,
+                timezone_name="Asia/Yekaterinburg",
+                interval_days=3,
+            )
+        ],
     )

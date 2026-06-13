@@ -1,9 +1,11 @@
 const telegram = window.Telegram?.WebApp;
+
 const initData = getTelegramInitData();
 const DEFAULT_START_OFFSET_MINUTES = 5;
 
 function getTelegramInitData() {
   const sdkInitData = telegram?.initData || "";
+
   if (sdkInitData) {
     return sdkInitData;
   }
@@ -15,7 +17,9 @@ function getTelegramInitData() {
   const searchParams = new URLSearchParams(window.location.search);
 
   return (
-    hashParams.get("tgWebAppData") || searchParams.get("tgWebAppData") || ""
+    hashParams.get("tgWebAppData") ||
+    searchParams.get("tgWebAppData") ||
+    ""
   );
 }
 
@@ -35,6 +39,14 @@ function buildMissingInitDataMessage() {
   ].join("\n");
 }
 
+function getDeviceTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    return "";
+  }
+}
+
 const state = {
   context: null,
   reminderOptions: null,
@@ -45,10 +57,17 @@ const state = {
 const elements = {
   chatTitle: document.querySelector("#chat-title"),
   status: document.querySelector("#status"),
+
+  deviceTimezoneBlock: document.querySelector("#device-timezone-block"),
+  deviceTimezoneName: document.querySelector("#device-timezone-name"),
+  useDeviceTimezoneButton: document.querySelector("#use-device-timezone-button"),
+
   timezoneForm: document.querySelector("#timezone-form"),
   chatTimezoneName: document.querySelector("#chat-timezone-name"),
   timezoneSaveButton: document.querySelector("#timezone-save-button"),
+
   reloadButton: document.querySelector("#reload-button"),
+
   form: document.querySelector("#reminder-form"),
   formTitle: document.querySelector("#form-title"),
   reminderId: document.querySelector("#reminder-id"),
@@ -62,10 +81,12 @@ const elements = {
   monthDayOfWeek: document.querySelector("#month-day-of-week"),
   monthWeekNumber: document.querySelector("#month-week-number"),
   monthDay: document.querySelector("#month-day"),
+
   intervalDaysField: document.querySelector("#interval-days-field"),
   weeklyFields: document.querySelector("#weekly-fields"),
   monthlyWeekdayFields: document.querySelector("#monthly-weekday-fields"),
   monthDayField: document.querySelector("#month-day-field"),
+
   preview: document.querySelector("#preview"),
   previewButton: document.querySelector("#preview-button"),
   saveButton: document.querySelector("#save-button"),
@@ -89,7 +110,7 @@ function setBusy(isBusy) {
   state.isBusy = isBusy;
 
   for (const button of document.querySelectorAll("button")) {
-    if (button.dataset.modalButton === "true") {
+    if (button.hasAttribute("data-modal-button")) {
       continue;
     }
 
@@ -97,26 +118,14 @@ function setBusy(isBusy) {
   }
 }
 
-function releaseInputFocus() {
-  const activeElement = document.activeElement;
-
-  if (activeElement && typeof activeElement.blur === "function") {
-    activeElement.blur();
-  }
-
-  if (typeof telegram?.hideKeyboard === "function") {
-    telegram.hideKeyboard();
-  }
-}
-
 function showPreview(preview) {
   const period = preview.period || "одноразовое";
 
   elements.preview.innerHTML = `
-    <strong>Предпросмотр</strong><br>
-    ${escapeHtml(preview.reminder_text)}<br>
-    ${escapeHtml(period)}<br>
-    Первое срабатывание: ${formatDateTime(preview.start_at)}
+    <strong>Предпросмотр</strong>
+    <div>${escapeHtml(preview.reminder_text)}</div>
+    <div class="muted">${escapeHtml(period)}</div>
+    <div class="muted">Первое срабатывание: ${formatDateTime(preview.start_at)}</div>
   `;
   elements.preview.hidden = false;
 }
@@ -173,6 +182,7 @@ async function loadBootstrap() {
   state.reminders = sortReminders(bootstrap.active_reminders);
 
   renderContext();
+  renderDeviceTimezoneSuggestion();
   renderOptions();
   renderReminders();
   setDefaultStartAtIfEmpty();
@@ -187,17 +197,37 @@ function renderContext() {
   elements.timezoneName.value = state.context.timezone_name;
 }
 
+function renderDeviceTimezoneSuggestion() {
+  const deviceTimezone = getDeviceTimezone();
+
+  if (!deviceTimezone) {
+    elements.deviceTimezoneBlock.hidden = true;
+    elements.deviceTimezoneName.textContent = "";
+    return;
+  }
+
+  elements.deviceTimezoneName.textContent = deviceTimezone;
+  elements.deviceTimezoneBlock.hidden = false;
+
+  const isCurrentTimezone = deviceTimezone === state.context?.timezone_name;
+  elements.useDeviceTimezoneButton.textContent = isCurrentTimezone
+    ? "Таймзона устройства уже используется"
+    : "Использовать таймзону устройства";
+}
+
 function renderOptions() {
   fillSelect(
     elements.dayOfWeek,
     state.reminderOptions.weekdays,
     "Не выбрано",
   );
+
   fillSelect(
     elements.monthDayOfWeek,
     state.reminderOptions.weekdays,
     "Не выбрано",
   );
+
   fillSelect(
     elements.monthWeekNumber,
     state.reminderOptions.month_week_numbers.map((value) => ({
@@ -206,6 +236,7 @@ function renderOptions() {
     })),
     "Не выбрано",
   );
+
   fillSelect(
     elements.monthDay,
     state.reminderOptions.month_days.map((value) => ({
@@ -302,11 +333,13 @@ function sortReminders(reminders) {
 
 function getReminderSortTime(reminder) {
   const value = reminder.next_run_at || reminder.start_at;
+
   if (!value) {
     return Number.POSITIVE_INFINITY;
   }
 
   const time = new Date(value).getTime();
+
   if (Number.isNaN(time)) {
     return Number.POSITIVE_INFINITY;
   }
@@ -383,6 +416,7 @@ function getStartAtDate() {
   }
 
   const date = new Date(elements.startAt.value);
+
   if (Number.isNaN(date.getTime())) {
     return null;
   }
@@ -489,21 +523,19 @@ function startEdit(reminder) {
   elements.scheduleType.value = reminder.schedule_type;
   elements.startAt.value = toDateTimeLocalValue(reminder.start_at);
   elements.timezoneName.value = reminder.timezone_name;
-
   elements.intervalDays.value = reminder.interval_days || "";
   elements.intervalWeeks.value = reminder.interval_weeks || "";
   elements.dayOfWeek.value = reminder.day_of_week || "";
   elements.monthDayOfWeek.value = reminder.day_of_week || "";
   elements.monthWeekNumber.value = reminder.month_week_number || "";
   elements.monthDay.value = reminder.month_day || "";
-
   elements.saveButton.textContent = "Сохранить изменения";
   elements.cancelEditButton.hidden = false;
 
   hidePreview();
   updateConditionalFields();
   showStatus(
-    "Редактируешь напоминание. Внеси изменения и нажми «Сохранить изменения».",
+    "Редактируешь напоминание.\nВнеси изменения и нажми «Сохранить изменения».",
   );
 
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -514,9 +546,7 @@ function resetForm() {
   elements.reminderId.value = "";
   elements.formTitle.textContent = "Создать напоминание";
   elements.timezoneName.value = state.context?.timezone_name || "";
-
   setDefaultStartAt();
-
   elements.saveButton.textContent = "Сохранить";
   elements.cancelEditButton.hidden = true;
 
@@ -540,7 +570,7 @@ async function previewReminder() {
   showPreview(preview);
 }
 
-async function saveTimezone() {
+async function saveTimezone(statusMessage = "Таймзона чата обновлена.") {
   hideStatus();
 
   if (!validateTimezoneForm()) {
@@ -561,8 +591,21 @@ async function saveTimezone() {
   elements.chatTimezoneName.value = timezone.timezone_name;
 
   renderContext();
+  renderDeviceTimezoneSuggestion();
   resetForm();
-  showStatus("Таймзона чата обновлена.");
+  showStatus(statusMessage);
+}
+
+async function useDeviceTimezone() {
+  const deviceTimezone = getDeviceTimezone();
+
+  if (!deviceTimezone) {
+    showStatus("Не удалось определить таймзону устройства.", "error");
+    return;
+  }
+
+  elements.chatTimezoneName.value = deviceTimezone;
+  await saveTimezone("Таймзона устройства применена для этого чата.");
 }
 
 async function saveReminder() {
@@ -574,7 +617,9 @@ async function saveReminder() {
 
   const reminderId = elements.reminderId.value;
   const isEdit = Boolean(reminderId);
-  const path = isEdit ? `/api/tma/reminders/${reminderId}` : "/api/tma/reminders";
+  const path = isEdit
+    ? `/api/tma/reminders/${reminderId}`
+    : "/api/tma/reminders";
   const method = isEdit ? "PUT" : "POST";
 
   await apiRequest(path, {
@@ -587,75 +632,51 @@ async function saveReminder() {
   showStatus(isEdit ? "Напоминание обновлено." : "Напоминание создано.");
 }
 
-function confirmAction(message) {
-  releaseInputFocus();
-
+function showDeleteConfirmation(reminder) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
-    overlay.style.position = "fixed";
-    overlay.style.inset = "0";
-    overlay.style.zIndex = "9999";
-    overlay.style.display = "flex";
-    overlay.style.alignItems = "center";
-    overlay.style.justifyContent = "center";
-    overlay.style.padding = "20px";
-    overlay.style.background = "rgba(0, 0, 0, 0.45)";
+    overlay.className = "modal-backdrop";
 
-    const dialog = document.createElement("div");
+    const dialog = document.createElement("section");
+    dialog.className = "modal-card";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    dialog.style.width = "100%";
-    dialog.style.maxWidth = "420px";
-    dialog.style.boxSizing = "border-box";
-    dialog.style.padding = "20px";
-    dialog.style.borderRadius = "18px";
-    dialog.style.background = "var(--tg-theme-bg-color, #ffffff)";
-    dialog.style.color = "var(--tg-theme-text-color, #111111)";
-    dialog.style.boxShadow = "0 18px 48px rgba(0, 0, 0, 0.28)";
+    dialog.setAttribute("aria-labelledby", "delete-confirmation-title");
 
-    const title = document.createElement("h3");
+    const title = document.createElement("h2");
+    title.id = "delete-confirmation-title";
     title.textContent = "Удалить напоминание?";
-    title.style.margin = "0 0 12px";
 
     const text = document.createElement("p");
-    text.textContent = message;
-    text.style.margin = "0 0 20px";
-    text.style.whiteSpace = "pre-wrap";
-    text.style.color = "var(--tg-theme-text-color, #111111)";
+    text.className = "modal-text";
+    text.textContent = reminder.reminder_text;
 
     const actions = document.createElement("div");
-    actions.style.display = "flex";
-    actions.style.gap = "10px";
-    actions.style.justifyContent = "flex-end";
+    actions.className = "modal-actions";
 
     const cancelButton = document.createElement("button");
-    cancelButton.type = "button";
-    cancelButton.dataset.modalButton = "true";
     cancelButton.className = "secondary-button";
-    cancelButton.textContent = "Отмена";
+    cancelButton.type = "button";
+    cancelButton.textContent = "Отменить";
+    cancelButton.setAttribute("data-modal-button", "");
 
     const confirmButton = document.createElement("button");
-    confirmButton.type = "button";
-    confirmButton.dataset.modalButton = "true";
     confirmButton.className = "danger-button";
+    confirmButton.type = "button";
     confirmButton.textContent = "Удалить";
+    confirmButton.setAttribute("data-modal-button", "");
 
-    const close = (result) => {
-      document.removeEventListener("keydown", handleKeydown);
+    function close(result) {
+      document.removeEventListener("keydown", handleKeyDown);
       overlay.remove();
-      releaseInputFocus();
       resolve(result);
-    };
+    }
 
-    const handleKeydown = (event) => {
+    function handleKeyDown(event) {
       if (event.key === "Escape") {
-        event.preventDefault();
         close(false);
       }
-    };
-
-    cancelButton.addEventListener("click", () => close(false));
-    confirmButton.addEventListener("click", () => close(true));
+    }
 
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) {
@@ -663,26 +684,24 @@ function confirmAction(message) {
       }
     });
 
-    document.addEventListener("keydown", handleKeydown);
+    cancelButton.addEventListener("click", () => close(false));
+    confirmButton.addEventListener("click", () => close(true));
+    document.addEventListener("keydown", handleKeyDown);
 
     actions.append(cancelButton, confirmButton);
     dialog.append(title, text, actions);
     overlay.append(dialog);
     document.body.append(overlay);
 
-    confirmButton.focus();
+    cancelButton.focus();
   });
-}
-
-function buildDeleteConfirmationMessage(reminder) {
-  return reminder.reminder_text;
 }
 
 async function deleteReminder(reminder) {
   hideStatus();
-  releaseInputFocus();
 
-  const confirmed = await confirmAction(buildDeleteConfirmationMessage(reminder));
+  const confirmed = await showDeleteConfirmation(reminder);
+
   if (!confirmed) {
     return;
   }
@@ -701,6 +720,7 @@ function formatDateTime(value) {
   }
 
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) {
     return "некорректная дата";
   }
@@ -738,6 +758,9 @@ elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap)
 elements.startAt.addEventListener("focus", updateStartAtMin);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
+elements.useDeviceTimezoneButton.addEventListener("click", () =>
+  handleAsync(useDeviceTimezone),
+);
 
 elements.form.addEventListener("submit", (event) => {
   event.preventDefault();

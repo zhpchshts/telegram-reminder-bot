@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Напоминания</title>
-    <link rel="stylesheet" href="./styles.css?v=20260614-1" />
+    <link rel="stylesheet" href="./styles.css?v=20260614-2" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -24,20 +24,38 @@
       <section class="card">
         <h2>Таймзона чата</h2>
         <p class="muted">
-          Используется для новых напоминаний и команд бота в этом чате.
+          Таймзона общая для всего чата. По ней бот рассчитывает время
+          срабатывания новых напоминаний.
         </p>
+
+        <div id="device-timezone-block" class="timezone-suggestion" hidden>
+          <p class="muted">Таймзона устройства:</p>
+          <p id="device-timezone-name" class="timezone-suggestion-value"></p>
+          <button
+            id="use-device-timezone-button"
+            class="secondary-button"
+            type="button"
+          >
+            Использовать таймзону устройства
+          </button>
+        </div>
 
         <form id="timezone-form" class="form">
           <label class="field">
-            <span>Таймзона</span>
+            <span>Таймзона чата</span>
             <input
               id="chat-timezone-name"
               name="timezone_name"
               type="text"
               placeholder="Asia/Yekaterinburg"
+              autocomplete="off"
               required
             />
           </label>
+
+          <p class="muted">
+            Формат: Europe/Moscow, Asia/Yekaterinburg, Asia/Almaty.
+          </p>
 
           <div class="actions">
             <button
@@ -173,6 +191,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260614-1"></script>
+    <script src="./app.js?v=20260614-2"></script>
   </body>
 </html>

@@ -1,5 +1,6 @@
 const telegram = window.Telegram?.WebApp;
 const initData = getTelegramInitData();
+const DEFAULT_START_OFFSET_MINUTES = 5;
 
 function getTelegramInitData() {
   const sdkInitData = telegram?.initData || "";
@@ -147,6 +148,7 @@ async function loadBootstrap() {
   renderContext();
   renderOptions();
   renderReminders();
+  setDefaultStartAtIfEmpty();
 }
 
 function renderContext() {
@@ -310,6 +312,31 @@ function numberOrNull(value) {
   return Number(value);
 }
 
+function setDefaultStartAtIfEmpty() {
+  updateStartAtMin();
+
+  if (!elements.startAt.value) {
+    setDefaultStartAt();
+  }
+}
+
+function setDefaultStartAt() {
+  const date = new Date();
+
+  date.setMinutes(date.getMinutes() + DEFAULT_START_OFFSET_MINUTES);
+  date.setSeconds(0, 0);
+
+  elements.startAt.value = toDateTimeLocalValue(date);
+}
+
+function updateStartAtMin() {
+  const date = new Date();
+
+  date.setSeconds(0, 0);
+
+  elements.startAt.min = toDateTimeLocalValue(date);
+}
+
 function startEdit(reminder) {
   elements.reminderId.value = reminder.id;
   elements.reminderText.value = reminder.reminder_text;
@@ -335,9 +362,9 @@ function resetForm() {
   elements.form.reset();
   elements.reminderId.value = "";
   elements.timezoneName.value = state.context?.timezone_name || "";
+  setDefaultStartAt();
   elements.saveButton.textContent = "Сохранить";
   elements.cancelEditButton.hidden = true;
-
   hidePreview();
   updateConditionalFields();
 }
@@ -409,6 +436,7 @@ async function handleAsync(action) {
 }
 
 elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
+elements.startAt.addEventListener("focus", updateStartAtMin);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
 elements.form.addEventListener("submit", (event) => handleAsync(() => saveReminder(event)));

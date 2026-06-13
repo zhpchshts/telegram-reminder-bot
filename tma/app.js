@@ -43,6 +43,7 @@ const state = {
   context: null,
   reminderOptions: null,
   reminders: [],
+  isBusy: false,
 };
 
 const elements = {
@@ -82,6 +83,14 @@ function hideStatus() {
   elements.status.hidden = true;
   elements.status.textContent = "";
   elements.status.className = "status";
+}
+
+function setBusy(isBusy) {
+  state.isBusy = isBusy;
+
+  for (const button of document.querySelectorAll("button")) {
+    button.disabled = isBusy;
+  }
 }
 
 function showPreview(preview) {
@@ -251,7 +260,9 @@ function createReminderCard(reminder) {
   deleteButton.className = "danger-button";
   deleteButton.type = "button";
   deleteButton.textContent = "Удалить";
-  deleteButton.addEventListener("click", () => deleteReminder(reminder));
+  deleteButton.addEventListener("click", () =>
+    handleAsync(() => deleteReminder(reminder)),
+  );
 
   actions.append(editButton, deleteButton);
   card.append(title, meta, actions);
@@ -387,16 +398,12 @@ async function previewReminder() {
   showPreview(preview);
 }
 
-async function saveReminder(event) {
-  event.preventDefault();
+async function saveReminder() {
   hideStatus();
 
   const reminderId = elements.reminderId.value;
   const isEdit = Boolean(reminderId);
-
-  const path = isEdit
-    ? `/api/tma/reminders/${reminderId}`
-    : "/api/tma/reminders";
+  const path = isEdit ? `/api/tma/reminders/${reminderId}` : "/api/tma/reminders";
   const method = isEdit ? "PUT" : "POST";
 
   await apiRequest(path, {
@@ -406,7 +413,6 @@ async function saveReminder(event) {
 
   resetForm();
   await loadBootstrap();
-
   showStatus(isEdit ? "Напоминание обновлено." : "Напоминание создано.");
 }
 
@@ -454,10 +460,18 @@ function toDateTimeLocalValue(value) {
 }
 
 async function handleAsync(action) {
+  if (state.isBusy) {
+    return;
+  }
+
+  setBusy(true);
+
   try {
     await action();
   } catch (error) {
     showStatus(error.message, "error");
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -465,7 +479,10 @@ elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap)
 elements.startAt.addEventListener("focus", updateStartAtMin);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
-elements.form.addEventListener("submit", (event) => handleAsync(() => saveReminder(event)));
+elements.form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  handleAsync(saveReminder);
+});
 elements.cancelEditButton.addEventListener("click", resetForm);
 
 telegram?.ready();

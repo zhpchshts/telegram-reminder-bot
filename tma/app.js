@@ -1,6 +1,43 @@
 const telegram = window.Telegram?.WebApp;
-const initData = telegram?.initData || "";
+const initData = getTelegramInitData();
 
+function getTelegramInitData() {
+  const sdkInitData = telegram?.initData || "";
+
+  if (sdkInitData) {
+    return sdkInitData;
+  }
+
+  const hash = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+
+  const hashParams = new URLSearchParams(hash);
+  const searchParams = new URLSearchParams(window.location.search);
+
+  return (
+    hashParams.get("tgWebAppData") ||
+    searchParams.get("tgWebAppData") ||
+    ""
+  );
+}
+
+function buildMissingInitDataMessage() {
+  const hash = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+
+  const hashParams = new URLSearchParams(hash);
+  const searchParams = new URLSearchParams(window.location.search);
+
+  return [
+    "Telegram initData не найден.",
+    "",
+    "Открой Mini App именно через кнопку /app в Telegram, а не прямой ссылкой в браузере.",
+    "",
+    `Debug: WebApp=${telegram ? "yes" : "no"}, platform=${telegram?.platform || "unknown"}, version=${telegram?.version || "unknown"}, hash_has_tgWebAppData=${hashParams.has("tgWebAppData") ? "yes" : "no"}, search_has_tgWebAppData=${searchParams.has("tgWebAppData") ? "yes" : "no"}`,
+  ].join("\n");
+}
 const state = {
   context: null,
   reminderOptions: null,
@@ -72,6 +109,9 @@ function escapeHtml(value) {
 }
 
 async function apiRequest(path, options = {}) {
+	if (!initData) {
+    throw new Error(buildMissingInitDataMessage());
+  }
   const response = await fetch(path, {
     ...options,
     headers: {

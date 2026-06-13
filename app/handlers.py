@@ -12,6 +12,7 @@ from app.reminder_models import ReminderCreateData
 from app.reminder_parsing import (
     ReminderParseError,
     ReminderParseResult,
+    parse_delete_command,
     parse_every_days_command,
     parse_every_days_from_command,
     parse_every_week_command,
@@ -482,23 +483,20 @@ async def list_reminders(message: Message) -> None:
 
 @router.message(Command("delete"))
 async def delete_reminder(message: Message) -> None:
-    parts = await split_command(
-        message,
-        maxsplit=1,
-        min_parts=2,
-        usage_text=(
-            "Укажи ID напоминания.\n\nФормат:\n/delete ID\n\nПример:\n/delete 1"
-        ),
-        missing_text=None,
-    )
-
-    if not parts:
-        return
+    usage_text = "Укажи ID напоминания.\n\nФормат:\n/delete ID\n\nПример:\n/delete 1"
 
     try:
-        reminder_id = int(parts[1].strip())
-    except ValueError:
-        await message.answer("ID должен быть числом.\nНапример: /delete 1")
+        reminder_id = parse_delete_command(message.text)
+    except ReminderParseError as error:
+        if str(error) == "Не хватает данных.":
+            await message.answer(usage_text)
+            return
+
+        if str(error) == "ID должен быть числом.":
+            await message.answer("ID должен быть числом.\nНапример: /delete 1")
+            return
+
+        await message.answer(str(error))
         return
 
     was_deleted = delete_active_reminder_for_chat(

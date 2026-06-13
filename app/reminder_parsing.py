@@ -422,3 +422,16 @@ def parse_monthly_day_from_command(
         reject_past_heading="Дата и время первого срабатывания должны быть в будущем.",
         reject_past_show_candidate=True,
     )
+
+
+def parse_delete_command(command_text: str | None) -> int:
+    parts = split_command_text(
+        command_text,
+        maxsplit=1,
+        min_parts=2,
+    )
+
+    try:
+        return int(parts[1].strip())
+    except ValueError as error:
+        raise ReminderParseError("ID должен быть числом.") from error

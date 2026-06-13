@@ -9,6 +9,7 @@ from app.reminder_models import ReminderCreateData
 from app.reminder_parsing import (
     ReminderParseError,
     ReminderParseResult,
+    parse_delete_command,
     parse_every_days_command,
     parse_every_days_from_command,
     parse_every_week_command,
@@ -248,3 +249,21 @@ def test_normalize_weekday_rejects_unknown_value() -> None:
             TIMEZONE_NAME,
             now=NOW,
         )
+
+
+def test_parse_delete_command() -> None:
+    assert parse_delete_command("/delete 123") == 123
+
+
+def test_parse_delete_command_strips_id_spaces() -> None:
+    assert parse_delete_command("/delete     123") == 123
+
+
+def test_parse_delete_command_rejects_missing_id() -> None:
+    with pytest.raises(ReminderParseError, match="Не хватает данных."):
+        parse_delete_command("/delete")
+
+
+def test_parse_delete_command_rejects_non_integer_id() -> None:
+    with pytest.raises(ReminderParseError, match="ID должен быть числом."):
+        parse_delete_command("/delete abc")

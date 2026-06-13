@@ -32,6 +32,8 @@ from app.reminder_service import (
     set_chat_timezone_for_chat,
 )
 
+from app.reminder_models import ReminderCreateData
+
 router = Router()
 
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
@@ -135,31 +137,27 @@ async def create_schedule_and_confirm(
     month_week_number: int | None = None,
     month_day: int | None = None,
 ) -> None:
-    reminder_id = create_scheduled_reminder(
-        bot=bot,
-        chat_id=message.chat.id,
+    data = ReminderCreateData(
         reminder_text=reminder_text,
         schedule_type=schedule_type,
         start_at=start_at,
+        timezone_name=timezone_name,
         interval_days=interval_days,
         interval_weeks=interval_weeks,
         day_of_week=day_of_week,
         month_week_number=month_week_number,
         month_day=month_day,
-        timezone_name=timezone_name,
+    )
+
+    reminder_id = create_scheduled_reminder(
+        bot=bot,
+        chat_id=message.chat.id,
+        data=data,
     )
 
     answer_text = build_created_reminder_text(
         reminder_id=reminder_id,
-        reminder_text=reminder_text,
-        schedule_type=schedule_type,
-        start_at=start_at,
-        interval_days=interval_days,
-        interval_weeks=interval_weeks,
-        day_of_week=day_of_week,
-        month_week_number=month_week_number,
-        month_day=month_day,
-        timezone_name=timezone_name,
+        data=data,
     )
 
     await message.answer(answer_text)

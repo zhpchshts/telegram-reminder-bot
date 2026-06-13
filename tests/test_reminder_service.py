@@ -10,6 +10,7 @@ from app.reminder_service import (
     delete_active_reminder_for_chat,
     set_chat_timezone_for_chat,
 )
+from app.reminder_models import ReminderCreateData
 
 
 class FakeScheduler:
@@ -229,11 +230,13 @@ def test_create_scheduled_reminder_creates_db_record_and_schedules_job(
     result = create_scheduled_reminder(
         bot=bot,
         chat_id=100,
-        reminder_text="Проверить релиз",
-        schedule_type="every_days",
-        start_at=start_at,
-        timezone_name="Asia/Yekaterinburg",
-        interval_days=3,
+        data=ReminderCreateData(
+            reminder_text="Проверить релиз",
+            schedule_type="every_days",
+            start_at=start_at,
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=3,
+        ),
     )
 
     assert result == 42
@@ -341,7 +344,8 @@ def test_build_created_reminder_text_for_once_reminder(
         return "10.06.2026 12:12"
 
     def fake_format_next_run_line(
-        reminder_id: int, timezone_name: str | None = None
+        reminder_id: int,
+        timezone_name: str | None = None,
     ) -> str:
         assert reminder_id == 42
         assert timezone_name == "Asia/Yekaterinburg"
@@ -360,10 +364,12 @@ def test_build_created_reminder_text_for_once_reminder(
 
     result = build_created_reminder_text(
         reminder_id=42,
-        reminder_text="Проверить релиз",
-        schedule_type="once",
-        start_at=start_at,
-        timezone_name="Asia/Yekaterinburg",
+        data=ReminderCreateData(
+            reminder_text="Проверить релиз",
+            schedule_type="once",
+            start_at=start_at,
+            timezone_name="Asia/Yekaterinburg",
+        ),
     )
 
     assert result == (
@@ -393,7 +399,8 @@ def test_build_created_reminder_text_for_repeating_reminder(
         return "10.06.2026 12:12"
 
     def fake_format_next_run_line(
-        reminder_id: int, timezone_name: str | None = None
+        reminder_id: int,
+        timezone_name: str | None = None,
     ) -> str:
         assert reminder_id == 42
         assert timezone_name == "Asia/Yekaterinburg"
@@ -417,11 +424,13 @@ def test_build_created_reminder_text_for_repeating_reminder(
 
     result = build_created_reminder_text(
         reminder_id=42,
-        reminder_text="Проверить релиз",
-        schedule_type="every_days",
-        start_at=start_at,
-        timezone_name="Asia/Yekaterinburg",
-        interval_days=3,
+        data=ReminderCreateData(
+            reminder_text="Проверить релиз",
+            schedule_type="every_days",
+            start_at=start_at,
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=3,
+        ),
     )
 
     assert result == (

@@ -1,4 +1,3 @@
-from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram import Bot
 from app.config import APP_TIMEZONE_NAME
@@ -16,6 +15,8 @@ from app.formatting import (
     format_reminder_for_list,
     get_int,
 )
+
+from app.reminder_models import ReminderCreateData
 from app.scheduler import format_next_run_line, scheduler, schedule_reminder
 
 
@@ -41,42 +42,34 @@ def create_scheduled_reminder(
     *,
     bot: Bot,
     chat_id: int,
-    reminder_text: str,
-    schedule_type: str,
-    start_at: datetime,
-    timezone_name: str,
-    interval_days: int | None = None,
-    interval_weeks: int | None = None,
-    day_of_week: str | None = None,
-    month_week_number: int | None = None,
-    month_day: int | None = None,
+    data: ReminderCreateData,
 ) -> int:
     reminder_id = create_reminder_in_db(
         chat_id=chat_id,
-        reminder_text=reminder_text,
-        schedule_type=schedule_type,
-        start_at=start_at,
-        interval_days=interval_days,
-        interval_weeks=interval_weeks,
-        day_of_week=day_of_week,
-        month_week_number=month_week_number,
-        month_day=month_day,
-        timezone=timezone_name,
+        reminder_text=data.reminder_text,
+        schedule_type=data.schedule_type,
+        start_at=data.start_at,
+        interval_days=data.interval_days,
+        interval_weeks=data.interval_weeks,
+        day_of_week=data.day_of_week,
+        month_week_number=data.month_week_number,
+        month_day=data.month_day,
+        timezone=data.timezone_name,
     )
 
     schedule_reminder(
         bot=bot,
         reminder_id=reminder_id,
         chat_id=chat_id,
-        reminder_text=reminder_text,
-        schedule_type=schedule_type,
-        start_at=start_at,
-        interval_days=interval_days,
-        interval_weeks=interval_weeks,
-        day_of_week=day_of_week,
-        month_week_number=month_week_number,
-        month_day=month_day,
-        timezone_name=timezone_name,
+        reminder_text=data.reminder_text,
+        schedule_type=data.schedule_type,
+        start_at=data.start_at,
+        interval_days=data.interval_days,
+        interval_weeks=data.interval_weeks,
+        day_of_week=data.day_of_week,
+        month_week_number=data.month_week_number,
+        month_day=data.month_day,
+        timezone_name=data.timezone_name,
     )
 
     return reminder_id
@@ -85,19 +78,11 @@ def create_scheduled_reminder(
 def build_created_reminder_text(
     *,
     reminder_id: int,
-    reminder_text: str,
-    schedule_type: str,
-    start_at: datetime,
-    timezone_name: str,
-    interval_days: int | None = None,
-    interval_weeks: int | None = None,
-    day_of_week: str | None = None,
-    month_week_number: int | None = None,
-    month_day: int | None = None,
+    data: ReminderCreateData,
 ) -> str:
     header = (
         "Одноразовое напоминание создано."
-        if schedule_type == "once"
+        if data.schedule_type == "once"
         else "Повторяющееся напоминание создано."
     )
 
@@ -107,25 +92,25 @@ def build_created_reminder_text(
         f"ID: {reminder_id}",
     ]
 
-    if schedule_type != "once":
+    if data.schedule_type != "once":
         answer_lines.append(
             "Период: "
             + format_period_line(
-                schedule_type=schedule_type,
-                interval_days=interval_days,
-                interval_weeks=interval_weeks,
-                day_of_week=day_of_week,
-                month_week_number=month_week_number,
-                month_day=month_day,
+                schedule_type=data.schedule_type,
+                interval_days=data.interval_days,
+                interval_weeks=data.interval_weeks,
+                day_of_week=data.day_of_week,
+                month_week_number=data.month_week_number,
+                month_day=data.month_day,
             )
         )
 
     answer_lines.extend(
         [
-            f"Таймзона: {timezone_name}",
-            f"Первое срабатывание: {format_datetime_ru(start_at, timezone_name)}",
-            format_next_run_line(reminder_id, timezone_name),
-            f"Текст: {reminder_text}",
+            f"Таймзона: {data.timezone_name}",
+            f"Первое срабатывание: {format_datetime_ru(data.start_at, data.timezone_name)}",
+            format_next_run_line(reminder_id, data.timezone_name),
+            f"Текст: {data.reminder_text}",
         ]
     )
 

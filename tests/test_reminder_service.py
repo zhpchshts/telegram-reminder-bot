@@ -10,6 +10,7 @@ from app.reminder_service import (
     delete_active_reminder_for_chat,
     list_active_reminders_for_chat,
     set_chat_timezone_for_chat,
+    validate_reminder_create_data,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
@@ -527,3 +528,108 @@ def test_list_active_reminders_for_chat_returns_read_models(
             interval_days=3,
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("data", "error_text"),
+    [
+        (
+            ReminderCreateData(
+                reminder_text="",
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            "reminder_text is required.",
+        ),
+        (
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                schedule_type="unknown",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            "Unknown schedule_type.",
+        ),
+        (
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                schedule_type="every_days",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            "interval_days must be greater than or equal to 1.",
+        ),
+        (
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                schedule_type="every_week",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+                interval_weeks=2,
+                day_of_week="XXX",
+            ),
+            "day_of_week is invalid.",
+        ),
+        (
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                schedule_type="monthly_weekday",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+                month_week_number=6,
+                day_of_week="MON",
+            ),
+            "month_week_number must be between 1 and 5.",
+        ),
+        (
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                schedule_type="monthly_day",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+                month_day=32,
+            ),
+            "month_day must be between 1 and 31.",
+        ),
+    ],
+)
+def test_validate_reminder_create_data_rejects_invalid_data(
+    data: ReminderCreateData,
+    error_text: str,
+) -> None:
+    with pytest.raises(ValueError, match=error_text):
+        validate_reminder_create_data(data)
+
+
+def test_create_scheduled_reminder_validates_data_before_db_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_create_reminder_in_db(**kwargs: object) -> int:
+        raise AssertionError("Invalid reminder must not be saved to database.")
+
+    def fake_schedule_reminder(**kwargs: object) -> None:
+        raise AssertionError("Invalid reminder must not be scheduled.")
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "create_reminder_in_db",
+        fake_create_reminder_in_db,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        fake_schedule_reminder,
+    )
+
+    with pytest.raises(ValueError, match="Unknown schedule_type."):
+        create_scheduled_reminder(
+            bot=object(),
+            chat_id=100,
+            data=ReminderCreateData(
+                reminder_text="Проверить релиз",
+                schedule_type="unknown",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+        )

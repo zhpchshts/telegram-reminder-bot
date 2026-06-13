@@ -92,11 +92,17 @@ def create_chat_reminder(
             detail="start_at must be in the future.",
         )
 
-    reminder_id = create_scheduled_reminder(
-        bot=bot,
-        chat_id=chat_id,
-        data=data,
-    )
+    try:
+        reminder_id = create_scheduled_reminder(
+            bot=bot,
+            chat_id=chat_id,
+            data=data,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
 
     return build_created_reminder_response(
         reminder_id=reminder_id,

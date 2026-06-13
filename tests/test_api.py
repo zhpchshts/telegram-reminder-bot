@@ -171,6 +171,23 @@ def test_create_chat_reminder_rejects_past_start_at() -> None:
     assert error.value.detail == "start_at must be in the future."
 
 
+def test_create_chat_reminder_rejects_invalid_schedule_data() -> None:
+    with pytest.raises(HTTPException) as error:
+        create_chat_reminder(
+            chat_id=100,
+            request=ReminderCreateRequest(
+                reminder_text="Проверить релиз",
+                schedule_type="every_days",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            bot=BOT,
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.detail == "interval_days must be greater than or equal to 1."
+
+
 def test_get_chat_timezone_returns_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,3 +1,4 @@
+from app.constants import VALID_WEEKDAYS
 from app.reminder_mapping import build_reminder_read_data
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram import Bot
@@ -38,12 +39,56 @@ def set_chat_timezone_for_chat(*, chat_id: int, timezone_name: str) -> bool:
     return True
 
 
+def validate_positive_int(value: int | None, field_name: str) -> None:
+    if value is None or value < 1:
+        raise ValueError(f"{field_name} must be greater than or equal to 1.")
+
+
+def validate_day_of_week(day_of_week: str | None) -> None:
+    if day_of_week not in VALID_WEEKDAYS:
+        raise ValueError("day_of_week is invalid.")
+
+
+def validate_reminder_create_data(data: ReminderCreateData) -> None:
+    if not data.reminder_text.strip():
+        raise ValueError("reminder_text is required.")
+
+    if data.schedule_type == "once":
+        return
+
+    if data.schedule_type == "every_days":
+        validate_positive_int(data.interval_days, "interval_days")
+        return
+
+    if data.schedule_type == "every_week":
+        validate_positive_int(data.interval_weeks, "interval_weeks")
+        validate_day_of_week(data.day_of_week)
+        return
+
+    if data.schedule_type == "monthly_weekday":
+        if data.month_week_number is None or not 1 <= data.month_week_number <= 5:
+            raise ValueError("month_week_number must be between 1 and 5.")
+
+        validate_day_of_week(data.day_of_week)
+        return
+
+    if data.schedule_type == "monthly_day":
+        if data.month_day is None or not 1 <= data.month_day <= 31:
+            raise ValueError("month_day must be between 1 and 31.")
+
+        return
+
+    raise ValueError("Unknown schedule_type.")
+
+
 def create_scheduled_reminder(
     *,
     bot: Bot,
     chat_id: int,
     data: ReminderCreateData,
 ) -> int:
+    validate_reminder_create_data(data)
+
     reminder_id = create_reminder_in_db(
         chat_id=chat_id,
         reminder_text=data.reminder_text,

@@ -7,7 +7,12 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api_auth import get_tma_chat_id, get_tma_init_data, require_matching_chat_id
+from app.api_auth import (
+    get_tma_chat,
+    get_tma_chat_id,
+    get_tma_init_data,
+    require_matching_chat_id,
+)
 from app.api_models import (
     ChatTimezoneResponse,
     ChatTimezoneUpdateRequest,
@@ -115,12 +120,13 @@ def health() -> dict[str, str]:
 )
 def get_tma_context(
     init_data=Depends(get_tma_init_data),
+    tma_chat: dict[str, object] = Depends(get_tma_chat),
     chat_id: int = Depends(get_tma_chat_id),
 ) -> TmaContextResponse:
     return build_tma_context_response(
         auth_date=init_data.auth_date,
         user=init_data.user,
-        chat=init_data.chat,
+        chat=tma_chat,
         chat_id=chat_id,
         timezone_name=get_chat_timezone_name(chat_id),
         chat_type=init_data.chat_type,
@@ -144,12 +150,13 @@ def get_reminder_form_options(
 )
 def get_tma_bootstrap(
     init_data=Depends(get_tma_init_data),
+    tma_chat: dict[str, object] = Depends(get_tma_chat),
     chat_id: int = Depends(get_tma_chat_id),
 ) -> TmaBootstrapResponse:
     return build_tma_bootstrap_response(
         auth_date=init_data.auth_date,
         user=init_data.user,
-        chat=init_data.chat,
+        chat=tma_chat,
         chat_id=chat_id,
         timezone_name=get_chat_timezone_name(chat_id),
         chat_type=init_data.chat_type,

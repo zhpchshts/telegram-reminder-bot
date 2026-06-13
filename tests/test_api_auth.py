@@ -1,10 +1,11 @@
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
 from app import api_auth as api_auth_module
 from app.api_auth import (
     TMA_INIT_DATA_HEADER,
+    get_tma_chat,
     get_tma_chat_id,
     get_tma_init_data,
     require_matching_chat_id,
@@ -196,11 +197,20 @@ def test_tma_chat_id_dependency_returns_chat_id(
     assert response.json() == {"chat_id": -100}
 
 
-def test_tma_chat_id_dependency_rejects_missing_chat(
+def test_tma_chat_id_dependency_rejects_missing_chat_and_user(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    patch_validated_init_data(monkeypatch, make_init_data(chat=None))
+    patch_validated_init_data(
+        monkeypatch,
+        TelegramInitData(
+            fields={},
+            auth_date=1_700_000_000,
+            user=None,
+            chat=None,
+            chat_type="private",
+        ),
+    )
 
     response = client.get(
         "/chat-id",
@@ -209,7 +219,7 @@ def test_tma_chat_id_dependency_rejects_missing_chat(
 
     assert response.status_code == 401
     assert response.json() == {
-        "detail": "Telegram init data chat is required.",
+        "detail": "Telegram init data chat or user is required.",
     }
 
 
@@ -269,3 +279,88 @@ def test_matching_chat_id_dependency_rejects_different_chat_id(
     assert response.json() == {
         "detail": "Telegram init data chat_id does not match requested chat_id.",
     }
+
+
+def test_get_tma_chat_returns_signed_chat() -> None:
+    init_data = TelegramInitData(
+        fields={},
+        auth_date=1_700_000_000,
+        user={
+            "id": 123,
+            "first_name": "Eugene",
+        },
+        chat={
+            "id": -100,
+            "type": "supergroup",
+            "title": "Home",
+        },
+        chat_type="supergroup",
+    )
+
+    chat = get_tma_chat(init_data=init_data)
+
+    assert chat == {
+        "id": -100,
+        "type": "supergroup",
+        "title": "Home",
+    }
+    assert get_tma_chat_id(chat=chat) == -100
+
+
+def test_get_tma_chat_falls_back_to_private_user_chat() -> None:
+    init_data = TelegramInitData(
+        fields={},
+        auth_date=1_700_000_000,
+        user={
+            "id": 123,
+            "first_name": "Eugene",
+            "username": "evsab",
+        },
+        chat=None,
+        chat_type="private",
+    )
+
+    chat = get_tma_chat(init_data=init_data)
+
+    assert chat == {
+        "id": 123,
+        "type": "private",
+        "first_name": "Eugene",
+        "username": "evsab",
+    }
+    assert get_tma_chat_id(chat=chat) == 123
+
+
+def test_get_tma_chat_rejects_missing_chat_and_user() -> None:
+    init_data = TelegramInitData(
+        fields={},
+        auth_date=1_700_000_000,
+        user=None,
+        chat=None,
+        chat_type="private",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        get_tma_chat(init_data=init_data)
+
+    assert error.value.status_code == 401
+    assert error.value.detail == "Telegram init data chat or user is required."
+
+
+def test_get_tma_chat_rejects_invalid_user_id() -> None:
+    init_data = TelegramInitData(
+        fields={},
+        auth_date=1_700_000_000,
+        user={
+            "id": "123",
+            "first_name": "Eugene",
+        },
+        chat=None,
+        chat_type="private",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        get_tma_chat(init_data=init_data)
+
+    assert error.value.status_code == 401
+    assert error.value.detail == "Telegram init data user.id must be an integer."

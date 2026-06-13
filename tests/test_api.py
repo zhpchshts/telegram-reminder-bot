@@ -108,6 +108,7 @@ def test_get_tma_context_returns_response(
 
     result = get_tma_context(
         init_data=FakeTelegramInitData(),
+        tma_chat=FakeTelegramInitData.chat,
         chat_id=100,
     )
 
@@ -192,6 +193,7 @@ def test_get_tma_bootstrap_returns_response(
 
     result = get_tma_bootstrap(
         init_data=FakeTelegramInitData(),
+        tma_chat=FakeTelegramInitData.chat,
         chat_id=100,
     )
 

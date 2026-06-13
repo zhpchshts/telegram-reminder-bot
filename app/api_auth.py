@@ -33,16 +33,42 @@ def get_tma_init_data(
         ) from error
 
 
-def get_tma_chat_id(
+def get_tma_chat(
     init_data: TelegramInitData = Depends(get_tma_init_data),
-) -> int:
-    if init_data.chat is None:
+) -> dict[str, object]:
+    if init_data.chat is not None:
+        return init_data.chat
+
+    if init_data.user is None:
         raise HTTPException(
             status_code=401,
-            detail="Telegram init data chat is required.",
+            detail="Telegram init data chat or user is required.",
         )
 
-    chat_id = init_data.chat.get("id")
+    user_id = init_data.user.get("id")
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        raise HTTPException(
+            status_code=401,
+            detail="Telegram init data user.id must be an integer.",
+        )
+
+    private_chat: dict[str, object] = {
+        "id": user_id,
+        "type": "private",
+    }
+
+    for field_name in ("first_name", "last_name", "username"):
+        field_value = init_data.user.get(field_name)
+        if isinstance(field_value, str):
+            private_chat[field_name] = field_value
+
+    return private_chat
+
+
+def get_tma_chat_id(
+    chat: dict[str, object] = Depends(get_tma_chat),
+) -> int:
+    chat_id = chat.get("id")
 
     if isinstance(chat_id, bool) or not isinstance(chat_id, int):
         raise HTTPException(

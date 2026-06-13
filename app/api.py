@@ -1,9 +1,11 @@
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api_auth import get_tma_chat_id, get_tma_init_data, require_matching_chat_id
 from app.api_models import (
@@ -36,6 +38,9 @@ from app.reminder_service import (
     validate_reminder_create_data,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+TMA_STATIC_DIR = PROJECT_ROOT / "tma"
+
 app = FastAPI(
     title="Telegram Reminder Bot API",
     version="0.1.0",
@@ -58,7 +63,22 @@ def configure_cors(
     )
 
 
+def mount_tma_static_files(
+    fastapi_app: FastAPI,
+    static_dir: Path,
+) -> None:
+    if not static_dir.exists():
+        return
+
+    fastapi_app.mount(
+        "/tma",
+        StaticFiles(directory=static_dir, html=True),
+        name="tma",
+    )
+
+
 configure_cors(app, API_ALLOWED_ORIGINS)
+mount_tma_static_files(app, TMA_STATIC_DIR)
 
 
 def get_bot_from_app_state(request: Request) -> Bot:

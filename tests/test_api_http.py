@@ -85,6 +85,15 @@ def test_health_endpoint_returns_ok(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_tma_static_index_is_served(client: TestClient) -> None:
+    response = client.get("/tma/")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Напоминания" in response.text
+    assert "./app.js" in response.text
+
+
 def test_chat_endpoint_requires_tma_auth_without_dependency_override() -> None:
     previous_overrides = app.dependency_overrides.copy()
     app.dependency_overrides.clear()

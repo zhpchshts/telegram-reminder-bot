@@ -1,11 +1,19 @@
+import asyncio
 from dataclasses import dataclass
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 from fastapi import FastAPI
+import uvicorn
 
 from app.api import app as api_app
-from app.config import BOT_TOKEN, HEALTHCHECK_CHAT_ID, HEALTHCHECK_INTERVAL_MINUTES
+from app.config import (
+    API_HOST,
+    API_PORT,
+    BOT_TOKEN,
+    HEALTHCHECK_CHAT_ID,
+    HEALTHCHECK_INTERVAL_MINUTES,
+)
 from app.database import init_db
 from app.handlers import router
 from app.scheduler import restore_active_reminders, schedule_healthcheck, scheduler
@@ -39,6 +47,21 @@ def create_bot_runtime(
         dispatcher=dispatcher,
         api_app=fastapi_app,
     )
+
+
+def create_api_server(
+    runtime: BotRuntime,
+    *,
+    host: str = API_HOST,
+    port: int = API_PORT,
+) -> uvicorn.Server:
+    config = uvicorn.Config(
+        runtime.api_app,
+        host=host,
+        port=port,
+        log_level="info",
+    )
+    return uvicorn.Server(config)
 
 
 async def set_bot_commands(bot: Bot) -> None:
@@ -102,3 +125,23 @@ async def run_polling_runtime() -> None:
     runtime = create_bot_runtime()
     await prepare_bot_runtime(runtime)
     await runtime.dispatcher.start_polling(runtime.bot)
+
+
+async def run_polling_and_api_runtime(
+    *,
+    api_host: str = API_HOST,
+    api_port: int = API_PORT,
+) -> None:
+    runtime = create_bot_runtime()
+    await prepare_bot_runtime(runtime)
+
+    api_server = create_api_server(
+        runtime,
+        host=api_host,
+        port=api_port,
+    )
+
+    await asyncio.gather(
+        runtime.dispatcher.start_polling(runtime.bot),
+        api_server.serve(),
+    )

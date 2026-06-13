@@ -1,10 +1,12 @@
 import sqlite3
 from datetime import datetime
+from app.reminder_models import ReminderReadData
 
 from app.formatting import (
     format_datetime_ru,
     format_period_line,
     format_reminder_for_list,
+    format_reminder_read_data_for_list,
 )
 
 
@@ -152,3 +154,29 @@ def test_format_period_line_monthly_day() -> None:
     )
 
     assert result == "каждый месяц 11 числа"
+
+
+def test_format_reminder_read_data_for_list_every_days() -> None:
+    reminder = ReminderReadData(
+        id=11,
+        chat_id=100,
+        reminder_text="<b>Тест every days</b>",
+        schedule_type="every_days",
+        start_at=datetime(2026, 6, 8, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+    result = format_reminder_read_data_for_list(
+        reminder,
+        "Следующее срабатывание: 11 июня в 12:12",
+    )
+
+    assert result == (
+        "&lt;b&gt;Тест every days&lt;/b&gt;\n"
+        "ID: `11`\n"
+        "Период: каждые 3 дн.\n"
+        "Первое срабатывание: 08 июня в 12:12\n"
+        "Следующее срабатывание: 11 июня в 12:12\n"
+        "Таймзона: `Asia/Yekaterinburg`"
+    )

@@ -110,22 +110,26 @@ def test_delete_active_reminder_for_chat_marks_deleted_when_job_missing(
 def test_build_active_reminders_list_text_for_chat_returns_none_when_no_reminders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_get_active_reminders_for_chat(chat_id: int) -> list[object]:
+    def fake_list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
+        assert chat_id == 100
         return []
 
-    def fake_format_next_run_line(reminder_id: int) -> str:
+    def fake_format_next_run_line(
+        reminder_id: int,
+        timezone_name: str | None = None,
+    ) -> str:
         raise AssertionError("format_next_run_line should not be called")
 
-    def fake_format_reminder_for_list(
-        reminder: object,
+    def fake_format_reminder_read_data_for_list(
+        reminder: ReminderReadData,
         next_run_line: str,
     ) -> str:
-        raise AssertionError("format_reminder_for_list should not be called")
+        raise AssertionError("format_reminder_read_data_for_list should not be called")
 
     monkeypatch.setattr(
         reminder_service_module,
-        "get_active_reminders_for_chat",
-        fake_get_active_reminders_for_chat,
+        "list_active_reminders_for_chat",
+        fake_list_active_reminders_for_chat,
     )
     monkeypatch.setattr(
         reminder_service_module,
@@ -134,8 +138,8 @@ def test_build_active_reminders_list_text_for_chat_returns_none_when_no_reminder
     )
     monkeypatch.setattr(
         reminder_service_module,
-        "format_reminder_for_list",
-        fake_format_reminder_for_list,
+        "format_reminder_read_data_for_list",
+        fake_format_reminder_read_data_for_list,
     )
 
     result = build_active_reminders_list_text_for_chat(chat_id=100)
@@ -147,32 +151,50 @@ def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reminders = [
-        {"id": 1},
-        {"id": 2},
+        ReminderReadData(
+            id=1,
+            chat_id=100,
+            reminder_text="Первое",
+            schedule_type="once",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+        ),
+        ReminderReadData(
+            id=2,
+            chat_id=100,
+            reminder_text="Второе",
+            schedule_type="every_days",
+            start_at=datetime(2099, 6, 11, 12, 12),
+            timezone_name="Europe/Moscow",
+            interval_days=3,
+        ),
     ]
     requested_chat_ids: list[int] = []
-    next_run_ids: list[int] = []
+    next_run_calls: list[tuple[int, str | None]] = []
     formatted_reminders: list[tuple[int, str]] = []
 
-    def fake_get_active_reminders_for_chat(chat_id: int) -> list[dict[str, int]]:
+    def fake_list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
         requested_chat_ids.append(chat_id)
         return reminders
 
-    def fake_format_next_run_line(reminder_id: int) -> str:
-        next_run_ids.append(reminder_id)
-        return f"next {reminder_id}"
+    def fake_format_next_run_line(
+        reminder_id: int,
+        timezone_name: str | None = None,
+    ) -> str:
+        next_run_calls.append((reminder_id, timezone_name))
+        return f"next {reminder_id} / {timezone_name}"
 
-    def fake_format_reminder_for_list(
-        reminder: dict[str, int],
+    def fake_format_reminder_read_data_for_list(
+        reminder: ReminderReadData,
         next_run_line: str,
     ) -> str:
-        formatted_reminders.append((reminder["id"], next_run_line))
-        return f"reminder {reminder['id']} / {next_run_line}"
+        formatted_reminders.append((reminder.id, next_run_line))
+        return f"reminder {reminder.id} / {next_run_line}"
 
     monkeypatch.setattr(
         reminder_service_module,
-        "get_active_reminders_for_chat",
-        fake_get_active_reminders_for_chat,
+        "list_active_reminders_for_chat",
+        fake_list_active_reminders_for_chat,
     )
     monkeypatch.setattr(
         reminder_service_module,
@@ -181,8 +203,8 @@ def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
     )
     monkeypatch.setattr(
         reminder_service_module,
-        "format_reminder_for_list",
-        fake_format_reminder_for_list,
+        "format_reminder_read_data_for_list",
+        fake_format_reminder_read_data_for_list,
     )
 
     result = build_active_reminders_list_text_for_chat(chat_id=100)
@@ -190,15 +212,18 @@ def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
     assert result == (
         "Активные напоминания в этом чате\n"
         "\n\n"
-        "reminder 1 / next 1"
+        "reminder 1 / next 1 / Asia/Yekaterinburg"
         "\n\n"
-        "reminder 2 / next 2"
+        "reminder 2 / next 2 / Europe/Moscow"
     )
     assert requested_chat_ids == [100]
-    assert next_run_ids == [1, 2]
+    assert next_run_calls == [
+        (1, "Asia/Yekaterinburg"),
+        (2, "Europe/Moscow"),
+    ]
     assert formatted_reminders == [
-        (1, "next 1"),
-        (2, "next 2"),
+        (1, "next 1 / Asia/Yekaterinburg"),
+        (2, "next 2 / Europe/Moscow"),
     ]
 
 

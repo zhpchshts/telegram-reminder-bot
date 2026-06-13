@@ -2,6 +2,7 @@ import html
 import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from app.reminder_models import ReminderReadData
 
 from app.constants import (
     MONTH_NAMES_RU,
@@ -98,4 +99,34 @@ def format_reminder_for_list(
         f"Первое срабатывание: {first_run}\n"
         f"{next_run}\n"
         f"Таймзона: <code>{html.escape(reminder_timezone)}</code>"
+    )
+
+
+def format_reminder_read_data_for_list(
+    reminder: ReminderReadData,
+    next_run_line: str,
+) -> str:
+    reminder_text = html.escape(reminder.reminder_text)
+    period = html.escape(
+        format_period_line(
+            schedule_type=reminder.schedule_type,
+            interval_days=reminder.interval_days,
+            interval_weeks=reminder.interval_weeks,
+            day_of_week=reminder.day_of_week,
+            month_week_number=reminder.month_week_number,
+            month_day=reminder.month_day,
+        )
+    )
+    first_run = html.escape(
+        format_datetime_ru(reminder.start_at, reminder.timezone_name)
+    )
+    next_run = html.escape(next_run_line)
+
+    return (
+        f"{reminder_text}\n"
+        f"ID: `{reminder.id}`\n"
+        f"Период: {period}\n"
+        f"Первое срабатывание: {first_run}\n"
+        f"{next_run}\n"
+        f"Таймзона: `{html.escape(reminder.timezone_name)}`"
     )

@@ -14,8 +14,7 @@ from app.database import (
 from app.formatting import (
     format_datetime_ru,
     format_period_line,
-    format_reminder_for_list,
-    get_int,
+    format_reminder_read_data_for_list,
 )
 
 from app.reminder_models import ReminderCreateData, ReminderReadData
@@ -182,17 +181,16 @@ def list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
 
 
 def build_active_reminders_list_text_for_chat(chat_id: int) -> str | None:
-    reminders = get_active_reminders_for_chat(chat_id)
+    reminders = list_active_reminders_for_chat(chat_id)
 
     if not reminders:
         return None
 
     lines = ["Активные напоминания в этом чате\n"]
-
     lines.extend(
-        format_reminder_for_list(
+        format_reminder_read_data_for_list(
             reminder,
-            format_next_run_line(get_int(reminder, "id")),
+            format_next_run_line(reminder.id, reminder.timezone_name),
         )
         for reminder in reminders
     )

@@ -120,12 +120,13 @@ function setBusy(isBusy) {
 
 function showPreview(preview) {
   const period = preview.period || "одноразовое";
+  const timezoneName = preview.timezone_name || state.context?.timezone_name;
 
   elements.preview.innerHTML = `
     <strong>Предпросмотр</strong>
     <div>${escapeHtml(preview.reminder_text)}</div>
     <div class="muted">${escapeHtml(period)}</div>
-    <div class="muted">Первое срабатывание: ${formatDateTime(preview.start_at)}</div>
+    <div class="muted">Первое срабатывание: ${formatDateTime(preview.start_at, timezoneName)}</div>
   `;
   elements.preview.hidden = false;
 }
@@ -288,11 +289,13 @@ function createReminderCard(reminder) {
   const title = document.createElement("h3");
   title.textContent = reminder.reminder_text;
 
+  const timezoneName = reminder.timezone_name || state.context?.timezone_name;
+
   const meta = document.createElement("div");
   meta.className = "reminder-meta";
   meta.innerHTML = `
     <span>${escapeHtml(reminder.period || "одноразовое")}</span>
-    <span>Следующее: ${formatDateTime(reminder.next_run_at || reminder.start_at)}</span>
+    <span>Следующее: ${formatDateTime(reminder.next_run_at || reminder.start_at, timezoneName)}</span>
   `;
 
   const actions = document.createElement("div");
@@ -410,18 +413,8 @@ function isPositiveIntegerValue(value) {
   return Number.isInteger(number) && number >= 1;
 }
 
-function getStartAtDate() {
-  if (!elements.startAt.value) {
-    return null;
-  }
-
-  const date = new Date(elements.startAt.value);
-
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-
-  return date;
+function hasStartAtValue() {
+  return Boolean(elements.startAt.value);
 }
 
 function validateTimezoneForm() {
@@ -436,18 +429,13 @@ function validateTimezoneForm() {
 function validateReminderForm() {
   const errors = [];
   const scheduleType = elements.scheduleType.value;
-  const startAt = getStartAtDate();
-
-  updateStartAtMin();
 
   if (!elements.reminderText.value.trim()) {
     errors.push("Укажи текст напоминания.");
   }
 
-  if (!startAt) {
+  if (!hasStartAtValue()) {
     errors.push("Укажи первое срабатывание.");
-  } else if (startAt < new Date()) {
-    errors.push("Первое срабатывание не может быть в прошлом.");
   }
 
   if (!elements.timezoneName.value.trim()) {
@@ -494,8 +482,6 @@ function validateReminderForm() {
 }
 
 function setDefaultStartAtIfEmpty() {
-  updateStartAtMin();
-
   if (!elements.startAt.value) {
     setDefaultStartAt();
   }
@@ -506,22 +492,20 @@ function setDefaultStartAt() {
   date.setMinutes(date.getMinutes() + DEFAULT_START_OFFSET_MINUTES);
   date.setSeconds(0, 0);
 
-  elements.startAt.value = toDateTimeLocalValue(date);
-}
-
-function updateStartAtMin() {
-  const date = new Date();
-  date.setSeconds(0, 0);
-
-  elements.startAt.min = toDateTimeLocalValue(date);
+  elements.startAt.value = toDateTimeLocalValue(
+    date,
+    state.context?.timezone_name,
+  );
 }
 
 function startEdit(reminder) {
+  const timezoneName = reminder.timezone_name || state.context?.timezone_name;
+
   elements.reminderId.value = reminder.id;
   elements.formTitle.textContent = "Редактировать напоминание";
   elements.reminderText.value = reminder.reminder_text;
   elements.scheduleType.value = reminder.schedule_type;
-  elements.startAt.value = toDateTimeLocalValue(reminder.start_at);
+  elements.startAt.value = toDateTimeLocalValue(reminder.start_at, timezoneName);
   elements.timezoneName.value = reminder.timezone_name;
   elements.intervalDays.value = reminder.interval_days || "";
   elements.intervalWeeks.value = reminder.interval_weeks || "";
@@ -714,28 +698,75 @@ async function deleteReminder(reminder) {
   showStatus("Напоминание удалено.");
 }
 
-function formatDateTime(value) {
+function formatDateTime(value, timezoneName) {
   if (!value) {
     return "не запланировано";
+  }
+
+  const localValue = toDateTimeLocalValue(value, timezoneName);
+
+  if (!localValue) {
+    return "некорректная дата";
+  }
+
+  const [datePart, timePart] = localValue.split("T");
+  const [year, month, day] = datePart.split("-");
+
+  return `${day}.${month}.${year}, ${timePart}`;
+}
+
+function toDateTimeLocalValue(value, timezoneName) {
+  if (typeof value === "string" && isDatetimeLocalValue(value)) {
+    return value.slice(0, 16);
   }
 
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {
-    return "некорректная дата";
+    return "";
   }
 
-  return new Intl.DateTimeFormat("ru-RU", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  if (!timezoneName) {
+    return toBrowserDateTimeLocalValue(date);
+  }
+
+  try {
+    return toTimezoneDateTimeLocalValue(date, timezoneName);
+  } catch {
+    return toBrowserDateTimeLocalValue(date);
+  }
 }
 
-function toDateTimeLocalValue(value) {
-  const date = new Date(value);
+function isDatetimeLocalValue(value) {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value) &&
+    !/(Z|[+-]\d{2}:?\d{2})$/i.test(value);
+}
+
+function toBrowserDateTimeLocalValue(date) {
   const offsetMs = date.getTimezoneOffset() * 60 * 1000;
 
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function toTimezoneDateTimeLocalValue(date, timezoneName) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezoneName,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
 }
 
 async function handleAsync(action) {
@@ -755,7 +786,6 @@ async function handleAsync(action) {
 }
 
 elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
-elements.startAt.addEventListener("focus", updateStartAtMin);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
 elements.useDeviceTimezoneButton.addEventListener("click", () =>

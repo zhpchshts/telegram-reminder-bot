@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.constants import TIMEZONE_LOOKUP_URL, VALID_WEEKDAYS, WEEKDAY_HELP
 from app.database import (
-    create_reminder_in_db,
     set_chat_timezone,
 )
 from app.formatting import (
@@ -17,7 +16,6 @@ from app.formatting import (
 )
 from app.scheduler import (
     format_next_run_line,
-    schedule_reminder,
 )
 from app.schedule_calculations import (
     get_first_weekday_datetime_on_or_after_date,
@@ -32,6 +30,7 @@ from app.schedule_calculations import (
 
 from app.reminder_service import (
     build_active_reminders_list_text_for_chat,
+    create_scheduled_reminder,
     delete_active_reminder_for_chat,
     get_chat_timezone_name,
 )
@@ -139,22 +138,8 @@ async def create_schedule_and_confirm(
     month_week_number: int | None = None,
     month_day: int | None = None,
 ) -> None:
-    reminder_id = create_reminder_in_db(
-        chat_id=message.chat.id,
-        reminder_text=reminder_text,
-        schedule_type=schedule_type,
-        start_at=start_at,
-        interval_days=interval_days,
-        interval_weeks=interval_weeks,
-        day_of_week=day_of_week,
-        month_week_number=month_week_number,
-        month_day=month_day,
-        timezone=timezone_name,
-    )
-
-    schedule_reminder(
+    reminder_id = create_scheduled_reminder(
         bot=bot,
-        reminder_id=reminder_id,
         chat_id=message.chat.id,
         reminder_text=reminder_text,
         schedule_type=schedule_type,

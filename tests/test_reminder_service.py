@@ -1,9 +1,11 @@
+from datetime import datetime
 import pytest
 
 from app import reminder_service as reminder_service_module
 from app.reminder_service import (
     build_active_reminders_list_text_for_chat,
     delete_active_reminder_for_chat,
+    create_scheduled_reminder,
 )
 
 
@@ -192,4 +194,73 @@ def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
     assert formatted_reminders == [
         (1, "next 1"),
         (2, "next 2"),
+    ]
+
+
+def test_create_scheduled_reminder_creates_db_record_and_schedules_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_calls: list[dict[str, object]] = []
+    scheduled_calls: list[dict[str, object]] = []
+    bot = object()
+    start_at = datetime(2026, 6, 10, 12, 12)
+
+    def fake_create_reminder_in_db(**kwargs: object) -> int:
+        created_calls.append(kwargs)
+        return 42
+
+    def fake_schedule_reminder(**kwargs: object) -> None:
+        scheduled_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "create_reminder_in_db",
+        fake_create_reminder_in_db,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        fake_schedule_reminder,
+    )
+
+    result = create_scheduled_reminder(
+        bot=bot,
+        chat_id=100,
+        reminder_text="Проверить релиз",
+        schedule_type="every_days",
+        start_at=start_at,
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+    assert result == 42
+    assert created_calls == [
+        {
+            "chat_id": 100,
+            "reminder_text": "Проверить релиз",
+            "schedule_type": "every_days",
+            "start_at": start_at,
+            "interval_days": 3,
+            "interval_weeks": None,
+            "day_of_week": None,
+            "month_week_number": None,
+            "month_day": None,
+            "timezone": "Asia/Yekaterinburg",
+        }
+    ]
+    assert scheduled_calls == [
+        {
+            "bot": bot,
+            "reminder_id": 42,
+            "chat_id": 100,
+            "reminder_text": "Проверить релиз",
+            "schedule_type": "every_days",
+            "start_at": start_at,
+            "interval_days": 3,
+            "interval_weeks": None,
+            "day_of_week": None,
+            "month_week_number": None,
+            "month_day": None,
+            "timezone_name": "Asia/Yekaterinburg",
+        }
     ]

@@ -51,6 +51,7 @@ const elements = {
   status: document.querySelector("#status"),
   reloadButton: document.querySelector("#reload-button"),
   form: document.querySelector("#reminder-form"),
+  formTitle: document.querySelector("#form-title"),
   reminderId: document.querySelector("#reminder-id"),
   reminderText: document.querySelector("#reminder-text"),
   scheduleType: document.querySelector("#schedule-type"),
@@ -350,6 +351,7 @@ function updateStartAtMin() {
 
 function startEdit(reminder) {
   elements.reminderId.value = reminder.id;
+  elements.formTitle.textContent = "Редактировать напоминание";
   elements.reminderText.value = reminder.reminder_text;
   elements.scheduleType.value = reminder.schedule_type;
   elements.startAt.value = toDateTimeLocalValue(reminder.start_at);
@@ -376,6 +378,7 @@ function startEdit(reminder) {
 function resetForm() {
   elements.form.reset();
   elements.reminderId.value = "";
+  elements.formTitle.textContent = "Создать напоминание";
   elements.timezoneName.value = state.context?.timezone_name || "";
   setDefaultStartAt();
 

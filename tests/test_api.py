@@ -22,6 +22,7 @@ from app.api import (
     get_tma_reminders,
     get_tma_timezone,
     update_tma_timezone,
+    preview_tma_reminder,
 )
 from app.api_models import (
     ChatTimezoneResponse,
@@ -32,6 +33,7 @@ from app.api_models import (
     ReminderResponse,
     TmaContextResponse,
     TmaBootstrapResponse,
+    ReminderPreviewResponse,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
@@ -270,6 +272,28 @@ def test_get_tma_reminders_returns_response_models(
             interval_days=3,
         )
     ]
+
+
+def test_preview_tma_reminder_returns_normalized_preview() -> None:
+    result = preview_tma_reminder(
+        request=ReminderCreateRequest(
+            reminder_text="Проверить релиз",
+            schedule_type="every_days",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=3,
+        ),
+        _chat_id=100,
+    )
+
+    assert result == ReminderPreviewResponse(
+        reminder_text="Проверить релиз",
+        schedule_type="every_days",
+        start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+        timezone_name="Asia/Yekaterinburg",
+        is_repeating=True,
+        period="каждые 3 дн.",
+    )
 
 
 def test_create_tma_reminder_returns_response(
@@ -769,3 +793,4 @@ def test_api_registers_initial_routes() -> None:
     assert "/api/tma/reminders" in route_paths
     assert "/api/tma/timezone" in route_paths
     assert "/api/tma/reminders/{reminder_id}" in route_paths
+    assert "/api/tma/reminder-preview" in route_paths

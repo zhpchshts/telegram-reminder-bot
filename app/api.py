@@ -21,6 +21,8 @@ from app.api_models import (
     build_reminder_response,
     build_tma_bootstrap_response,
     build_tma_context_response,
+    ReminderPreviewResponse,
+    build_reminder_preview_response,
 )
 from app.config import API_ALLOWED_ORIGINS
 from app.reminder_models import ReminderCreateData
@@ -30,6 +32,7 @@ from app.reminder_service import (
     get_chat_timezone_name,
     list_active_reminders_for_chat,
     set_chat_timezone_for_chat,
+    validate_reminder_create_data,
 )
 
 app = FastAPI(
@@ -132,6 +135,19 @@ def get_tma_bootstrap(
         start_param=init_data.start_param,
         active_reminders=list_active_reminders_for_chat(chat_id),
     )
+
+
+@app.post(
+    "/api/tma/reminder-preview",
+    response_model=ReminderPreviewResponse,
+)
+def preview_tma_reminder(
+    request: ReminderCreateRequest,
+    _chat_id: int = Depends(get_tma_chat_id),
+) -> ReminderPreviewResponse:
+    data = build_validated_reminder_create_data(request)
+
+    return build_reminder_preview_response(data)
 
 
 @app.get(
@@ -276,12 +292,9 @@ def delete_chat_reminder(
     )
 
 
-def create_reminder_for_chat(
-    *,
+def build_validated_reminder_create_data(
     request: ReminderCreateRequest,
-    chat_id: int,
-    bot: Bot,
-) -> ReminderResponse:
+) -> ReminderCreateData:
     try:
         data = build_reminder_create_data(request)
     except ZoneInfoNotFoundError as error:
@@ -295,6 +308,25 @@ def create_reminder_for_chat(
             status_code=400,
             detail="start_at must be in the future.",
         )
+
+    try:
+        validate_reminder_create_data(data)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    return data
+
+
+def create_reminder_for_chat(
+    *,
+    request: ReminderCreateRequest,
+    chat_id: int,
+    bot: Bot,
+) -> ReminderResponse:
+    data = build_validated_reminder_create_data(request)
 
     try:
         reminder_id = create_scheduled_reminder(

@@ -156,6 +156,28 @@ def test_tma_bootstrap_endpoint_requires_tma_auth_without_dependency_override() 
     }
 
 
+def test_tma_reminder_preview_endpoint_requires_tma_auth_without_dependency_override() -> (
+    None
+):
+    previous_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides.clear()
+
+    try:
+        with TestClient(app) as test_client:
+            response = test_client.post(
+                "/api/tma/reminder-preview",
+                json=build_create_reminder_request(),
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "Telegram init data is required.",
+    }
+
+
 def test_tma_reminders_endpoint_requires_tma_auth_without_dependency_override() -> None:
     previous_overrides = app.dependency_overrides.copy()
     app.dependency_overrides.clear()
@@ -359,6 +381,47 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
             "month_day": None,
         }
     ]
+
+
+def test_tma_reminder_preview_endpoint_accepts_valid_tma_init_data(
+    authenticated_client: TestClient,
+) -> None:
+    response = authenticated_client.post(
+        "/api/tma/reminder-preview",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "reminder_text": "Проверить релиз",
+        "schedule_type": "every_days",
+        "start_at": "2099-06-10T12:12:00+05:00",
+        "timezone_name": "Asia/Yekaterinburg",
+        "is_repeating": True,
+        "period": "каждые 3 дн.",
+    }
+
+
+def test_tma_reminder_preview_endpoint_rejects_invalid_schedule_data(
+    authenticated_client: TestClient,
+) -> None:
+    response = authenticated_client.post(
+        "/api/tma/reminder-preview",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(
+            interval_days=None,
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "interval_days must be greater than or equal to 1.",
+    }
 
 
 def test_get_chat_reminders_endpoint_accepts_valid_tma_init_data(

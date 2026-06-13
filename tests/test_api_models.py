@@ -18,6 +18,8 @@ from app.api_models import (
     build_reminder_form_options_response,
     TmaBootstrapResponse,
     build_tma_bootstrap_response,
+    ReminderPreviewResponse,
+    build_reminder_preview_response,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
@@ -284,4 +286,49 @@ def test_build_tma_bootstrap_response() -> None:
                 interval_days=3,
             )
         ],
+    )
+
+
+def test_build_reminder_preview_response_for_repeating_reminder() -> None:
+    start_at = datetime.fromisoformat("2099-06-10T12:12:00+05:00")
+
+    result = build_reminder_preview_response(
+        ReminderCreateData(
+            reminder_text="Проверить релиз",
+            schedule_type="every_days",
+            start_at=start_at,
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=3,
+        )
+    )
+
+    assert result == ReminderPreviewResponse(
+        reminder_text="Проверить релиз",
+        schedule_type="every_days",
+        start_at=start_at,
+        timezone_name="Asia/Yekaterinburg",
+        is_repeating=True,
+        period="каждые 3 дн.",
+    )
+
+
+def test_build_reminder_preview_response_for_once_reminder() -> None:
+    start_at = datetime.fromisoformat("2099-06-10T12:12:00+05:00")
+
+    result = build_reminder_preview_response(
+        ReminderCreateData(
+            reminder_text="Проверить релиз",
+            schedule_type="once",
+            start_at=start_at,
+            timezone_name="Asia/Yekaterinburg",
+        )
+    )
+
+    assert result == ReminderPreviewResponse(
+        reminder_text="Проверить релиз",
+        schedule_type="once",
+        start_at=start_at,
+        timezone_name="Asia/Yekaterinburg",
+        is_repeating=False,
+        period=None,
     )

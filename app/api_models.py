@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel
 
 from app.reminder_models import ReminderCreateData, ReminderReadData
+from app.formatting import format_period_line
 
 
 class ReminderResponse(BaseModel):
@@ -30,6 +31,15 @@ class ReminderCreateRequest(BaseModel):
     day_of_week: str | None = None
     month_week_number: int | None = None
     month_day: int | None = None
+
+
+class ReminderPreviewResponse(BaseModel):
+    reminder_text: str
+    schedule_type: str
+    start_at: datetime
+    timezone_name: str
+    is_repeating: bool
+    period: str | None = None
 
 
 class ChatTimezoneResponse(BaseModel):
@@ -122,6 +132,31 @@ def build_reminder_create_data(
         day_of_week=request.day_of_week,
         month_week_number=request.month_week_number,
         month_day=request.month_day,
+    )
+
+
+def build_reminder_preview_response(
+    data: ReminderCreateData,
+) -> ReminderPreviewResponse:
+    period = None
+
+    if data.schedule_type != "once":
+        period = format_period_line(
+            schedule_type=data.schedule_type,
+            interval_days=data.interval_days,
+            interval_weeks=data.interval_weeks,
+            day_of_week=data.day_of_week,
+            month_week_number=data.month_week_number,
+            month_day=data.month_day,
+        )
+
+    return ReminderPreviewResponse(
+        reminder_text=data.reminder_text,
+        schedule_type=data.schedule_type,
+        start_at=data.start_at,
+        timezone_name=data.timezone_name,
+        is_repeating=data.schedule_type != "once",
+        period=period,
     )
 
 

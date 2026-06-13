@@ -908,6 +908,155 @@ def test_delete_tma_reminder_endpoint_accepts_valid_tma_init_data(
     }
 
 
+def test_create_tma_reminder_endpoint_requires_configured_bot(
+    authenticated_client: TestClient,
+) -> None:
+    app.state.bot = None
+
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Bot is not configured for API."}
+
+
+def test_create_tma_reminder_endpoint_rejects_invalid_timezone(
+    authenticated_client: TestClient,
+) -> None:
+    app.state.bot = object()
+
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(
+            timezone_name="Wrong/Timezone",
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid timezone name."}
+
+
+def test_create_tma_reminder_endpoint_rejects_start_at_in_past(
+    authenticated_client: TestClient,
+) -> None:
+    app.state.bot = object()
+
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(
+            start_at="2000-01-01T00:00:00",
+            timezone_name="UTC",
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "start_at must be in the future."}
+
+
+def test_create_tma_reminder_endpoint_returns_service_validation_error(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.bot = object()
+
+    def fake_create_scheduled_reminder(
+        *,
+        bot,
+        chat_id: int,
+        data,
+    ) -> int:
+        raise ValueError("reminder_text is required.")
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "reminder_text is required."}
+
+
+def test_update_tma_timezone_endpoint_rejects_invalid_timezone(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_set_chat_timezone_for_chat(
+        *,
+        chat_id: int,
+        timezone_name: str,
+    ) -> bool:
+        assert chat_id == 100
+        assert timezone_name == "Wrong/Timezone"
+        return False
+
+    monkeypatch.setattr(
+        api_module,
+        "set_chat_timezone_for_chat",
+        fake_set_chat_timezone_for_chat,
+    )
+
+    response = authenticated_client.put(
+        "/api/tma/timezone",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json={"timezone_name": "Wrong/Timezone"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid timezone name."}
+
+
+def test_delete_tma_reminder_endpoint_rejects_unknown_reminder(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_delete_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> bool:
+        assert reminder_id == 42
+        assert chat_id == 100
+        return False
+
+    monkeypatch.setattr(
+        api_module,
+        "delete_active_reminder_for_chat",
+        fake_delete_active_reminder_for_chat,
+    )
+
+    response = authenticated_client.delete(
+        "/api/tma/reminders/42",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Reminder not found."}
+
+
 def test_create_chat_reminder_endpoint_returns_json(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

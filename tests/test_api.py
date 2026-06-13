@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from app import api as api_module
 from app.api import (
     app,
+    delete_chat_reminder,
     get_chat_reminders,
     get_chat_timezone,
     health,
@@ -14,6 +15,7 @@ from app.api import (
 from app.api_models import (
     ChatTimezoneResponse,
     ChatTimezoneUpdateRequest,
+    DeleteReminderResponse,
     ReminderResponse,
 )
 from app.reminder_models import ReminderReadData
@@ -160,9 +162,74 @@ def test_update_chat_timezone_rejects_invalid_timezone(
     assert error.value.detail == "Invalid timezone name."
 
 
+def test_delete_chat_reminder_returns_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, int]] = []
+
+    def fake_delete_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> bool:
+        captured_calls.append(
+            {
+                "reminder_id": reminder_id,
+                "chat_id": chat_id,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(
+        api_module,
+        "delete_active_reminder_for_chat",
+        fake_delete_active_reminder_for_chat,
+    )
+
+    result = delete_chat_reminder(chat_id=100, reminder_id=42)
+
+    assert captured_calls == [
+        {
+            "reminder_id": 42,
+            "chat_id": 100,
+        }
+    ]
+    assert result == DeleteReminderResponse(
+        id=42,
+        chat_id=100,
+        deleted=True,
+    )
+
+
+def test_delete_chat_reminder_rejects_unknown_reminder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_delete_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> bool:
+        assert reminder_id == 42
+        assert chat_id == 100
+        return False
+
+    monkeypatch.setattr(
+        api_module,
+        "delete_active_reminder_for_chat",
+        fake_delete_active_reminder_for_chat,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        delete_chat_reminder(chat_id=100, reminder_id=42)
+
+    assert error.value.status_code == 404
+    assert error.value.detail == "Reminder not found."
+
+
 def test_api_registers_initial_routes() -> None:
     route_paths = {route.path for route in app.routes}
 
     assert "/health" in route_paths
     assert "/api/chats/{chat_id}/reminders" in route_paths
     assert "/api/chats/{chat_id}/timezone" in route_paths
+    assert "/api/chats/{chat_id}/reminders/{reminder_id}" in route_paths

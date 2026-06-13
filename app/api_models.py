@@ -42,3 +42,9 @@ class ChatTimezoneResponse(BaseModel):
 
 class ChatTimezoneUpdateRequest(BaseModel):
     timezone_name: str
+
+
+class DeleteReminderResponse(BaseModel):
+    id: int
+    chat_id: int
+    deleted: bool

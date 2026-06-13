@@ -3,6 +3,7 @@ from datetime import datetime
 from app.api_models import (
     ChatTimezoneResponse,
     ChatTimezoneUpdateRequest,
+    DeleteReminderResponse,
     ReminderResponse,
     build_reminder_response,
 )
@@ -50,4 +51,16 @@ def test_chat_timezone_update_request() -> None:
         timezone_name="Europe/Moscow",
     ).model_dump() == {
         "timezone_name": "Europe/Moscow",
+    }
+
+
+def test_delete_reminder_response() -> None:
+    assert DeleteReminderResponse(
+        id=42,
+        chat_id=100,
+        deleted=True,
+    ).model_dump() == {
+        "id": 42,
+        "chat_id": 100,
+        "deleted": True,
     }

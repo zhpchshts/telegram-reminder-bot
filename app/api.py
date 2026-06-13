@@ -3,10 +3,12 @@ from fastapi import FastAPI, HTTPException
 from app.api_models import (
     ChatTimezoneResponse,
     ChatTimezoneUpdateRequest,
+    DeleteReminderResponse,
     ReminderResponse,
     build_reminder_response,
 )
 from app.reminder_service import (
+    delete_active_reminder_for_chat,
     get_chat_timezone_name,
     list_active_reminders_for_chat,
     set_chat_timezone_for_chat,
@@ -67,4 +69,27 @@ def update_chat_timezone(
     return ChatTimezoneResponse(
         chat_id=chat_id,
         timezone_name=request.timezone_name,
+    )
+
+
+@app.delete(
+    "/api/chats/{chat_id}/reminders/{reminder_id}",
+    response_model=DeleteReminderResponse,
+)
+def delete_chat_reminder(chat_id: int, reminder_id: int) -> DeleteReminderResponse:
+    was_deleted = delete_active_reminder_for_chat(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+    )
+
+    if not was_deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Reminder not found.",
+        )
+
+    return DeleteReminderResponse(
+        id=reminder_id,
+        chat_id=chat_id,
+        deleted=True,
     )

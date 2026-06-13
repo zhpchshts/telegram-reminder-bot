@@ -88,7 +88,7 @@ async def send_once_reminder(
 ) -> None:
     await bot.send_message(
         chat_id=chat_id,
-        text=f"Напоминание #{reminder_id}:\n\n{reminder_text}",
+        text=reminder_text,
     )
 
     mark_reminder_as_sent(reminder_id)
@@ -102,7 +102,7 @@ async def send_repeating_reminder(
 ) -> None:
     await bot.send_message(
         chat_id=chat_id,
-        text=f"Повторяющееся напоминание #{reminder_id}:\n\n{reminder_text}",
+        text=reminder_text,
     )
 
 

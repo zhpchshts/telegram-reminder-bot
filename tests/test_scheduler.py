@@ -224,7 +224,7 @@ def test_send_once_reminder_sends_message_and_marks_sent(monkeypatch) -> None:
     assert bot.messages == [
         {
             "chat_id": 100,
-            "text": "Напоминание #1:\n\nТест once",
+            "text": "Тест once",
         }
     ]
     assert marked_ids == [1]
@@ -242,12 +242,13 @@ def test_send_repeating_reminder_sends_message() -> None:
         )
     )
 
-    assert bot.messages == [
-        {
-            "chat_id": 100,
-            "text": "Повторяющееся напоминание #2:\n\nТест repeating",
-        }
-    ]
+
+assert bot.messages == [
+    {
+        "chat_id": 100,
+        "text": "Тест repeating",
+    }
+]
 
 
 def test_schedule_monthly_day_reminder_adds_cron_job(monkeypatch) -> None:

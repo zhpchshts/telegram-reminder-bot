@@ -4,12 +4,10 @@ from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import LinkPreviewOptions, Message
 
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from app.constants import TIMEZONE_LOOKUP_URL, VALID_WEEKDAYS, WEEKDAY_HELP
-from app.database import (
-    set_chat_timezone,
-)
+
 from app.formatting import (
     format_datetime_ru,
     format_period_line,
@@ -33,6 +31,7 @@ from app.reminder_service import (
     create_scheduled_reminder,
     delete_active_reminder_for_chat,
     get_chat_timezone_name,
+    set_chat_timezone_for_chat,
 )
 
 router = Router()
@@ -295,9 +294,12 @@ async def timezone_command(message: Message) -> None:
 
     timezone_name = parts[1].strip()
 
-    try:
-        ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
+    is_timezone_updated = set_chat_timezone_for_chat(
+        chat_id=message.chat.id,
+        timezone_name=timezone_name,
+    )
+
+    if not is_timezone_updated:
         await message.answer(
             "Не смог распознать таймзону.\n\n"
             "Используй IANA-формат, например:\n"
@@ -309,11 +311,6 @@ async def timezone_command(message: Message) -> None:
             link_preview_options=NO_LINK_PREVIEW,
         )
         return
-
-    set_chat_timezone(
-        chat_id=message.chat.id,
-        timezone=timezone_name,
-    )
 
     await message.answer(
         "Таймзона этого чата обновлена.\n\n"

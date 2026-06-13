@@ -1,3 +1,4 @@
+from zoneinfo import ZoneInfoNotFoundError
 from datetime import datetime
 import pytest
 
@@ -6,6 +7,7 @@ from app.reminder_service import (
     build_active_reminders_list_text_for_chat,
     delete_active_reminder_for_chat,
     create_scheduled_reminder,
+    set_chat_timezone_for_chat,
 )
 
 
@@ -262,5 +264,66 @@ def test_create_scheduled_reminder_creates_db_record_and_schedules_job(
             "month_week_number": None,
             "month_day": None,
             "timezone_name": "Asia/Yekaterinburg",
+        }
+    ]
+
+
+def test_set_chat_timezone_for_chat_returns_false_when_timezone_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_calls: list[dict[str, object]] = []
+
+    def fake_zone_info(timezone_name: str) -> None:
+        raise ZoneInfoNotFoundError(timezone_name)
+
+    def fake_set_chat_timezone(**kwargs: object) -> None:
+        set_calls.append(kwargs)
+
+    monkeypatch.setattr(reminder_service_module, "ZoneInfo", fake_zone_info)
+    monkeypatch.setattr(
+        reminder_service_module,
+        "set_chat_timezone",
+        fake_set_chat_timezone,
+    )
+
+    result = set_chat_timezone_for_chat(
+        chat_id=100,
+        timezone_name="Invalid/Timezone",
+    )
+
+    assert result is False
+    assert set_calls == []
+
+
+def test_set_chat_timezone_for_chat_saves_timezone_when_timezone_is_valid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validated_timezones: list[str] = []
+    set_calls: list[dict[str, object]] = []
+
+    def fake_zone_info(timezone_name: str) -> None:
+        validated_timezones.append(timezone_name)
+
+    def fake_set_chat_timezone(**kwargs: object) -> None:
+        set_calls.append(kwargs)
+
+    monkeypatch.setattr(reminder_service_module, "ZoneInfo", fake_zone_info)
+    monkeypatch.setattr(
+        reminder_service_module,
+        "set_chat_timezone",
+        fake_set_chat_timezone,
+    )
+
+    result = set_chat_timezone_for_chat(
+        chat_id=100,
+        timezone_name="Asia/Yekaterinburg",
+    )
+
+    assert result is True
+    assert validated_timezones == ["Asia/Yekaterinburg"]
+    assert set_calls == [
+        {
+            "chat_id": 100,
+            "timezone": "Asia/Yekaterinburg",
         }
     ]

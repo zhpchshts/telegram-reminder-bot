@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram import Bot
 from app.config import APP_TIMEZONE_NAME
 from app.database import (
@@ -7,6 +8,7 @@ from app.database import (
     get_chat_timezone,
     mark_reminder_as_deleted,
     create_reminder_in_db,
+    set_chat_timezone,
 )
 from app.formatting import format_reminder_for_list, get_int
 from app.scheduler import format_next_run_line, scheduler, schedule_reminder
@@ -14,6 +16,20 @@ from app.scheduler import format_next_run_line, scheduler, schedule_reminder
 
 def get_chat_timezone_name(chat_id: int) -> str:
     return get_chat_timezone(chat_id) or APP_TIMEZONE_NAME
+
+
+def set_chat_timezone_for_chat(*, chat_id: int, timezone_name: str) -> bool:
+    try:
+        ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        return False
+
+    set_chat_timezone(
+        chat_id=chat_id,
+        timezone=timezone_name,
+    )
+
+    return True
 
 
 def create_scheduled_reminder(

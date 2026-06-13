@@ -1,28 +1,27 @@
+from collections.abc import Callable
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import LinkPreviewOptions, Message
 
-from zoneinfo import ZoneInfo
-
-from app.constants import TIMEZONE_LOOKUP_URL, VALID_WEEKDAYS, WEEKDAY_HELP
-
-from app.formatting import (
-    format_datetime_ru,
+from app.constants import TIMEZONE_LOOKUP_URL, WEEKDAY_HELP
+from app.formatting import format_datetime_ru
+from app.reminder_models import ReminderCreateData
+from app.reminder_parsing import (
+    ReminderParseError,
+    ReminderParseResult,
+    parse_every_days_command,
+    parse_every_days_from_command,
+    parse_every_week_command,
+    parse_every_week_from_command,
+    parse_monthly_day_command,
+    parse_monthly_day_from_command,
+    parse_monthly_weekday_command,
+    parse_monthly_weekday_from_command,
+    parse_remind_command,
 )
-
-from app.schedule_calculations import (
-    get_first_weekday_datetime_on_or_after_date,
-    get_monthly_weekday_datetime_on_or_after,
-    get_nearest_future_datetime_for_time,
-    get_nearest_future_weekday_datetime,
-    get_nearest_monthly_weekday_datetime,
-    get_monthly_day_datetime_on_or_after,
-    get_nearest_monthly_day_datetime,
-    parse_datetime,
-)
-
 from app.reminder_service import (
     build_active_reminders_list_text_for_chat,
     build_created_reminder_text,
@@ -32,11 +31,11 @@ from app.reminder_service import (
     set_chat_timezone_for_chat,
 )
 
-from app.reminder_models import ReminderCreateData
-
 router = Router()
 
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
+
+ParseCommand = Callable[[str | None, str], ReminderParseResult]
 
 
 async def split_command(
@@ -59,38 +58,6 @@ async def split_command(
         return None
 
     return parts
-
-
-async def parse_min_int(
-    message: Message,
-    value: str,
-    *,
-    min_value: int = 1,
-    max_value: int | None = None,
-    parse_error: str = "N должно быть целым числом.",
-    range_error: str = "N должно быть больше или равно 1.",
-) -> int | None:
-    try:
-        result = int(value)
-    except ValueError:
-        await message.answer(parse_error)
-        return None
-
-    if result < min_value or (max_value is not None and result > max_value):
-        await message.answer(range_error)
-        return None
-
-    return result
-
-
-async def validate_weekday(message: Message, day_of_week: str) -> bool:
-    if day_of_week in VALID_WEEKDAYS:
-        return True
-
-    await message.answer(
-        f"Не понял день недели.\n\nПоддерживаемые значения:\n{WEEKDAY_HELP}"
-    )
-    return False
 
 
 async def reject_past_datetime(
@@ -118,8 +85,8 @@ async def reject_past_datetime(
     lines.append(
         f"Сейчас в таймзоне {timezone_name}: {format_datetime_ru(now, timezone_name)}"
     )
-    await message.answer("\n".join(lines))
 
+    await message.answer("\n".join(lines))
     return True
 
 
@@ -134,13 +101,95 @@ async def create_schedule_and_confirm(
         chat_id=message.chat.id,
         data=data,
     )
-
     answer_text = build_created_reminder_text(
         reminder_id=reminder_id,
         data=data,
     )
 
     await message.answer(answer_text)
+
+
+async def answer_parse_error(
+    message: Message,
+    *,
+    error: ReminderParseError,
+    usage_text: str,
+    invalid_datetime_text: str | None = None,
+) -> None:
+    error_text = str(error)
+
+    if error_text == "Не хватает данных.":
+        await message.answer(f"{error_text}\n\n{usage_text}")
+        return
+
+    if error_text == "Не понял день недели.":
+        await message.answer(
+            f"Не понял день недели.\n\nПоддерживаемые значения:\n{WEEKDAY_HELP}"
+        )
+        return
+
+    if invalid_datetime_text and error_text.startswith(
+        ("Не смог разобрать дату", "Не смог разобрать время")
+    ):
+        await message.answer(invalid_datetime_text)
+        return
+
+    await message.answer(error_text)
+
+
+async def parse_create_command_or_answer(
+    message: Message,
+    *,
+    parser: ParseCommand,
+    usage_text: str,
+    invalid_datetime_text: str | None = None,
+) -> ReminderParseResult | None:
+    timezone_name = get_chat_timezone_name(message.chat.id)
+
+    try:
+        return parser(message.text, timezone_name)
+    except ReminderParseError as error:
+        await answer_parse_error(
+            message,
+            error=error,
+            usage_text=usage_text,
+            invalid_datetime_text=invalid_datetime_text,
+        )
+        return None
+
+
+async def handle_create_command(
+    message: Message,
+    bot: Bot,
+    *,
+    parser: ParseCommand,
+    usage_text: str,
+    invalid_datetime_text: str | None = None,
+) -> None:
+    parse_result = await parse_create_command_or_answer(
+        message,
+        parser=parser,
+        usage_text=usage_text,
+        invalid_datetime_text=invalid_datetime_text,
+    )
+
+    if parse_result is None:
+        return
+
+    if parse_result.reject_past_heading and await reject_past_datetime(
+        message,
+        start_at=parse_result.data.start_at,
+        heading=parse_result.reject_past_heading,
+        timezone_name=parse_result.data.timezone_name,
+        show_candidate=parse_result.reject_past_show_candidate,
+    ):
+        return
+
+    await create_schedule_and_confirm(
+        message,
+        bot,
+        data=parse_result.data,
+    )
 
 
 @router.message(Command("start"))
@@ -277,486 +326,145 @@ async def timezone_command(message: Message) -> None:
 
 @router.message(Command("remind"))
 async def remind(message: Message, bot: Bot) -> None:
-    parts = await split_command(
-        message,
-        maxsplit=3,
-        min_parts=4,
-        usage_text="Формат:\n/remind ГГГГ-ММ-ДД ЧЧ:ММ Текст",
-    )
-    if not parts:
-        return
-
-    timezone_name = get_chat_timezone_name(message.chat.id)
-    chat_timezone = ZoneInfo(timezone_name)
-
-    try:
-        start_at = parse_datetime(parts[1], parts[2], chat_timezone)
-    except ValueError:
-        await message.answer(
-            "Не смог разобрать дату и время.\n\nНужный формат:\nГГГГ-ММ-ДД ЧЧ:ММ"
-        )
-        return
-
-    if await reject_past_datetime(
-        message,
-        start_at=start_at,
-        heading="Дата и время должны быть в будущем.",
-        timezone_name=timezone_name,
-    ):
-        return
-
-    await create_schedule_and_confirm(
+    await handle_create_command(
         message,
         bot,
-        data=ReminderCreateData(
-            reminder_text=parts[3],
-            schedule_type="once",
-            start_at=start_at,
-            timezone_name=timezone_name,
+        parser=parse_remind_command,
+        usage_text="Формат:\n/remind ГГГГ-ММ-ДД ЧЧ:ММ Текст",
+        invalid_datetime_text=(
+            "Не смог разобрать дату и время.\n\nНужный формат:\nГГГГ-ММ-ДД ЧЧ:ММ"
         ),
     )
 
 
 @router.message(Command("every_days"))
 async def every_days(message: Message, bot: Bot) -> None:
-    parts = await split_command(
+    await handle_create_command(
         message,
-        maxsplit=3,
-        min_parts=4,
+        bot,
+        parser=parse_every_days_command,
         usage_text=(
             "Формат:\n"
             "/every_days N ЧЧ:ММ Текст\n\n"
             "Пример:\n"
             "/every_days 3 12:12 Каждые три дня"
         ),
-    )
-    if not parts:
-        return
-
-    interval_days = await parse_min_int(message, parts[1])
-    if interval_days is None:
-        return
-
-    timezone_name = get_chat_timezone_name(message.chat.id)
-    chat_timezone = ZoneInfo(timezone_name)
-
-    try:
-        start_at = get_nearest_future_datetime_for_time(
-            parts[2],
-            timezone=chat_timezone,
-        )
-    except ValueError:
-        await message.answer("Не смог разобрать время. Нужный формат: ЧЧ:ММ")
-        return
-
-    await create_schedule_and_confirm(
-        message,
-        bot,
-        data=ReminderCreateData(
-            reminder_text=parts[3],
-            schedule_type="every_days",
-            start_at=start_at,
-            timezone_name=timezone_name,
-            interval_days=interval_days,
-        ),
+        invalid_datetime_text="Не смог разобрать время.\nНужный формат: ЧЧ:ММ",
     )
 
 
 @router.message(Command("every_days_from"))
 async def every_days_from(message: Message, bot: Bot) -> None:
-    parts = await split_command(
-        message,
-        maxsplit=4,
-        min_parts=5,
-        usage_text="Формат:\n/every_days_from N ГГГГ-ММ-ДД ЧЧ:ММ Текст",
-    )
-    if not parts:
-        return
-
-    interval_days = await parse_min_int(message, parts[1])
-    if interval_days is None:
-        return
-
-    timezone_name = get_chat_timezone_name(message.chat.id)
-    chat_timezone = ZoneInfo(timezone_name)
-
-    try:
-        start_at = parse_datetime(parts[2], parts[3], chat_timezone)
-    except ValueError:
-        await message.answer(
-            "Не смог разобрать дату и время. Нужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
-        )
-        return
-
-    if await reject_past_datetime(
-        message,
-        start_at=start_at,
-        heading="Дата и время старта должны быть в будущем.",
-        timezone_name=timezone_name,
-    ):
-        return
-
-    await create_schedule_and_confirm(
+    await handle_create_command(
         message,
         bot,
-        data=ReminderCreateData(
-            reminder_text=parts[4],
-            schedule_type="every_days",
-            start_at=start_at,
-            timezone_name=timezone_name,
-            interval_days=interval_days,
+        parser=parse_every_days_from_command,
+        usage_text="Формат:\n/every_days_from N ГГГГ-ММ-ДД ЧЧ:ММ Текст",
+        invalid_datetime_text=(
+            "Не смог разобрать дату и время.\nНужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
         ),
     )
 
 
 @router.message(Command("every_week"))
 async def every_week(message: Message, bot: Bot) -> None:
-    parts = await split_command(
+    await handle_create_command(
         message,
-        maxsplit=4,
-        min_parts=5,
+        bot,
+        parser=parse_every_week_command,
         usage_text=(
             "Формат:\n"
             "/every_week N ДЕНЬ ЧЧ:ММ Текст\n\n"
             "Пример:\n"
             "/every_week 2 SUN 12:12 Каждое второе воскресенье"
         ),
-    )
-    if not parts:
-        return
-
-    interval_weeks = await parse_min_int(message, parts[1])
-    day_of_week = parts[2].upper()
-
-    if interval_weeks is None or not await validate_weekday(message, day_of_week):
-        return
-
-    timezone_name = get_chat_timezone_name(message.chat.id)
-    chat_timezone = ZoneInfo(timezone_name)
-
-    try:
-        start_at = get_nearest_future_weekday_datetime(
-            day_of_week,
-            parts[3],
-            timezone=chat_timezone,
-        )
-    except ValueError:
-        await message.answer("Не смог разобрать время. Нужный формат: ЧЧ:ММ")
-        return
-
-    await create_schedule_and_confirm(
-        message,
-        bot,
-        data=ReminderCreateData(
-            reminder_text=parts[4],
-            schedule_type="every_week",
-            start_at=start_at,
-            timezone_name=timezone_name,
-            interval_weeks=interval_weeks,
-            day_of_week=day_of_week,
-        ),
+        invalid_datetime_text="Не смог разобрать время.\nНужный формат: ЧЧ:ММ",
     )
 
 
 @router.message(Command("every_week_from"))
 async def every_week_from(message: Message, bot: Bot) -> None:
-    parts = await split_command(
+    await handle_create_command(
         message,
-        maxsplit=5,
-        min_parts=6,
+        bot,
+        parser=parse_every_week_from_command,
         usage_text=(
             "Формат:\n"
             "/every_week_from N ДЕНЬ ГГГГ-ММ-ДД ЧЧ:ММ Текст\n\n"
             "Пример:\n"
             "/every_week_from 2 SUN 2026-06-14 12:12 Каждое второе воскресенье"
         ),
-    )
-    if not parts:
-        return
-
-    interval_weeks = await parse_min_int(message, parts[1])
-    day_of_week = parts[2].upper()
-
-    if interval_weeks is None or not await validate_weekday(message, day_of_week):
-        return
-
-    timezone_name = get_chat_timezone_name(message.chat.id)
-    chat_timezone = ZoneInfo(timezone_name)
-
-    try:
-        start_at = get_first_weekday_datetime_on_or_after_date(
-            day_of_week=day_of_week,
-            date_text=parts[3],
-            time_text=parts[4],
-            timezone=chat_timezone,
-        )
-    except ValueError:
-        await message.answer(
-            "Не смог разобрать дату или время. Нужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
-        )
-        return
-
-    if await reject_past_datetime(
-        message,
-        start_at=start_at,
-        heading="Дата и время первого срабатывания должны быть в будущем.",
-        timezone_name=timezone_name,
-        show_candidate=True,
-    ):
-        return
-
-    await create_schedule_and_confirm(
-        message,
-        bot,
-        data=ReminderCreateData(
-            reminder_text=parts[5],
-            schedule_type="every_week",
-            start_at=start_at,
-            timezone_name=timezone_name,
-            interval_weeks=interval_weeks,
-            day_of_week=day_of_week,
+        invalid_datetime_text=(
+            "Не смог разобрать дату или время.\nНужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
         ),
     )
 
 
 @router.message(Command("monthly_weekday"))
 async def monthly_weekday(message: Message, bot: Bot) -> None:
-    parts = await split_command(
+    await handle_create_command(
         message,
-        maxsplit=4,
-        min_parts=5,
+        bot,
+        parser=parse_monthly_weekday_command,
         usage_text=(
             "Формат:\n"
             "/monthly_weekday N ДЕНЬ ЧЧ:ММ Текст\n\n"
             "Пример:\n"
             "/monthly_weekday 1 MON 12:12 Каждый первый понедельник месяца"
         ),
-    )
-    if not parts:
-        return
-
-    month_week_number = await parse_min_int(
-        message,
-        parts[1],
-        max_value=5,
-        parse_error="N должно быть целым числом от 1 до 5.",
-        range_error="N должно быть от 1 до 5.",
-    )
-    day_of_week = parts[2].upper()
-
-    if month_week_number is None or not await validate_weekday(message, day_of_week):
-        return
-
-    timezone_name = get_chat_timezone_name(message.chat.id)
-    chat_timezone = ZoneInfo(timezone_name)
-
-    try:
-        start_at = get_nearest_monthly_weekday_datetime(
-            month_week_number=month_week_number,
-            day_of_week=day_of_week,
-            time_text=parts[3],
-            timezone=chat_timezone,
-        )
-    except ValueError:
-        await message.answer("Не смог разобрать время. Нужный формат: ЧЧ:ММ")
-        return
-
-    await create_schedule_and_confirm(
-        message,
-        bot,
-        data=ReminderCreateData(
-            reminder_text=parts[4],
-            schedule_type="monthly_weekday",
-            start_at=start_at,
-            timezone_name=timezone_name,
-            month_week_number=month_week_number,
-            day_of_week=day_of_week,
-        ),
+        invalid_datetime_text="Не смог разобрать время.\nНужный формат: ЧЧ:ММ",
     )
 
 
 @router.message(Command("monthly_weekday_from"))
 async def monthly_weekday_from(message: Message, bot: Bot) -> None:
-    parts = await split_command(
+    await handle_create_command(
         message,
-        maxsplit=5,
-        min_parts=6,
+        bot,
+        parser=parse_monthly_weekday_from_command,
         usage_text=(
             "Формат:\n"
             "/monthly_weekday_from N ДЕНЬ ГГГГ-ММ-ДД ЧЧ:ММ Текст\n\n"
             "Пример:\n"
-            "/monthly_weekday_from 1 MON 2026-07-01 12:12 Первый понедельник месяца с июля"
+            "/monthly_weekday_from 1 MON 2026-07-01 12:12 Первый понедельник "
+            "месяца с июля"
         ),
-    )
-    if not parts:
-        return
-
-    month_week_number = await parse_min_int(
-        message,
-        parts[1],
-        max_value=5,
-        parse_error="N должно быть целым числом от 1 до 5.",
-        range_error="N должно быть от 1 до 5.",
-    )
-    day_of_week = parts[2].upper()
-
-    if month_week_number is None or not await validate_weekday(message, day_of_week):
-        return
-
-    timezone_name = get_chat_timezone_name(message.chat.id)
-    chat_timezone = ZoneInfo(timezone_name)
-
-    try:
-        lower_bound = parse_datetime(parts[3], parts[4], chat_timezone)
-        start_at = get_monthly_weekday_datetime_on_or_after(
-            month_week_number=month_week_number,
-            day_of_week=day_of_week,
-            time_text=parts[4],
-            lower_bound=lower_bound,
-        )
-    except ValueError:
-        await message.answer(
-            "Не смог разобрать дату или время. Нужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
-        )
-        return
-
-    if await reject_past_datetime(
-        message,
-        start_at=start_at,
-        heading="Дата и время первого срабатывания должны быть в будущем.",
-        timezone_name=timezone_name,
-        show_candidate=True,
-    ):
-        return
-
-    await create_schedule_and_confirm(
-        message,
-        bot,
-        data=ReminderCreateData(
-            reminder_text=parts[5],
-            schedule_type="monthly_weekday",
-            start_at=start_at,
-            timezone_name=timezone_name,
-            month_week_number=month_week_number,
-            day_of_week=day_of_week,
+        invalid_datetime_text=(
+            "Не смог разобрать дату или время.\nНужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
         ),
     )
 
 
 @router.message(Command("monthly_day"))
 async def monthly_day(message: Message, bot: Bot) -> None:
-    parts = await split_command(
+    await handle_create_command(
         message,
-        maxsplit=3,
-        min_parts=4,
+        bot,
+        parser=parse_monthly_day_command,
         usage_text=(
             "Формат:\n"
             "/monthly_day ДЕНЬ ЧЧ:ММ Текст\n\n"
             "Пример:\n"
             "/monthly_day 11 12:12 Оплатить интернет"
         ),
-    )
-    if not parts:
-        return
-
-    month_day = await parse_min_int(
-        message,
-        parts[1],
-        min_value=1,
-        max_value=31,
-        parse_error="День месяца должен быть целым числом от 1 до 31.",
-        range_error="День месяца должен быть от 1 до 31.",
-    )
-    if month_day is None:
-        return
-
-    timezone_name = get_chat_timezone_name(message.chat.id)
-    chat_timezone = ZoneInfo(timezone_name)
-
-    try:
-        start_at = get_nearest_monthly_day_datetime(
-            month_day=month_day,
-            time_text=parts[2],
-            timezone=chat_timezone,
-        )
-    except ValueError:
-        await message.answer("Не смог разобрать время. Нужный формат: ЧЧ:ММ")
-        return
-
-    await create_schedule_and_confirm(
-        message,
-        bot,
-        data=ReminderCreateData(
-            reminder_text=parts[3],
-            schedule_type="monthly_day",
-            start_at=start_at,
-            timezone_name=timezone_name,
-            month_day=month_day,
-        ),
+        invalid_datetime_text="Не смог разобрать время.\nНужный формат: ЧЧ:ММ",
     )
 
 
 @router.message(Command("monthly_day_from"))
 async def monthly_day_from(message: Message, bot: Bot) -> None:
-    parts = await split_command(
+    await handle_create_command(
         message,
-        maxsplit=4,
-        min_parts=5,
+        bot,
+        parser=parse_monthly_day_from_command,
         usage_text=(
             "Формат:\n"
             "/monthly_day_from ДЕНЬ ГГГГ-ММ-ДД ЧЧ:ММ Текст\n\n"
             "Пример:\n"
             "/monthly_day_from 11 2026-07-01 12:12 Оплатить интернет"
         ),
-    )
-    if not parts:
-        return
-
-    month_day = await parse_min_int(
-        message,
-        parts[1],
-        min_value=1,
-        max_value=31,
-        parse_error="День месяца должен быть целым числом от 1 до 31.",
-        range_error="День месяца должен быть от 1 до 31.",
-    )
-    if month_day is None:
-        return
-
-    timezone_name = get_chat_timezone_name(message.chat.id)
-    chat_timezone = ZoneInfo(timezone_name)
-
-    try:
-        lower_bound = parse_datetime(parts[2], parts[3], chat_timezone)
-        start_at = get_monthly_day_datetime_on_or_after(
-            month_day=month_day,
-            time_text=parts[3],
-            lower_bound=lower_bound,
-        )
-    except ValueError:
-        await message.answer(
-            "Не смог разобрать дату или время. Нужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
-        )
-        return
-
-    if await reject_past_datetime(
-        message,
-        start_at=start_at,
-        heading="Дата и время первого срабатывания должны быть в будущем.",
-        timezone_name=timezone_name,
-        show_candidate=True,
-    ):
-        return
-
-    await create_schedule_and_confirm(
-        message,
-        bot,
-        data=ReminderCreateData(
-            reminder_text=parts[4],
-            schedule_type="monthly_day",
-            start_at=start_at,
-            timezone_name=timezone_name,
-            month_day=month_day,
+        invalid_datetime_text=(
+            "Не смог разобрать дату или время.\nНужный формат: ГГГГ-ММ-ДД ЧЧ:ММ"
         ),
     )
 
@@ -783,13 +491,14 @@ async def delete_reminder(message: Message) -> None:
         ),
         missing_text=None,
     )
+
     if not parts:
         return
 
     try:
         reminder_id = int(parts[1].strip())
     except ValueError:
-        await message.answer("ID должен быть числом. Например: /delete 1")
+        await message.answer("ID должен быть числом.\nНапример: /delete 1")
         return
 
     was_deleted = delete_active_reminder_for_chat(

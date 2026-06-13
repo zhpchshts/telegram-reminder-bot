@@ -4,7 +4,6 @@ const DEFAULT_START_OFFSET_MINUTES = 5;
 
 function getTelegramInitData() {
   const sdkInitData = telegram?.initData || "";
-
   if (sdkInitData) {
     return sdkInitData;
   }
@@ -12,7 +11,6 @@ function getTelegramInitData() {
   const hash = window.location.hash.startsWith("#")
     ? window.location.hash.slice(1)
     : window.location.hash;
-
   const hashParams = new URLSearchParams(hash);
   const searchParams = new URLSearchParams(window.location.search);
 
@@ -27,7 +25,6 @@ function buildMissingInitDataMessage() {
   const hash = window.location.hash.startsWith("#")
     ? window.location.hash.slice(1)
     : window.location.hash;
-
   const hashParams = new URLSearchParams(hash);
   const searchParams = new URLSearchParams(window.location.search);
 
@@ -39,6 +36,7 @@ function buildMissingInitDataMessage() {
     `Debug: WebApp=${telegram ? "yes" : "no"}, platform=${telegram?.platform || "unknown"}, version=${telegram?.version || "unknown"}, hash_has_tgWebAppData=${hashParams.has("tgWebAppData") ? "yes" : "no"}, search_has_tgWebAppData=${searchParams.has("tgWebAppData") ? "yes" : "no"}`,
   ].join("\n");
 }
+
 const state = {
   context: null,
   reminderOptions: null,
@@ -99,11 +97,12 @@ function setBusy(isBusy) {
 
 function showPreview(preview) {
   const period = preview.period || "одноразовое";
+
   elements.preview.innerHTML = `
     <strong>Предпросмотр</strong>
-    <div>${escapeHtml(preview.reminder_text)}</div>
-    <div class="muted">${escapeHtml(period)}</div>
-    <div class="muted">${formatDateTime(preview.start_at)}</div>
+    <p>${escapeHtml(preview.reminder_text)}</p>
+    <p>${escapeHtml(period)}</p>
+    <p>${formatDateTime(preview.start_at)}</p>
   `;
   elements.preview.hidden = false;
 }
@@ -123,9 +122,10 @@ function escapeHtml(value) {
 }
 
 async function apiRequest(path, options = {}) {
-	if (!initData) {
+  if (!initData) {
     throw new Error(buildMissingInitDataMessage());
   }
+
   const response = await fetch(path, {
     ...options,
     headers: {
@@ -153,7 +153,6 @@ async function loadBootstrap() {
   hidePreview();
 
   const bootstrap = await apiRequest("/api/tma/bootstrap");
-
   state.context = bootstrap.context;
   state.reminderOptions = bootstrap.reminder_options;
   state.reminders = bootstrap.active_reminders;
@@ -184,7 +183,6 @@ function renderOptions() {
     state.reminderOptions.weekdays,
     "Не выбрано",
   );
-
   fillSelect(
     elements.monthWeekNumber,
     state.reminderOptions.month_week_numbers.map((value) => ({
@@ -193,7 +191,6 @@ function renderOptions() {
     })),
     "Не выбрано",
   );
-
   fillSelect(
     elements.monthDay,
     state.reminderOptions.month_days.map((value) => ({
@@ -286,7 +283,6 @@ function updateConditionalFields() {
 
 function buildRequestPayload() {
   const scheduleType = elements.scheduleType.value;
-
   const payload = {
     reminder_text: elements.reminderText.value.trim(),
     schedule_type: scheduleType,
@@ -328,6 +324,97 @@ function numberOrNull(value) {
   return Number(value);
 }
 
+function isPositiveIntegerValue(value) {
+  if (value === "") {
+    return false;
+  }
+
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 1;
+}
+
+function getStartAtDate() {
+  if (!elements.startAt.value) {
+    return null;
+  }
+
+  const date = new Date(elements.startAt.value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date;
+}
+
+function validateTimezoneForm() {
+  if (!elements.chatTimezoneName.value.trim()) {
+    showStatus("Укажи таймзону чата.", "error");
+    return false;
+  }
+
+  return true;
+}
+
+function validateReminderForm() {
+  const errors = [];
+  const scheduleType = elements.scheduleType.value;
+  const startAt = getStartAtDate();
+
+  updateStartAtMin();
+
+  if (!elements.reminderText.value.trim()) {
+    errors.push("Укажи текст напоминания.");
+  }
+
+  if (!startAt) {
+    errors.push("Укажи первое срабатывание.");
+  } else if (startAt < new Date()) {
+    errors.push("Первое срабатывание не может быть в прошлом.");
+  }
+
+  if (!elements.timezoneName.value.trim()) {
+    errors.push("Укажи таймзону чата.");
+  }
+
+  if (
+    scheduleType === "every_days" &&
+    !isPositiveIntegerValue(elements.intervalDays.value)
+  ) {
+    errors.push("Для расписания «Каждые N дней» укажи интервал в днях.");
+  }
+
+  if (scheduleType === "every_week") {
+    if (!isPositiveIntegerValue(elements.intervalWeeks.value)) {
+      errors.push("Для расписания «Каждые N недель» укажи интервал в неделях.");
+    }
+
+    if (!elements.dayOfWeek.value) {
+      errors.push("Для расписания «Каждые N недель» выбери день недели.");
+    }
+  }
+
+  if (scheduleType === "monthly_weekday") {
+    if (!elements.monthWeekNumber.value) {
+      errors.push("Для расписания по дню недели месяца выбери неделю месяца.");
+    }
+
+    if (!elements.monthDayOfWeek.value) {
+      errors.push("Для расписания по дню недели месяца выбери день недели.");
+    }
+  }
+
+  if (scheduleType === "monthly_day" && !elements.monthDay.value) {
+    errors.push("Для расписания по дню месяца выбери день месяца.");
+  }
+
+  if (errors.length) {
+    showStatus(errors.join("\n"), "error");
+    return false;
+  }
+
+  return true;
+}
+
 function setDefaultStartAtIfEmpty() {
   updateStartAtMin();
 
@@ -338,7 +425,6 @@ function setDefaultStartAtIfEmpty() {
 
 function setDefaultStartAt() {
   const date = new Date();
-
   date.setMinutes(date.getMinutes() + DEFAULT_START_OFFSET_MINUTES);
   date.setSeconds(0, 0);
 
@@ -347,7 +433,6 @@ function setDefaultStartAt() {
 
 function updateStartAtMin() {
   const date = new Date();
-
   date.setSeconds(0, 0);
 
   elements.startAt.min = toDateTimeLocalValue(date);
@@ -397,6 +482,10 @@ function resetForm() {
 async function previewReminder() {
   hideStatus();
 
+  if (!validateReminderForm()) {
+    return;
+  }
+
   const preview = await apiRequest("/api/tma/reminder-preview", {
     method: "POST",
     body: JSON.stringify(buildRequestPayload()),
@@ -407,6 +496,10 @@ async function previewReminder() {
 
 async function saveTimezone() {
   hideStatus();
+
+  if (!validateTimezoneForm()) {
+    return;
+  }
 
   const timezoneName = elements.chatTimezoneName.value.trim();
 
@@ -428,6 +521,10 @@ async function saveTimezone() {
 
 async function saveReminder() {
   hideStatus();
+
+  if (!validateReminderForm()) {
+    return;
+  }
 
   const reminderId = elements.reminderId.value;
   const isEdit = Boolean(reminderId);
@@ -484,6 +581,7 @@ function formatDateTime(value) {
 function toDateTimeLocalValue(value) {
   const date = new Date(value);
   const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 

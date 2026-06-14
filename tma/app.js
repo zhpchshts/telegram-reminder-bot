@@ -6,6 +6,7 @@ function refreshTelegramWebApp() {
 }
 
 const DEFAULT_START_OFFSET_MINUTES = 5;
+const THEME_STORAGE_KEY = "telegram-reminder-theme";
 
 function getTelegramInitData() {
   const sdkInitData = refreshTelegramWebApp()?.initData || "";
@@ -51,6 +52,69 @@ function getDeviceTimezone() {
   }
 }
 
+function getStoredTheme() {
+  try {
+    const theme = localStorage.getItem(THEME_STORAGE_KEY);
+
+    if (theme === "dark" || theme === "light") {
+      return theme;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function storeTheme(theme) {
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Ignore storage errors inside Telegram WebView.
+  }
+}
+
+function getSystemTheme() {
+  if (
+    window.matchMedia &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+  ) {
+    return "dark";
+  }
+
+  return "light";
+}
+
+function getCurrentTheme() {
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+
+  if (!elements.themeToggleButton) {
+    return;
+  }
+
+  const isDark = theme === "dark";
+  elements.themeToggleButton.textContent = isDark ? "☀ Светлая" : "☾ Тёмная";
+  elements.themeToggleButton.setAttribute("aria-pressed", String(isDark));
+  elements.themeToggleButton.setAttribute(
+    "aria-label",
+    isDark ? "Включить светлую тему" : "Включить тёмную тему",
+  );
+}
+
+function initTheme() {
+  applyTheme(getStoredTheme() || getSystemTheme());
+}
+
+function toggleTheme() {
+  const nextTheme = getCurrentTheme() === "dark" ? "light" : "dark";
+  storeTheme(nextTheme);
+  applyTheme(nextTheme);
+}
+
 const state = {
   context: null,
   reminderOptions: null,
@@ -68,6 +132,7 @@ const elements = {
   chatTimezoneName: document.querySelector("#chat-timezone-name"),
   timezoneSaveButton: document.querySelector("#timezone-save-button"),
   reloadButton: document.querySelector("#reload-button"),
+  themeToggleButton: document.querySelector("#theme-toggle-button"),
   form: document.querySelector("#reminder-form"),
   formTitle: document.querySelector("#form-title"),
   reminderId: document.querySelector("#reminder-id"),
@@ -874,6 +939,7 @@ async function handleAsync(action) {
 }
 
 elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
+elements.themeToggleButton.addEventListener("click", toggleTheme);
 elements.startAt.addEventListener("input", clearStartAtError);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
@@ -890,4 +956,5 @@ elements.timezoneForm.addEventListener("submit", (event) => {
   handleAsync(saveTimezone);
 });
 
+initTheme();
 window.setTimeout(() => handleAsync(loadBootstrap), 0);

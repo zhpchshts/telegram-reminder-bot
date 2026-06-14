@@ -4,6 +4,24 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Напоминания</title>
+	<script>
+  try {
+    const theme = localStorage.getItem("telegram-reminder-theme");
+
+    if (theme === "dark" || theme === "light") {
+      document.documentElement.dataset.theme = theme;
+    } else if (
+      window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+    ) {
+      document.documentElement.dataset.theme = "dark";
+    } else {
+      document.documentElement.dataset.theme = "light";
+    }
+  } catch {
+    document.documentElement.dataset.theme = "light";
+  }
+</script>
     <link rel="stylesheet" href="./styles.css?v=20260614-4" />
 
   </head>
@@ -14,9 +32,17 @@
           <h1>Напоминания</h1>
           <p id="chat-title" class="muted">Загрузка чата...</p>
         </div>
-        <button id="reload-button" class="secondary-button" type="button">
-          Обновить
-        </button>
+        <div class="header-actions" aria-label="Действия">
+  <button id="reload-button" type="button" class="secondary-button">Обновить</button>
+  <button
+    id="theme-toggle-button"
+    type="button"
+    class="secondary-button theme-toggle-button"
+    aria-pressed="false"
+  >
+    ☾ Тёмная
+  </button>
+</div>
       </header>
 
       <section id="status" class="status" hidden></section>

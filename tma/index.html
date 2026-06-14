@@ -52,11 +52,9 @@
               required
             />
           </label>
-
           <p class="muted">
             Формат: Europe/Moscow, Asia/Yekaterinburg, Asia/Almaty.
           </p>
-
           <div class="actions">
             <button
               id="timezone-save-button"
@@ -71,7 +69,6 @@
 
       <section class="card">
         <h2 id="form-title">Создать напоминание</h2>
-
         <form id="reminder-form" class="form">
           <input id="reminder-id" type="hidden" />
           <input id="timezone-name" name="timezone_name" type="hidden" />
@@ -127,7 +124,6 @@
                 min="1"
               />
             </label>
-
             <label class="field">
               <span>День недели</span>
               <select id="day-of-week" name="day_of_week">
@@ -143,7 +139,6 @@
                 <option value="">Не выбрано</option>
               </select>
             </label>
-
             <label class="field">
               <span>День недели</span>
               <select id="month-day-of-week" name="month_day_of_week">
@@ -167,11 +162,9 @@
             <button id="preview-button" class="secondary-button" type="button">
               Предпросмотр
             </button>
-
             <button id="save-button" class="primary-button" type="submit">
               Сохранить
             </button>
-
             <button
               id="cancel-edit-button"
               class="secondary-button"
@@ -186,13 +179,12 @@
 
       <section class="card">
         <h2>Активные напоминания</h2>
-
         <div id="reminders-list" class="reminders-list">
           <p class="muted">Загрузка...</p>
         </div>
       </section>
     </main>
 
-    <script src="./app.js?v=20260614-4"></script>
+    <script src="./app.js?v=20260614-5"></script>
   </body>
 </html>

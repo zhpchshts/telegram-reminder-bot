@@ -1,11 +1,9 @@
 const telegram = window.Telegram?.WebApp;
-
 const initData = getTelegramInitData();
 const DEFAULT_START_OFFSET_MINUTES = 5;
 
 function getTelegramInitData() {
   const sdkInitData = telegram?.initData || "";
-
   if (sdkInitData) {
     return sdkInitData;
   }
@@ -57,17 +55,13 @@ const state = {
 const elements = {
   chatTitle: document.querySelector("#chat-title"),
   status: document.querySelector("#status"),
-
   deviceTimezoneBlock: document.querySelector("#device-timezone-block"),
   deviceTimezoneName: document.querySelector("#device-timezone-name"),
   useDeviceTimezoneButton: document.querySelector("#use-device-timezone-button"),
-
   timezoneForm: document.querySelector("#timezone-form"),
   chatTimezoneName: document.querySelector("#chat-timezone-name"),
   timezoneSaveButton: document.querySelector("#timezone-save-button"),
-
   reloadButton: document.querySelector("#reload-button"),
-
   form: document.querySelector("#reminder-form"),
   formTitle: document.querySelector("#form-title"),
   reminderId: document.querySelector("#reminder-id"),
@@ -83,12 +77,10 @@ const elements = {
   monthDayOfWeek: document.querySelector("#month-day-of-week"),
   monthWeekNumber: document.querySelector("#month-week-number"),
   monthDay: document.querySelector("#month-day"),
-
   intervalDaysField: document.querySelector("#interval-days-field"),
   weeklyFields: document.querySelector("#weekly-fields"),
   monthlyWeekdayFields: document.querySelector("#monthly-weekday-fields"),
   monthDayField: document.querySelector("#month-day-field"),
-
   preview: document.querySelector("#preview"),
   previewButton: document.querySelector("#preview-button"),
   saveButton: document.querySelector("#save-button"),
@@ -134,8 +126,9 @@ function focusStartAtField() {
 
 function buildStartAtPastMessage() {
   const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
+  const timezoneLabel = getActiveTimezoneLabel(timezoneName);
 
-  return `Время срабатывания уже прошло в таймзоне чата ${timezoneName}. Выбери более позднее время.`;
+  return `Время срабатывания уже прошло в ${timezoneLabel} ${timezoneName}. Выбери более позднее время.`;
 }
 
 function isStartAtPastError(error) {
@@ -155,26 +148,26 @@ function handleError(error) {
 
 function setBusy(isBusy) {
   state.isBusy = isBusy;
-
   for (const button of document.querySelectorAll("button")) {
     if (button.hasAttribute("data-modal-button")) {
       continue;
     }
-
     button.disabled = isBusy;
   }
 }
 
 function showPreview(preview) {
   const period = preview.period || "одноразовое";
-  const timezoneName = preview.timezone_name || state.context?.timezone_name;
-  const formattedStartAt = formatDateTime(preview.start_at, timezoneName);
+  const timezoneName =
+    preview.timezone_name || elements.timezoneName.value || state.context?.timezone_name;
 
   elements.preview.innerHTML = `
     <strong>Предпросмотр</strong>
     <div>${escapeHtml(preview.reminder_text)}</div>
     <div class="muted">${escapeHtml(period)}</div>
-    <div class="muted">Первое срабатывание: ${escapeHtml(formattedStartAt)} · ${escapeHtml(timezoneName)}</div>
+    <div class="muted">Первое срабатывание: ${escapeHtml(
+      formatDateTimeWithConditionalTimezone(preview.start_at, timezoneName),
+    )}</div>
   `;
   elements.preview.hidden = false;
 }
@@ -206,7 +199,6 @@ async function apiRequest(path, options = {}) {
       ...(options.headers || {}),
     },
   });
-
   const contentType = response.headers.get("content-type") || "";
   const body = contentType.includes("application/json")
     ? await response.json()
@@ -226,7 +218,6 @@ async function loadBootstrap() {
   clearFieldErrors();
 
   const bootstrap = await apiRequest("/api/tma/bootstrap");
-
   state.context = bootstrap.context;
   state.reminderOptions = bootstrap.reminder_options;
   state.reminders = sortReminders(bootstrap.active_reminders);
@@ -250,8 +241,21 @@ function renderContext() {
 
 function renderStartAtHint() {
   const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
+  const timezoneLabel = getActiveTimezoneLabel(timezoneName);
 
-  elements.startAtHint.textContent = `Время указывается в таймзоне чата: ${timezoneName}.`;
+  elements.startAtHint.textContent = `Время указывается в ${timezoneLabel}: ${timezoneName}.`;
+}
+
+function getActiveTimezoneLabel(timezoneName) {
+  if (
+    timezoneName &&
+    state.context?.timezone_name &&
+    timezoneName !== state.context.timezone_name
+  ) {
+    return "таймзоне напоминания";
+  }
+
+  return "таймзоне чата";
 }
 
 function renderDeviceTimezoneSuggestion() {
@@ -273,18 +277,12 @@ function renderDeviceTimezoneSuggestion() {
 }
 
 function renderOptions() {
-  fillSelect(
-    elements.dayOfWeek,
-    state.reminderOptions.weekdays,
-    "Не выбрано",
-  );
-
+  fillSelect(elements.dayOfWeek, state.reminderOptions.weekdays, "Не выбрано");
   fillSelect(
     elements.monthDayOfWeek,
     state.reminderOptions.weekdays,
     "Не выбрано",
   );
-
   fillSelect(
     elements.monthWeekNumber,
     state.reminderOptions.month_week_numbers.map((value) => ({
@@ -293,7 +291,6 @@ function renderOptions() {
     })),
     "Не выбрано",
   );
-
   fillSelect(
     elements.monthDay,
     state.reminderOptions.month_days.map((value) => ({
@@ -302,7 +299,6 @@ function renderOptions() {
     })),
     "Не выбрано",
   );
-
   updateConditionalFields();
 }
 
@@ -345,18 +341,21 @@ function createReminderCard(reminder) {
   const title = document.createElement("h3");
   title.textContent = reminder.reminder_text;
 
-  const timezoneName = reminder.timezone_name || state.context?.timezone_name;
-  const formattedNextRunAt = formatDateTime(
-    reminder.next_run_at || reminder.start_at,
-    timezoneName,
-  );
-
   const meta = document.createElement("div");
   meta.className = "reminder-meta";
-  meta.innerHTML = `
-    <span>${escapeHtml(reminder.period || "одноразовое")}</span>
-    <span>Следующее: ${escapeHtml(formattedNextRunAt)} · ${escapeHtml(timezoneName)}</span>
-  `;
+
+  const period = document.createElement("div");
+  period.textContent = reminder.period || "одноразовое";
+
+  const nextRun = document.createElement("div");
+  const nextRunAt = reminder.next_run_at || reminder.start_at;
+  const timezoneName = reminder.timezone_name || state.context?.timezone_name;
+  nextRun.textContent = `Следующее: ${formatDateTimeWithConditionalTimezone(
+    nextRunAt,
+    timezoneName,
+  )}`;
+
+  meta.append(period, nextRun);
 
   const actions = document.createElement("div");
   actions.className = "reminder-actions";
@@ -396,13 +395,11 @@ function sortReminders(reminders) {
 
 function getReminderSortTime(reminder) {
   const value = reminder.next_run_at || reminder.start_at;
-
   if (!value) {
     return Number.POSITIVE_INFINITY;
   }
 
   const time = new Date(value).getTime();
-
   if (Number.isNaN(time)) {
     return Number.POSITIVE_INFINITY;
   }
@@ -421,7 +418,6 @@ function updateConditionalFields() {
 
 function buildRequestPayload() {
   const scheduleType = elements.scheduleType.value;
-
   const payload = {
     reminder_text: elements.reminderText.value.trim(),
     schedule_type: scheduleType,
@@ -469,12 +465,16 @@ function isPositiveIntegerValue(value) {
   }
 
   const number = Number(value);
-
   return Number.isInteger(number) && number >= 1;
 }
 
-function hasStartAtValue() {
-  return Boolean(elements.startAt.value);
+function hasValidStartAtValue() {
+  if (!elements.startAt.value) {
+    return false;
+  }
+
+  const date = new Date(elements.startAt.value);
+  return !Number.isNaN(date.getTime());
 }
 
 function validateTimezoneForm() {
@@ -487,17 +487,17 @@ function validateTimezoneForm() {
 }
 
 function validateReminderForm() {
+  clearFieldErrors();
+
   const errors = [];
   const scheduleType = elements.scheduleType.value;
-
-  clearFieldErrors();
 
   if (!elements.reminderText.value.trim()) {
     errors.push("Укажи текст напоминания.");
   }
 
-  if (!hasStartAtValue()) {
-    showStartAtError("Укажи первое срабатывание.");
+  if (!hasValidStartAtValue()) {
+    errors.push("Укажи первое срабатывание.");
   }
 
   if (!elements.timezoneName.value.trim()) {
@@ -535,12 +535,6 @@ function validateReminderForm() {
     errors.push("Для расписания по дню месяца выбери день месяца.");
   }
 
-  if (!hasStartAtValue()) {
-    hideStatus();
-    focusStartAtField();
-    return false;
-  }
-
   if (errors.length) {
     showStatus(errors.join("\n"), "error");
     return false;
@@ -560,20 +554,19 @@ function setDefaultStartAt() {
   date.setMinutes(date.getMinutes() + DEFAULT_START_OFFSET_MINUTES);
   date.setSeconds(0, 0);
 
-  elements.startAt.value = toDateTimeLocalValue(
-    date,
-    state.context?.timezone_name,
-  );
+  const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
+  elements.startAt.value = toDateTimeLocalValue(date, timezoneName);
 }
 
 function startEdit(reminder) {
-  const timezoneName = reminder.timezone_name || state.context?.timezone_name;
-
   elements.reminderId.value = reminder.id;
   elements.formTitle.textContent = "Редактировать напоминание";
   elements.reminderText.value = reminder.reminder_text;
   elements.scheduleType.value = reminder.schedule_type;
-  elements.startAt.value = toDateTimeLocalValue(reminder.start_at, timezoneName);
+  elements.startAt.value = toDateTimeLocalValue(
+    reminder.start_at,
+    reminder.timezone_name || state.context?.timezone_name,
+  );
   elements.timezoneName.value = reminder.timezone_name;
   elements.intervalDays.value = reminder.interval_days || "";
   elements.intervalWeeks.value = reminder.interval_weeks || "";
@@ -591,7 +584,6 @@ function startEdit(reminder) {
   showStatus(
     "Редактируешь напоминание.\nВнеси изменения и нажми «Сохранить изменения».",
   );
-
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -613,7 +605,7 @@ function resetForm() {
 
 async function previewReminder() {
   hideStatus();
-  hidePreview();
+  clearFieldErrors();
 
   if (!validateReminderForm()) {
     return;
@@ -629,13 +621,13 @@ async function previewReminder() {
 
 async function saveTimezone(statusMessage = "Таймзона чата обновлена.") {
   hideStatus();
+  clearFieldErrors();
 
   if (!validateTimezoneForm()) {
     return;
   }
 
   const timezoneName = elements.chatTimezoneName.value.trim();
-
   const timezone = await apiRequest("/api/tma/timezone", {
     method: "PUT",
     body: JSON.stringify({
@@ -649,6 +641,7 @@ async function saveTimezone(statusMessage = "Таймзона чата обно�
 
   renderContext();
   renderDeviceTimezoneSuggestion();
+  renderReminders();
   resetForm();
   showStatus(statusMessage);
 }
@@ -668,6 +661,7 @@ async function useDeviceTimezone() {
 async function saveReminder() {
   hideStatus();
   hidePreview();
+  clearFieldErrors();
 
   if (!validateReminderForm()) {
     return;
@@ -741,7 +735,6 @@ function showDeleteConfirmation(reminder) {
         close(false);
       }
     });
-
     cancelButton.addEventListener("click", () => close(false));
     confirmButton.addEventListener("click", () => close(true));
     document.addEventListener("keydown", handleKeyDown);
@@ -750,7 +743,6 @@ function showDeleteConfirmation(reminder) {
     dialog.append(title, text, actions);
     overlay.append(dialog);
     document.body.append(overlay);
-
     cancelButton.focus();
   });
 }
@@ -759,7 +751,6 @@ async function deleteReminder(reminder) {
   hideStatus();
 
   const confirmed = await showDeleteConfirmation(reminder);
-
   if (!confirmed) {
     return;
   }
@@ -767,9 +758,25 @@ async function deleteReminder(reminder) {
   await apiRequest(`/api/tma/reminders/${reminder.id}`, {
     method: "DELETE",
   });
-
   await loadBootstrap();
   showStatus("Напоминание удалено.");
+}
+
+function formatDateTimeWithConditionalTimezone(value, timezoneName) {
+  const formatted = formatDateTime(value, timezoneName);
+
+  if (shouldShowTimezoneSuffix(timezoneName)) {
+    return `${formatted} · ${timezoneName}`;
+  }
+
+  return formatted;
+}
+
+function shouldShowTimezoneSuffix(timezoneName) {
+  const currentTimezoneName = state.context?.timezone_name;
+  return Boolean(
+    timezoneName && currentTimezoneName && timezoneName !== currentTimezoneName,
+  );
 }
 
 function formatDateTime(value, timezoneName) {
@@ -777,70 +784,55 @@ function formatDateTime(value, timezoneName) {
     return "не запланировано";
   }
 
-  const localValue = toDateTimeLocalValue(value, timezoneName);
-
-  if (!localValue) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
     return "некорректная дата";
   }
 
-  const [datePart, timePart] = localValue.split("T");
-  const [year, month, day] = datePart.split("-");
+  const options = {
+    dateStyle: "medium",
+    timeStyle: "short",
+  };
 
-  return `${day}.${month}.${year}, ${timePart}`;
+  if (timezoneName) {
+    options.timeZone = timezoneName;
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", options).format(date);
 }
 
 function toDateTimeLocalValue(value, timezoneName) {
-  if (typeof value === "string" && isDatetimeLocalValue(value)) {
-    return value.slice(0, 16);
-  }
-
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) {
     return "";
   }
 
   if (!timezoneName) {
-    return toBrowserDateTimeLocalValue(date);
+    const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+    return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
   }
 
   try {
-    return toTimezoneDateTimeLocalValue(date, timezoneName);
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezoneName,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+    const values = Object.fromEntries(
+      parts
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    );
+
+    return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
   } catch {
-    return toBrowserDateTimeLocalValue(date);
+    const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+    return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
   }
-}
-
-function isDatetimeLocalValue(value) {
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value) &&
-    !/(Z|[+-]\d{2}:?\d{2})$/i.test(value);
-}
-
-function toBrowserDateTimeLocalValue(date) {
-  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
-
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
-}
-
-function toTimezoneDateTimeLocalValue(date, timezoneName) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezoneName,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    hourCycle: "h23",
-  }).formatToParts(date);
-
-  const values = Object.fromEntries(
-    parts
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-
-  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
 }
 
 async function handleAsync(action) {
@@ -860,20 +852,16 @@ async function handleAsync(action) {
 }
 
 elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
-elements.startAt.addEventListener("input", clearStartAtError);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
 elements.useDeviceTimezoneButton.addEventListener("click", () =>
   handleAsync(useDeviceTimezone),
 );
-
 elements.form.addEventListener("submit", (event) => {
   event.preventDefault();
   handleAsync(saveReminder);
 });
-
 elements.cancelEditButton.addEventListener("click", resetForm);
-
 elements.timezoneForm.addEventListener("submit", (event) => {
   event.preventDefault();
   handleAsync(saveTimezone);
@@ -881,5 +869,4 @@ elements.timezoneForm.addEventListener("submit", (event) => {
 
 telegram?.ready();
 telegram?.expand();
-
 handleAsync(loadBootstrap);

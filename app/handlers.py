@@ -50,7 +50,7 @@ def build_tma_keyboard(launch_url: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Открыть Mini App",
+                    text="Управлять напоминаниями",
                     url=launch_url,
                 )
             ]
@@ -214,7 +214,7 @@ async def start(message: Message) -> None:
         "/start — запустить бота\n"
         "/help — показать справку\n"
         "/examples — показать примеры команд\n"
-        "/app — открыть Mini App\n"
+        "/app — открыть напоминания\n"
         "/remind — создать одноразовое напоминание\n"
         "/every_days — повтор каждые N дней\n"
         "/every_days_from — повтор каждые N дней с указанной даты\n"
@@ -246,7 +246,7 @@ async def app_command(message: Message) -> None:
     )
 
     await message.answer(
-        "Открой интерфейс управления напоминаниями:",
+        "Открой управление напоминаниями:",
         reply_markup=build_tma_keyboard(launch_url),
     )
 
@@ -256,7 +256,7 @@ async def help_command(message: Message) -> None:
     await message.answer(
         "Краткая справка по боту.\n\n"
         "Основные команды:\n"
-        "/app — открыть Mini App для управления напоминаниями\n"
+        "/app — открыть интерфейс управления напоминаниями\n"
         "/timezone — показать или задать таймзону текущего чата\n"
         "/examples — показать примеры создания напоминаний\n"
         "/list — показать активные напоминания текущего чата\n"

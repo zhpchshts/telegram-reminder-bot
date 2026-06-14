@@ -70,7 +70,7 @@ async def set_bot_commands(bot: Bot) -> None:
             BotCommand(command="start", description="Запустить бота"),
             BotCommand(command="help", description="Показать справку"),
             BotCommand(command="examples", description="Показать примеры команд"),
-            BotCommand(command="app", description="Открыть Mini App"),
+            BotCommand(command="app", description="Управлять напоминаниями"),
             BotCommand(command="remind", description="Одноразовое напоминание"),
             BotCommand(command="every_days", description="Повтор каждые N дней"),
             BotCommand(

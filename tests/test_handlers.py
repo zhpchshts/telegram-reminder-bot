@@ -503,12 +503,12 @@ def test_app_command_sends_direct_link_button(
 
     answer_text, kwargs = message.answers[0]
 
-    assert answer_text == "Открой интерфейс управления напоминаниями:"
+    assert answer_text == "Открой управление напоминаниями:"
 
     reply_markup = kwargs["reply_markup"]
     button = reply_markup.inline_keyboard[0][0]
 
-    assert button.text == "Открыть Mini App"
+    assert button.text == "Управлять напоминаниями"
     assert button.url == "https://t.me/ZhpchshtsReminderBot?startapp=signed-token"
     assert button.web_app is None
 

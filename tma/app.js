@@ -2,11 +2,6 @@ const telegram = window.Telegram?.WebApp;
 const initData = getTelegramInitData();
 
 const DEFAULT_START_OFFSET_MINUTES = 5;
-const API_REQUEST_TIMEOUT_MS = 10000;
-const API_REQUEST_RETRY_DELAY_MS = 700;
-const STARTUP_REQUEST_TIMEOUT_MS = 8000;
-const REMINDERS_REQUEST_TIMEOUT_MS = 10000;
-const REMINDERS_RETRY_COUNT = 1;
 
 function getTelegramInitData() {
   const sdkInitData = telegram?.initData || "";
@@ -56,7 +51,6 @@ const state = {
   reminderOptions: null,
   reminders: [],
   isBusy: false,
-  isContextReady: false,
 };
 
 const elements = {
@@ -94,24 +88,6 @@ const elements = {
   cancelEditButton: document.querySelector("#cancel-edit-button"),
   remindersList: document.querySelector("#reminders-list"),
 };
-
-const contextRequiredControls = [
-  elements.useDeviceTimezoneButton,
-  elements.chatTimezoneName,
-  elements.timezoneSaveButton,
-  elements.scheduleType,
-  elements.startAt,
-  elements.timezoneName,
-  elements.intervalDays,
-  elements.intervalWeeks,
-  elements.dayOfWeek,
-  elements.monthDayOfWeek,
-  elements.monthWeekNumber,
-  elements.monthDay,
-  elements.previewButton,
-  elements.saveButton,
-  elements.cancelEditButton,
-].filter(Boolean);
 
 function showStatus(message, type = "success") {
   elements.status.textContent = message;
@@ -171,32 +147,16 @@ function handleError(error) {
   showStatus(error.message, "error");
 }
 
-function syncDisabledState() {
-  for (const control of contextRequiredControls) {
-    control.disabled = state.isBusy || !state.isContextReady;
-  }
+function setBusy(isBusy) {
+  state.isBusy = isBusy;
 
   for (const button of document.querySelectorAll("button")) {
     if (button.hasAttribute("data-modal-button")) {
       continue;
     }
 
-    if (contextRequiredControls.includes(button)) {
-      continue;
-    }
-
-    button.disabled = state.isBusy;
+    button.disabled = isBusy;
   }
-}
-
-function setBusy(isBusy) {
-  state.isBusy = isBusy;
-  syncDisabledState();
-}
-
-function setContextReady(isReady) {
-  state.isContextReady = isReady;
-  syncDisabledState();
 }
 
 function showPreview(preview) {
@@ -229,137 +189,49 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
-function isFetchFailure(error) {
-  return error instanceof TypeError || error?.name === "AbortError";
-}
-
-function buildFetchFailureMessage(error) {
-  if (error?.name === "AbortError") {
-    return "Сервер долго не отвечает. Проверь соединение и нажми «Обновить».";
-  }
-
-  return "Не удалось подключиться к серверу. Проверь соединение и нажми «Обновить».";
-}
-
 async function apiRequest(path, options = {}) {
   if (!initData) {
     throw new Error(buildMissingInitDataMessage());
   }
 
-  const {
-    retryCount = 0,
-    retryDelayMs = API_REQUEST_RETRY_DELAY_MS,
-    timeoutMs = API_REQUEST_TIMEOUT_MS,
-    headers = {},
-    ...fetchOptions
-  } = options;
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Telegram-Init-Data": initData,
+      ...options.headers,
+    },
+  });
 
-  let lastError;
+  const contentType = response.headers.get("content-type") || "";
+  const body = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
 
-  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const response = await fetch(path, {
-        ...fetchOptions,
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          "X-Telegram-Init-Data": initData,
-          ...headers,
-        },
-      });
-
-      const contentType = response.headers.get("content-type") || "";
-      const body = contentType.includes("application/json")
-        ? await response.json()
-        : await response.text();
-
-      if (!response.ok) {
-        const detail = typeof body === "object" ? body.detail : body;
-        throw new Error(detail || `HTTP ${response.status}`);
-      }
-
-      return body;
-    } catch (error) {
-      if (!isFetchFailure(error)) {
-        throw error;
-      }
-
-      lastError = error;
-
-      if (attempt === retryCount) {
-        throw new Error(buildFetchFailureMessage(error));
-      }
-
-      await sleep(retryDelayMs * (attempt + 1));
-    } finally {
-      window.clearTimeout(timeoutId);
-    }
+  if (!response.ok) {
+    const detail = typeof body === "object" ? body.detail : body;
+    throw new Error(detail || `HTTP ${response.status}`);
   }
 
-  throw lastError;
+  return body;
 }
 
-async function loadStartupData() {
+async function loadBootstrap() {
   hideStatus();
   hidePreview();
   clearFieldErrors();
-  setContextReady(false);
 
-  elements.chatTitle.textContent = "Загрузка чата...";
-  renderRemindersLoading();
+  const bootstrap = await apiRequest("/api/tma/bootstrap");
 
-  try {
-    const [context, reminderOptions] = await Promise.all([
-      apiRequest("/api/tma/context", {
-        retryCount: 0,
-        timeoutMs: STARTUP_REQUEST_TIMEOUT_MS,
-      }),
-      apiRequest("/api/tma/reminder-options", {
-        retryCount: 0,
-        timeoutMs: STARTUP_REQUEST_TIMEOUT_MS,
-      }),
-    ]);
+  state.context = bootstrap.context;
+  state.reminderOptions = bootstrap.reminder_options;
+  state.reminders = sortReminders(bootstrap.active_reminders);
 
-    state.context = context;
-    state.reminderOptions = reminderOptions;
-    state.reminders = [];
-
-    renderContext();
-    renderDeviceTimezoneSuggestion();
-    renderOptions();
-    renderReminders();
-    setDefaultStartAtIfEmpty();
-    setContextReady(true);
-
-    loadReminders().catch((error) => {
-      handleError(error);
-    });
-  } catch (error) {
-    elements.chatTitle.textContent = "Не удалось загрузить чат";
-    setContextReady(false);
-    throw error;
-  }
-}
-
-async function loadReminders() {
-  renderRemindersLoading();
-
-  const reminders = await apiRequest("/api/tma/reminders", {
-    retryCount: REMINDERS_RETRY_COUNT,
-    timeoutMs: REMINDERS_REQUEST_TIMEOUT_MS,
-  });
-
-  state.reminders = sortReminders(reminders);
+  renderContext();
+  renderDeviceTimezoneSuggestion();
+  renderOptions();
   renderReminders();
+  setDefaultStartAtIfEmpty();
 }
 
 function renderContext() {
@@ -451,14 +323,6 @@ function fillSelect(select, options, emptyLabel) {
   }
 }
 
-function renderRemindersLoading() {
-  elements.remindersList.replaceChildren();
-
-  const loading = document.createElement("p");
-  loading.className = "muted";
-  loading.textContent = "Загружаю напоминания...";
-  elements.remindersList.append(loading);
-}
 
 
 function renderReminders() {
@@ -823,7 +687,7 @@ async function saveReminder() {
   });
 
   resetForm();
-  await loadReminders();
+  await loadBootstrap();
   showStatus(isEdit ? "Напоминание обновлено." : "Напоминание создано.");
 }
 
@@ -901,7 +765,7 @@ async function deleteReminder(reminder) {
   await apiRequest(`/api/tma/reminders/${reminder.id}`, {
     method: "DELETE",
   });
-  await loadReminders();
+  await loadBootstrap();
   showStatus("Напоминание удалено.");
 }
 

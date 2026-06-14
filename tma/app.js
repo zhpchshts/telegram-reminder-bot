@@ -1,11 +1,16 @@
 const appScriptStartedAt = performance.now();
 let telegramReadyCalledAt = null;
-const telegram = window.Telegram?.WebApp;
+let telegram = window.Telegram?.WebApp || null;
+
+function refreshTelegramWebApp() {
+  telegram = window.Telegram?.WebApp || telegram || null;
+  return telegram;
+}
 
 const DEFAULT_START_OFFSET_MINUTES = 5;
 
 function getTelegramInitData() {
-  const sdkInitData = window.Telegram?.WebApp?.initData || "";
+  const sdkInitData = refreshTelegramWebApp()?.initData || "";
   if (sdkInitData) {
     return sdkInitData;
   }
@@ -24,7 +29,7 @@ function getTelegramInitData() {
 }
 
 function buildMissingInitDataMessage() {
-  const currentTelegram = window.Telegram?.WebApp;
+  const currentTelegram = refreshTelegramWebApp();
   const hash = window.location.hash.startsWith("#")
     ? window.location.hash.slice(1)
     : window.location.hash;
@@ -49,11 +54,13 @@ function roundTiming(value) {
 }
 
 function buildClientTimingPayload(event, source, timings = {}, error = null) {
+  const webApp = refreshTelegramWebApp();
+
   return {
     event,
     source,
-    platform: telegram?.platform || "unknown",
-    version: telegram?.version || "unknown",
+    platform: webApp?.platform || "unknown",
+    version: webApp?.version || "unknown",
     has_init_data: Boolean(getTelegramInitData()),
     script_started_ms: roundTiming(appScriptStartedAt),
     ready_called_ms: roundTiming(telegramReadyCalledAt),
@@ -78,6 +85,46 @@ function sendClientTiming(event, source, timings = {}, error = null) {
     body: JSON.stringify(payload),
     keepalive: true,
   }).catch(() => {});
+}
+
+function markTelegramReady(source) {
+  const webApp = refreshTelegramWebApp();
+
+  if (!webApp) {
+    return false;
+  }
+
+  webApp.ready();
+  telegramReadyCalledAt = performance.now();
+  webApp.expand();
+
+  sendClientTiming("telegram_sdk_ready", source, {
+    totalMs: telegramReadyCalledAt - appScriptStartedAt,
+  });
+
+  return true;
+}
+
+function loadTelegramSdkAfterStartup() {
+  if (markTelegramReady("already_available")) {
+    return;
+  }
+
+  const script = document.createElement("script");
+  script.src = "https://telegram.org/js/telegram-web-app.js";
+  script.async = true;
+
+  script.addEventListener("load", () => {
+    markTelegramReady("dynamic_load");
+  });
+
+  script.addEventListener("error", () => {
+    sendClientTiming("telegram_sdk_error", "dynamic_load", {
+      totalMs: performance.now() - appScriptStartedAt,
+    });
+  });
+
+  document.head.append(script);
 }
 
 function getDeviceTimezone() {
@@ -963,7 +1010,5 @@ elements.timezoneForm.addEventListener("submit", (event) => {
   handleAsync(saveTimezone);
 });
 
-telegram?.ready();
-telegramReadyCalledAt = performance.now();
-telegram?.expand();
 window.setTimeout(() => handleAsync(() => loadBootstrap("startup")), 0);
+loadTelegramSdkAfterStartup();

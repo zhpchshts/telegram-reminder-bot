@@ -1,6 +1,10 @@
 const telegram = window.Telegram?.WebApp;
 const initData = getTelegramInitData();
+
 const DEFAULT_START_OFFSET_MINUTES = 5;
+const API_REQUEST_TIMEOUT_MS = 12000;
+const API_REQUEST_RETRY_DELAY_MS = 700;
+const BOOTSTRAP_RETRY_COUNT = 2;
 
 function getTelegramInitData() {
   const sdkInitData = telegram?.initData || "";
@@ -186,47 +190,109 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function isFetchFailure(error) {
+  return error instanceof TypeError || error?.name === "AbortError";
+}
+
+function buildFetchFailureMessage(error) {
+  if (error?.name === "AbortError") {
+    return "Сервер долго не отвечает. Проверь соединение и нажми «Обновить».";
+  }
+
+  return "Не удалось подключиться к серверу. Проверь соединение и нажми «Обновить».";
+}
+
 async function apiRequest(path, options = {}) {
   if (!initData) {
     throw new Error(buildMissingInitDataMessage());
   }
 
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Telegram-Init-Data": initData,
-      ...(options.headers || {}),
-    },
-  });
-  const contentType = response.headers.get("content-type") || "";
-  const body = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
+  const {
+    retryCount = 0,
+    retryDelayMs = API_REQUEST_RETRY_DELAY_MS,
+    timeoutMs = API_REQUEST_TIMEOUT_MS,
+    headers = {},
+    ...fetchOptions
+  } = options;
 
-  if (!response.ok) {
-    const detail = typeof body === "object" ? body.detail : body;
-    throw new Error(detail || `HTTP ${response.status}`);
+  let lastError;
+
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(path, {
+        ...fetchOptions,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Telegram-Init-Data": initData,
+          ...headers,
+        },
+      });
+
+      const contentType = response.headers.get("content-type") || "";
+      const body = contentType.includes("application/json")
+        ? await response.json()
+        : await response.text();
+
+      if (!response.ok) {
+        const detail = typeof body === "object" ? body.detail : body;
+        throw new Error(detail || `HTTP ${response.status}`);
+      }
+
+      return body;
+    } catch (error) {
+      if (!isFetchFailure(error)) {
+        throw error;
+      }
+
+      lastError = error;
+
+      if (attempt === retryCount) {
+        throw new Error(buildFetchFailureMessage(error));
+      }
+
+      await sleep(retryDelayMs * (attempt + 1));
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
-  return body;
+  throw lastError;
 }
 
 async function loadBootstrap() {
   hideStatus();
   hidePreview();
   clearFieldErrors();
+  elements.chatTitle.textContent = "Загрузка чата...";
 
-  const bootstrap = await apiRequest("/api/tma/bootstrap");
-  state.context = bootstrap.context;
-  state.reminderOptions = bootstrap.reminder_options;
-  state.reminders = sortReminders(bootstrap.active_reminders);
+  try {
+    const bootstrap = await apiRequest("/api/tma/bootstrap", {
+      retryCount: BOOTSTRAP_RETRY_COUNT,
+    });
 
-  renderContext();
-  renderDeviceTimezoneSuggestion();
-  renderOptions();
-  renderReminders();
-  setDefaultStartAtIfEmpty();
+    state.context = bootstrap.context;
+    state.reminderOptions = bootstrap.reminder_options;
+    state.reminders = sortReminders(bootstrap.active_reminders);
+
+    renderContext();
+    renderDeviceTimezoneSuggestion();
+    renderOptions();
+    renderReminders();
+    setDefaultStartAtIfEmpty();
+  } catch (error) {
+    elements.chatTitle.textContent = "Не удалось загрузить чат";
+    throw error;
+  }
 }
 
 function renderContext() {

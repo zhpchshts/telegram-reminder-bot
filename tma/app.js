@@ -2,9 +2,11 @@ const telegram = window.Telegram?.WebApp;
 const initData = getTelegramInitData();
 
 const DEFAULT_START_OFFSET_MINUTES = 5;
-const API_REQUEST_TIMEOUT_MS = 12000;
+const API_REQUEST_TIMEOUT_MS = 10000;
 const API_REQUEST_RETRY_DELAY_MS = 700;
-const BOOTSTRAP_RETRY_COUNT = 2;
+const STARTUP_REQUEST_TIMEOUT_MS = 8000;
+const REMINDERS_REQUEST_TIMEOUT_MS = 10000;
+const REMINDERS_RETRY_COUNT = 1;
 
 function getTelegramInitData() {
   const sdkInitData = telegram?.initData || "";
@@ -54,6 +56,7 @@ const state = {
   reminderOptions: null,
   reminders: [],
   isBusy: false,
+  isContextReady: false,
 };
 
 const elements = {
@@ -91,6 +94,24 @@ const elements = {
   cancelEditButton: document.querySelector("#cancel-edit-button"),
   remindersList: document.querySelector("#reminders-list"),
 };
+
+const contextRequiredControls = [
+  elements.useDeviceTimezoneButton,
+  elements.chatTimezoneName,
+  elements.timezoneSaveButton,
+  elements.scheduleType,
+  elements.startAt,
+  elements.timezoneName,
+  elements.intervalDays,
+  elements.intervalWeeks,
+  elements.dayOfWeek,
+  elements.monthDayOfWeek,
+  elements.monthWeekNumber,
+  elements.monthDay,
+  elements.previewButton,
+  elements.saveButton,
+  elements.cancelEditButton,
+].filter(Boolean);
 
 function showStatus(message, type = "success") {
   elements.status.textContent = message;
@@ -150,14 +171,32 @@ function handleError(error) {
   showStatus(error.message, "error");
 }
 
-function setBusy(isBusy) {
-  state.isBusy = isBusy;
+function syncDisabledState() {
+  for (const control of contextRequiredControls) {
+    control.disabled = state.isBusy || !state.isContextReady;
+  }
+
   for (const button of document.querySelectorAll("button")) {
     if (button.hasAttribute("data-modal-button")) {
       continue;
     }
-    button.disabled = isBusy;
+
+    if (contextRequiredControls.includes(button)) {
+      continue;
+    }
+
+    button.disabled = state.isBusy;
   }
+}
+
+function setBusy(isBusy) {
+  state.isBusy = isBusy;
+  syncDisabledState();
+}
+
+function setContextReady(isReady) {
+  state.isContextReady = isReady;
+  syncDisabledState();
 }
 
 function showPreview(preview) {
@@ -269,30 +308,58 @@ async function apiRequest(path, options = {}) {
   throw lastError;
 }
 
-async function loadBootstrap() {
+async function loadStartupData() {
   hideStatus();
   hidePreview();
   clearFieldErrors();
+  setContextReady(false);
+
   elements.chatTitle.textContent = "Загрузка чата...";
+  renderRemindersLoading();
 
   try {
-    const bootstrap = await apiRequest("/api/tma/bootstrap", {
-      retryCount: BOOTSTRAP_RETRY_COUNT,
-    });
+    const [context, reminderOptions] = await Promise.all([
+      apiRequest("/api/tma/context", {
+        retryCount: 0,
+        timeoutMs: STARTUP_REQUEST_TIMEOUT_MS,
+      }),
+      apiRequest("/api/tma/reminder-options", {
+        retryCount: 0,
+        timeoutMs: STARTUP_REQUEST_TIMEOUT_MS,
+      }),
+    ]);
 
-    state.context = bootstrap.context;
-    state.reminderOptions = bootstrap.reminder_options;
-    state.reminders = sortReminders(bootstrap.active_reminders);
+    state.context = context;
+    state.reminderOptions = reminderOptions;
+    state.reminders = [];
 
     renderContext();
     renderDeviceTimezoneSuggestion();
     renderOptions();
     renderReminders();
     setDefaultStartAtIfEmpty();
+    setContextReady(true);
+
+    loadReminders().catch((error) => {
+      handleError(error);
+    });
   } catch (error) {
     elements.chatTitle.textContent = "Не удалось загрузить чат";
+    setContextReady(false);
     throw error;
   }
+}
+
+async function loadReminders() {
+  renderRemindersLoading();
+
+  const reminders = await apiRequest("/api/tma/reminders", {
+    retryCount: REMINDERS_RETRY_COUNT,
+    timeoutMs: REMINDERS_REQUEST_TIMEOUT_MS,
+  });
+
+  state.reminders = sortReminders(reminders);
+  renderReminders();
 }
 
 function renderContext() {
@@ -383,6 +450,16 @@ function fillSelect(select, options, emptyLabel) {
     select.append(element);
   }
 }
+
+function renderRemindersLoading() {
+  elements.remindersList.replaceChildren();
+
+  const loading = document.createElement("p");
+  loading.className = "muted";
+  loading.textContent = "Загружаю напоминания...";
+  elements.remindersList.append(loading);
+}
+
 
 function renderReminders() {
   elements.remindersList.replaceChildren();
@@ -746,7 +823,7 @@ async function saveReminder() {
   });
 
   resetForm();
-  await loadBootstrap();
+  await loadReminders();
   showStatus(isEdit ? "Напоминание обновлено." : "Напоминание создано.");
 }
 
@@ -824,7 +901,7 @@ async function deleteReminder(reminder) {
   await apiRequest(`/api/tma/reminders/${reminder.id}`, {
     method: "DELETE",
   });
-  await loadBootstrap();
+  await loadReminders();
   showStatus("Напоминание удалено.");
 }
 
@@ -917,7 +994,7 @@ async function handleAsync(action) {
   }
 }
 
-elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
+elements.reloadButton.addEventListener("click", () => handleAsync(loadStartupData));
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
 elements.useDeviceTimezoneButton.addEventListener("click", () =>
@@ -935,4 +1012,5 @@ elements.timezoneForm.addEventListener("submit", (event) => {
 
 telegram?.ready();
 telegram?.expand();
-handleAsync(loadBootstrap);
+setContextReady(false);
+handleAsync(loadStartupData);

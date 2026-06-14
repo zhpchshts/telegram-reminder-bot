@@ -1,3 +1,5 @@
+import logging
+from time import perf_counter
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -46,6 +48,8 @@ from app.reminder_service import (
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TMA_STATIC_DIR = PROJECT_ROOT / "tma"
 
+logger = logging.getLogger("uvicorn.error")
+
 app = FastAPI(
     title="Telegram Reminder Bot API",
     version="0.1.0",
@@ -84,6 +88,36 @@ def mount_tma_static_files(
 
 configure_cors(app, API_ALLOWED_ORIGINS)
 mount_tma_static_files(app, TMA_STATIC_DIR)
+
+
+@app.middleware("http")
+async def log_tma_request_duration(request: Request, call_next):
+    started_at = perf_counter()
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (perf_counter() - started_at) * 1000
+        if request.url.path.startswith("/api/tma/"):
+            logger.exception(
+                "TMA request %s %s failed in %.1f ms",
+                request.method,
+                request.url.path,
+                duration_ms,
+            )
+        raise
+
+    duration_ms = (perf_counter() - started_at) * 1000
+    if request.url.path.startswith("/api/tma/"):
+        logger.info(
+            "TMA request %s %s completed with %s in %.1f ms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+
+    return response
 
 
 def get_bot_from_app_state(request: Request) -> Bot:
@@ -164,16 +198,41 @@ def get_tma_bootstrap(
     tma_chat: dict[str, object] = Depends(get_tma_chat),
     chat_id: int = Depends(get_tma_chat_id),
 ) -> TmaBootstrapResponse:
-    return build_tma_bootstrap_response(
+    started_at = perf_counter()
+
+    timezone_name = get_chat_timezone_name(chat_id)
+    timezone_done_at = perf_counter()
+
+    active_reminders = list_active_reminders_for_chat(chat_id)
+    reminders_done_at = perf_counter()
+
+    response = build_tma_bootstrap_response(
         auth_date=init_data.auth_date,
         user=init_data.user,
         chat=tma_chat,
         chat_id=chat_id,
-        timezone_name=get_chat_timezone_name(chat_id),
+        timezone_name=timezone_name,
         chat_type=get_tma_chat_type(tma_chat, init_data.chat_type),
         start_param=init_data.start_param,
-        active_reminders=list_active_reminders_for_chat(chat_id),
+        active_reminders=active_reminders,
     )
+    response_done_at = perf_counter()
+
+    logger.info(
+        (
+            "TMA bootstrap phases: "
+            "chat_id=%s active_reminders=%s timezone=%.1f ms "
+            "reminders=%.1f ms response=%.1f ms total=%.1f ms"
+        ),
+        chat_id,
+        len(active_reminders),
+        (timezone_done_at - started_at) * 1000,
+        (reminders_done_at - timezone_done_at) * 1000,
+        (response_done_at - reminders_done_at) * 1000,
+        (response_done_at - started_at) * 1000,
+    )
+
+    return response
 
 
 @app.post(

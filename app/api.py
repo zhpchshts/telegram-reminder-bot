@@ -5,9 +5,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from app.api_auth import (
     get_tma_chat,
@@ -49,6 +50,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TMA_STATIC_DIR = PROJECT_ROOT / "tma"
 
 logger = logging.getLogger("uvicorn.error")
+
+
+class TmaClientTimingRequest(BaseModel):
+    event: str
+    source: str | None = None
+    platform: str | None = None
+    version: str | None = None
+    has_init_data: bool
+    script_started_ms: float | None = None
+    ready_called_ms: float | None = None
+    bootstrap_started_ms: float | None = None
+    fetch_started_ms: float | None = None
+    fetch_finished_ms: float | None = None
+    render_finished_ms: float | None = None
+    total_ms: float | None = None
+    error_name: str | None = None
+    error_message: str | None = None
+
 
 app = FastAPI(
     title="Telegram Reminder Bot API",
@@ -156,6 +175,46 @@ def get_tma_chat_type(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/tma/client-timing", status_code=204)
+def log_tma_client_timing(request: TmaClientTimingRequest) -> Response:
+    logger.info(
+        (
+            "TMA client timing: event=%s source=%s platform=%s version=%s "
+            "has_init_data=%s script=%.1f ready=%s bootstrap=%.1f "
+            "fetch_start=%.1f fetch_end=%s render=%s total=%s "
+            "error_name=%s error_message=%s"
+        ),
+        request.event,
+        request.source,
+        request.platform,
+        request.version,
+        request.has_init_data,
+        request.script_started_ms or 0,
+        (
+            f"{request.ready_called_ms:.1f}"
+            if request.ready_called_ms is not None
+            else "none"
+        ),
+        request.bootstrap_started_ms or 0,
+        request.fetch_started_ms or 0,
+        (
+            f"{request.fetch_finished_ms:.1f}"
+            if request.fetch_finished_ms is not None
+            else "none"
+        ),
+        (
+            f"{request.render_finished_ms:.1f}"
+            if request.render_finished_ms is not None
+            else "none"
+        ),
+        f"{request.total_ms:.1f}" if request.total_ms is not None else "none",
+        request.error_name,
+        request.error_message,
+    )
+
+    return Response(status_code=204)
 
 
 @app.get(

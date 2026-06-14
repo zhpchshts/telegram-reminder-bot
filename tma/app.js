@@ -858,7 +858,7 @@ async function handleAsync(action) {
   }
 }
 
-elements.reloadButton.addEventListener("click", () => handleAsync(loadStartupData));
+elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
 elements.useDeviceTimezoneButton.addEventListener("click", () =>
@@ -877,4 +877,4 @@ elements.timezoneForm.addEventListener("submit", (event) => {
 telegram?.ready();
 telegram?.expand();
 setContextReady(false);
-handleAsync(loadStartupData);
+handleAsync(loadBootstrap);

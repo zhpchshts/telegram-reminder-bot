@@ -99,7 +99,6 @@ def normalize_start_at(
     timezone_name: str,
 ) -> datetime:
     timezone = ZoneInfo(timezone_name)
-
     if start_at.tzinfo is None:
         return start_at.replace(tzinfo=timezone)
 
@@ -128,6 +127,9 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
             day_of_week=reminder.day_of_week,
             month_week_number=reminder.month_week_number,
             month_day=reminder.month_day,
+            start_at=reminder.start_at
+            if reminder.schedule_type == "yearly_date"
+            else None,
         ),
         "interval_days": reminder.interval_days,
         "interval_weeks": reminder.interval_weeks,
@@ -167,15 +169,21 @@ def build_reminder_period(
     day_of_week: str | None = None,
     month_week_number: int | None = None,
     month_day: int | None = None,
+    start_at: datetime | None = None,
 ) -> str:
-    return format_period_line(
-        schedule_type=schedule_type,
-        interval_days=interval_days,
-        interval_weeks=interval_weeks,
-        day_of_week=day_of_week,
-        month_week_number=month_week_number,
-        month_day=month_day,
-    )
+    period_kwargs = {
+        "schedule_type": schedule_type,
+        "interval_days": interval_days,
+        "interval_weeks": interval_weeks,
+        "day_of_week": day_of_week,
+        "month_week_number": month_week_number,
+        "month_day": month_day,
+    }
+
+    if start_at is not None:
+        period_kwargs["start_at"] = start_at
+
+    return format_period_line(**period_kwargs)
 
 
 def build_reminder_preview_response(
@@ -194,6 +202,7 @@ def build_reminder_preview_response(
             day_of_week=data.day_of_week,
             month_week_number=data.month_week_number,
             month_day=data.month_day,
+            start_at=data.start_at if data.schedule_type == "yearly_date" else None,
         )
         if data.schedule_type != "once"
         else None,
@@ -221,6 +230,7 @@ def build_created_reminder_response(
             day_of_week=data.day_of_week,
             month_week_number=data.month_week_number,
             month_day=data.month_day,
+            start_at=data.start_at if data.schedule_type == "yearly_date" else None,
         ),
         "interval_days": data.interval_days,
         "interval_weeks": data.interval_weeks,
@@ -263,6 +273,11 @@ def build_reminder_form_options_response() -> ReminderFormOptionsResponse:
             ReminderScheduleTypeOption(
                 value="once",
                 label="Одноразовое напоминание",
+                required_fields=[],
+            ),
+            ReminderScheduleTypeOption(
+                value="yearly_date",
+                label="Каждый год в дату",
                 required_fields=[],
             ),
             ReminderScheduleTypeOption(

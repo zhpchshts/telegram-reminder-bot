@@ -85,6 +85,9 @@ def validate_reminder_create_data(data: ReminderCreateData) -> None:
 
         return
 
+    if data.schedule_type == "yearly_date":
+        return
+
     raise ValueError("Unknown schedule_type.")
 
 
@@ -143,7 +146,6 @@ def create_scheduled_reminder(
         month_day=data.month_day,
         timezone_name=data.timezone_name,
     )
-
     return reminder_id
 
 
@@ -204,6 +206,22 @@ def update_active_reminder_for_chat(
     return build_reminder_read_data(updated_reminder)
 
 
+def build_period_line_for_create_data(data: ReminderCreateData) -> str:
+    period_kwargs = {
+        "schedule_type": data.schedule_type,
+        "interval_days": data.interval_days,
+        "interval_weeks": data.interval_weeks,
+        "day_of_week": data.day_of_week,
+        "month_week_number": data.month_week_number,
+        "month_day": data.month_day,
+    }
+
+    if data.schedule_type == "yearly_date":
+        period_kwargs["start_at"] = data.start_at
+
+    return format_period_line(**period_kwargs)
+
+
 def build_created_reminder_text(
     *,
     reminder_id: int,
@@ -214,7 +232,6 @@ def build_created_reminder_text(
         if data.schedule_type == "once"
         else "Повторяющееся напоминание создано."
     )
-
     answer_lines = [
         header,
         "",
@@ -222,17 +239,7 @@ def build_created_reminder_text(
     ]
 
     if data.schedule_type != "once":
-        answer_lines.append(
-            "Период: "
-            + format_period_line(
-                schedule_type=data.schedule_type,
-                interval_days=data.interval_days,
-                interval_weeks=data.interval_weeks,
-                day_of_week=data.day_of_week,
-                month_week_number=data.month_week_number,
-                month_day=data.month_day,
-            )
-        )
+        answer_lines.append("Период: " + build_period_line_for_create_data(data))
 
     answer_lines.extend(
         [
@@ -277,7 +284,6 @@ def build_active_reminders_list_text_for_chat(chat_id: int) -> str | None:
         return None
 
     lines = ["Активные напоминания в этом чате\n"]
-
     lines.extend(
         format_reminder_read_data_for_list(
             reminder,

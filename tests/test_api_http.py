@@ -392,6 +392,7 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
         for option in response_json["reminder_options"]["schedule_types"]
     ] == [
         "once",
+        "yearly_date",
         "every_days",
         "every_week",
         "monthly_weekday",

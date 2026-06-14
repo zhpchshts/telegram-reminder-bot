@@ -137,6 +137,7 @@ def test_get_reminder_form_options_returns_response() -> None:
     assert isinstance(result, ReminderFormOptionsResponse)
     assert [option.value for option in result.schedule_types] == [
         "once",
+        "yearly_date",
         "every_days",
         "every_week",
         "monthly_weekday",
@@ -218,6 +219,7 @@ def test_get_tma_bootstrap_returns_response(
     )
     assert [option.value for option in result.reminder_options.schedule_types] == [
         "once",
+        "yearly_date",
         "every_days",
         "every_week",
         "monthly_weekday",

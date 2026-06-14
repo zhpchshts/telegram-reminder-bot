@@ -197,6 +197,11 @@ def test_build_reminder_form_options_response() -> None:
                 required_fields=[],
             ),
             ReminderScheduleTypeOption(
+                value="yearly_date",
+                label="Каждый год в дату",
+                required_fields=[],
+            ),
+            ReminderScheduleTypeOption(
                 value="every_days",
                 label="Каждые N дней",
                 required_fields=["interval_days"],
@@ -341,6 +346,28 @@ def test_build_reminder_preview_response_for_once_reminder() -> None:
     )
 
 
+def test_build_reminder_preview_response_for_yearly_date_reminder() -> None:
+    start_at = datetime.fromisoformat("2099-08-14T09:00:00+05:00")
+
+    result = build_reminder_preview_response(
+        ReminderCreateData(
+            reminder_text="Поздравить с днём рождения",
+            schedule_type="yearly_date",
+            start_at=start_at,
+            timezone_name="Asia/Yekaterinburg",
+        )
+    )
+
+    assert result == ReminderPreviewResponse(
+        reminder_text="Поздравить с днём рождения",
+        schedule_type="yearly_date",
+        start_at=start_at,
+        timezone_name="Asia/Yekaterinburg",
+        is_repeating=True,
+        period="каждый год 14 августа",
+    )
+
+
 def test_build_reminder_period_for_once_reminder() -> None:
     assert build_reminder_period(schedule_type="once") == "один раз"
 
@@ -352,4 +379,14 @@ def test_build_reminder_period_for_repeating_reminder() -> None:
             interval_days=3,
         )
         == "каждые 3 дн."
+    )
+
+
+def test_build_reminder_period_for_yearly_date_reminder() -> None:
+    assert (
+        build_reminder_period(
+            schedule_type="yearly_date",
+            start_at=datetime(2099, 8, 14, 9, 0),
+        )
+        == "каждый год 14 августа"
     )

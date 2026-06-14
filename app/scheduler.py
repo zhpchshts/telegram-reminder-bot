@@ -2,11 +2,11 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
-from app.config import APP_TIMEZONE_NAME
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from app.config import APP_TIMEZONE_NAME
 from app.constants import APSCHEDULER_WEEKDAYS
 from app.database import (
     get_all_active_reminders,
@@ -15,10 +15,7 @@ from app.database import (
 )
 from app.formatting import format_datetime_ru
 from app.reminder_mapping import build_reminder_read_data
-from app.schedule_calculations import (
-    get_month_day_range_for_week_number,
-)
-
+from app.schedule_calculations import get_month_day_range_for_week_number
 
 scheduler = AsyncIOScheduler()
 
@@ -62,7 +59,6 @@ def schedule_healthcheck(
 
 def get_next_run_at(reminder_id: int) -> datetime | None:
     job = scheduler.get_job(str(reminder_id))
-
     if not job or not job.next_run_time:
         return None
 
@@ -74,7 +70,6 @@ def format_next_run_line(
     timezone_name: str | None = None,
 ) -> str:
     next_run_at = get_next_run_at(reminder_id)
-
     if not next_run_at:
         return "Следующее срабатывание: не запланировано"
 
@@ -91,7 +86,6 @@ async def send_once_reminder(
         chat_id=chat_id,
         text=reminder_text,
     )
-
     mark_reminder_as_sent(reminder_id)
 
 
@@ -194,12 +188,25 @@ def schedule_reminder(
         )
         return
 
+    if schedule_type == "yearly_date":
+        scheduler.add_job(
+            send_repeating_reminder,
+            trigger="cron",
+            month=start_at.month,
+            day=start_at.day,
+            hour=start_at.hour,
+            minute=start_at.minute,
+            start_date=start_at,
+            timezone=job_timezone,
+            **job_kwargs,
+        )
+        return
+
     raise ValueError(f"Unknown schedule_type: {schedule_type}")
 
 
 def schedule_reminder_from_row(bot: Bot, reminder: sqlite3.Row) -> None:
     reminder_data = build_reminder_read_data(reminder)
-
     schedule_reminder(
         bot=bot,
         reminder_id=reminder_data.id,

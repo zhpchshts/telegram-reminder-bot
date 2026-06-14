@@ -1,7 +1,7 @@
 import html
+import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from app.reminder_models import ReminderReadData
 
 from app.constants import (
     MONTH_NAMES_RU,
@@ -9,6 +9,7 @@ from app.constants import (
     WEEKDAY_NAMES_RU_PLURAL,
     WEEKDAY_NAMES_RU_SINGLE,
 )
+from app.reminder_models import ReminderReadData
 
 
 def format_datetime_ru(
@@ -16,14 +17,20 @@ def format_datetime_ru(
     timezone_name: str | None = None,
 ) -> str:
     display_value = value
-
     if timezone_name and value.tzinfo is not None:
         display_value = value.astimezone(ZoneInfo(timezone_name))
 
     display_value = display_value.replace(tzinfo=None)
     month_name = MONTH_NAMES_RU[display_value.month]
-
     return f"{display_value.day:02d} {month_name} в {display_value.strftime('%H:%M')}"
+
+
+def get_int(row: sqlite3.Row, key: str) -> int:
+    return int(row[key])
+
+
+def get_str(row: sqlite3.Row, key: str) -> str:
+    return str(row[key])
 
 
 def format_period_line(
@@ -34,6 +41,7 @@ def format_period_line(
     day_of_week: str | None = None,
     month_week_number: int | None = None,
     month_day: int | None = None,
+    start_at: datetime | None = None,
 ) -> str:
     if schedule_type == "once":
         return "один раз"
@@ -56,6 +64,13 @@ def format_period_line(
     if schedule_type == "monthly_day":
         return f"каждый месяц {month_day} числа"
 
+    if schedule_type == "yearly_date":
+        if start_at is None:
+            return "каждый год"
+
+        month_name = MONTH_NAMES_RU[start_at.month]
+        return f"каждый год {start_at.day} {month_name}"
+
     return schedule_type
 
 
@@ -72,18 +87,22 @@ def format_reminder_read_data_for_list(
             day_of_week=reminder.day_of_week,
             month_week_number=reminder.month_week_number,
             month_day=reminder.month_day,
+            start_at=reminder.start_at
+            if reminder.schedule_type == "yearly_date"
+            else None,
         )
     )
     first_run = html.escape(
         format_datetime_ru(reminder.start_at, reminder.timezone_name)
     )
     next_run = html.escape(next_run_line)
+    timezone_name = html.escape(reminder.timezone_name)
 
     return (
-        f"{reminder_text}\n"
+        f"<b>{reminder_text}</b>\n"
         f"ID: `{reminder.id}`\n"
         f"Период: {period}\n"
         f"Первое срабатывание: {first_run}\n"
         f"{next_run}\n"
-        f"Таймзона: `{html.escape(reminder.timezone_name)}`"
+        f"Таймзона: `{timezone_name}`"
     )

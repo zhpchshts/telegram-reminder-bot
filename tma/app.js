@@ -1,10 +1,9 @@
 const telegram = window.Telegram?.WebApp;
-const initData = getTelegramInitData();
 
 const DEFAULT_START_OFFSET_MINUTES = 5;
 
 function getTelegramInitData() {
-  const sdkInitData = telegram?.initData || "";
+  const sdkInitData = window.Telegram?.WebApp?.initData || "";
   if (sdkInitData) {
     return sdkInitData;
   }
@@ -23,6 +22,7 @@ function getTelegramInitData() {
 }
 
 function buildMissingInitDataMessage() {
+  const currentTelegram = window.Telegram?.WebApp;
   const hash = window.location.hash.startsWith("#")
     ? window.location.hash.slice(1)
     : window.location.hash;
@@ -34,7 +34,7 @@ function buildMissingInitDataMessage() {
     "",
     "Открой Mini App именно через кнопку /app в Telegram, а не прямой ссылкой в браузере.",
     "",
-    `Debug: WebApp=${telegram ? "yes" : "no"}, platform=${telegram?.platform || "unknown"}, version=${telegram?.version || "unknown"}, hash_has_tgWebAppData=${hashParams.has("tgWebAppData") ? "yes" : "no"}, search_has_tgWebAppData=${searchParams.has("tgWebAppData") ? "yes" : "no"}`,
+    `Debug: WebApp=${currentTelegram ? "yes" : "no"}, platform=${currentTelegram?.platform || "unknown"}, version=${currentTelegram?.version || "unknown"}, hash_has_tgWebAppData=${hashParams.has("tgWebAppData") ? "yes" : "no"}, search_has_tgWebAppData=${searchParams.has("tgWebAppData") ? "yes" : "no"}`,
   ].join("\n");
 }
 
@@ -129,7 +129,7 @@ function buildStartAtPastMessage() {
   const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
   const timezoneLabel = getActiveTimezoneLabel(timezoneName);
 
-  return `Время срабатывания уже прошло в ${timezoneLabel} ${timezoneName}. Выбери более позднее время.`;
+  return `Время срабатывания уже прошло в ${timezoneLabel} ${timezoneName}.\nВыбери более позднее время.`;
 }
 
 function isStartAtPastError(error) {
@@ -166,11 +166,11 @@ function showPreview(preview) {
 
   elements.preview.innerHTML = `
     <strong>Предпросмотр</strong>
-    <div>${escapeHtml(preview.reminder_text)}</div>
-    <div class="muted">${escapeHtml(period)}</div>
-    <div class="muted">Первое срабатывание: ${escapeHtml(
+    <span>${escapeHtml(preview.reminder_text)}</span>
+    <span>${escapeHtml(period)}</span>
+    <span>Первое срабатывание: ${escapeHtml(
       formatDateTimeWithConditionalTimezone(preview.start_at, timezoneName),
-    )}</div>
+    )}</span>
   `;
   elements.preview.hidden = false;
 }
@@ -190,6 +190,8 @@ function escapeHtml(value) {
 }
 
 async function apiRequest(path, options = {}) {
+  const initData = getTelegramInitData();
+
   if (!initData) {
     throw new Error(buildMissingInitDataMessage());
   }
@@ -199,7 +201,7 @@ async function apiRequest(path, options = {}) {
     headers: {
       "Content-Type": "application/json",
       "X-Telegram-Init-Data": initData,
-      ...options.headers,
+      ...(options.headers || {}),
     },
   });
 
@@ -220,6 +222,7 @@ async function loadBootstrap() {
   hideStatus();
   hidePreview();
   clearFieldErrors();
+  elements.chatTitle.textContent = "Загрузка чата...";
 
   const bootstrap = await apiRequest("/api/tma/bootstrap");
 
@@ -247,7 +250,6 @@ function renderContext() {
 function renderStartAtHint() {
   const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
   const timezoneLabel = getActiveTimezoneLabel(timezoneName);
-
   elements.startAtHint.textContent = `Время указывается в ${timezoneLabel}: ${timezoneName}.`;
 }
 
@@ -304,6 +306,7 @@ function renderOptions() {
     })),
     "Не выбрано",
   );
+
   updateConditionalFields();
 }
 
@@ -322,8 +325,6 @@ function fillSelect(select, options, emptyLabel) {
     select.append(element);
   }
 }
-
-
 
 function renderReminders() {
   elements.remindersList.replaceChildren();
@@ -402,11 +403,13 @@ function sortReminders(reminders) {
 
 function getReminderSortTime(reminder) {
   const value = reminder.next_run_at || reminder.start_at;
+
   if (!value) {
     return Number.POSITIVE_INFINITY;
   }
 
   const time = new Date(value).getTime();
+
   if (Number.isNaN(time)) {
     return Number.POSITIVE_INFINITY;
   }
@@ -425,6 +428,7 @@ function updateConditionalFields() {
 
 function buildRequestPayload() {
   const scheduleType = elements.scheduleType.value;
+
   const payload = {
     reminder_text: elements.reminderText.value.trim(),
     schedule_type: scheduleType,
@@ -758,6 +762,7 @@ async function deleteReminder(reminder) {
   hideStatus();
 
   const confirmed = await showDeleteConfirmation(reminder);
+
   if (!confirmed) {
     return;
   }
@@ -765,6 +770,7 @@ async function deleteReminder(reminder) {
   await apiRequest(`/api/tma/reminders/${reminder.id}`, {
     method: "DELETE",
   });
+
   await loadBootstrap();
   showStatus("Напоминание удалено.");
 }
@@ -781,6 +787,7 @@ function formatDateTimeWithConditionalTimezone(value, timezoneName) {
 
 function shouldShowTimezoneSuffix(timezoneName) {
   const currentTimezoneName = state.context?.timezone_name;
+
   return Boolean(
     timezoneName && currentTimezoneName && timezoneName !== currentTimezoneName,
   );
@@ -792,6 +799,7 @@ function formatDateTime(value, timezoneName) {
   }
 
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) {
     return "некорректная дата";
   }
@@ -810,6 +818,7 @@ function formatDateTime(value, timezoneName) {
 
 function toDateTimeLocalValue(value, timezoneName) {
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) {
     return "";
   }
@@ -829,6 +838,7 @@ function toDateTimeLocalValue(value, timezoneName) {
       minute: "2-digit",
       hourCycle: "h23",
     }).formatToParts(date);
+
     const values = Object.fromEntries(
       parts
         .filter((part) => part.type !== "literal")
@@ -859,6 +869,7 @@ async function handleAsync(action) {
 }
 
 elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
+elements.startAt.addEventListener("input", clearStartAtError);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
 elements.useDeviceTimezoneButton.addEventListener("click", () =>
@@ -876,5 +887,4 @@ elements.timezoneForm.addEventListener("submit", (event) => {
 
 telegram?.ready();
 telegram?.expand();
-setContextReady(false);
-handleAsync(loadBootstrap);
+window.setTimeout(() => handleAsync(loadBootstrap), 0);

@@ -125,6 +125,7 @@ const state = {
 const elements = {
   chatTitle: document.querySelector("#chat-title"),
   timezoneSummaryText: document.querySelector("#timezone-summary-text"),
+  remindersCount: document.querySelector("#reminders-count"),
   status: document.querySelector("#status"),
   deviceTimezoneBlock: document.querySelector("#device-timezone-block"),
   deviceTimezoneName: document.querySelector("#device-timezone-name"),
@@ -236,12 +237,14 @@ function showPreview(preview) {
     preview.timezone_name || elements.timezoneName.value || state.context?.timezone_name;
 
   elements.preview.innerHTML = `
-    <strong>Предпросмотр</strong>
-    <span>${escapeHtml(preview.reminder_text)}</span>
-    <span>${escapeHtml(period)}</span>
-    <span>Первое срабатывание: ${escapeHtml(
-      formatDateTimeWithConditionalTimezone(preview.start_at, timezoneName),
-    )}</span>
+    <div class="preview-label">Предпросмотр</div>
+    <div class="preview-title">${escapeHtml(preview.reminder_text)}</div>
+    <div class="preview-grid">
+      <span class="preview-chip">${escapeHtml(period)}</span>
+      <span class="preview-next">Первое срабатывание: ${escapeHtml(
+        formatDateTimeWithConditionalTimezone(preview.start_at, timezoneName),
+      )}</span>
+    </div>
   `;
   elements.preview.hidden = false;
 }
@@ -322,6 +325,7 @@ function renderContext() {
   elements.chatTimezoneName.value = timezoneName;
   elements.timezoneName.value = timezoneName;
   renderStartAtHint();
+  updateRemindersCount();
 }
 
 function renderStartAtHint() {
@@ -403,13 +407,40 @@ function fillSelect(select, options, emptyLabel) {
   }
 }
 
+function updateRemindersCount() {
+  if (!elements.remindersCount) {
+    return;
+  }
+
+  const count = state.reminders.length;
+  elements.remindersCount.textContent =
+    count === 1
+      ? "1 активное"
+      : count >= 2 && count <= 4
+        ? `${count} активных`
+        : `${count} активных`;
+}
+
 function renderReminders() {
   elements.remindersList.replaceChildren();
+  updateRemindersCount();
 
   if (!state.reminders.length) {
-    const empty = document.createElement("p");
-    empty.className = "muted";
-    empty.textContent = "Активных напоминаний пока нет.";
+    const empty = document.createElement("article");
+    empty.className = "empty-state";
+
+    const icon = document.createElement("div");
+    icon.className = "empty-state-icon";
+    icon.textContent = "🌸";
+
+    const title = document.createElement("h3");
+    title.textContent = "Пока нет активных напоминаний";
+
+    const text = document.createElement("p");
+    text.textContent =
+      "Создай первое — например, про воду, уборку, фильтры или день рождения.";
+
+    empty.append(icon, title, text);
     elements.remindersList.append(empty);
     return;
   }
@@ -423,16 +454,21 @@ function createReminderCard(reminder) {
   const card = document.createElement("article");
   card.className = "reminder-card";
 
+  const content = document.createElement("div");
+  content.className = "reminder-content";
+
   const title = document.createElement("h3");
   title.textContent = reminder.reminder_text;
 
   const meta = document.createElement("div");
   meta.className = "reminder-meta";
 
-  const period = document.createElement("div");
+  const period = document.createElement("span");
+  period.className = "reminder-chip";
   period.textContent = reminder.period || "одноразовое";
 
-  const nextRun = document.createElement("div");
+  const nextRun = document.createElement("span");
+  nextRun.className = "reminder-next-run";
   const nextRunAt = reminder.next_run_at || reminder.start_at;
   const timezoneName = reminder.timezone_name || state.context?.timezone_name;
   nextRun.textContent = `Следующее: ${formatDateTimeWithConditionalTimezone(
@@ -441,18 +477,19 @@ function createReminderCard(reminder) {
   )}`;
 
   meta.append(period, nextRun);
+  content.append(title, meta);
 
   const actions = document.createElement("div");
   actions.className = "reminder-actions";
 
   const editButton = document.createElement("button");
-  editButton.className = "secondary-button";
+  editButton.className = "secondary-button compact-button";
   editButton.type = "button";
   editButton.textContent = "Изменить";
   editButton.addEventListener("click", () => startEdit(reminder));
 
   const deleteButton = document.createElement("button");
-  deleteButton.className = "danger-button";
+  deleteButton.className = "danger-button compact-button";
   deleteButton.type = "button";
   deleteButton.textContent = "Удалить";
   deleteButton.addEventListener("click", () =>
@@ -460,7 +497,7 @@ function createReminderCard(reminder) {
   );
 
   actions.append(editButton, deleteButton);
-  card.append(title, meta, actions);
+  card.append(content, actions);
 
   return card;
 }

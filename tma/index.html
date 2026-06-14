@@ -3,110 +3,126 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Напоминания</title>
-	<script>
-  try {
-    const theme = localStorage.getItem("telegram-reminder-theme");
+    <title>Незабудка · Напоминания</title>
+    <script>
+      try {
+        const theme = localStorage.getItem("telegram-reminder-theme");
 
-    if (theme === "dark" || theme === "light") {
-      document.documentElement.dataset.theme = theme;
-    } else if (
-      window.matchMedia &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches
-    ) {
-      document.documentElement.dataset.theme = "dark";
-    } else {
-      document.documentElement.dataset.theme = "light";
-    }
-  } catch {
-    document.documentElement.dataset.theme = "light";
-  }
-</script>
-    <link rel="stylesheet" href="./styles.css?v=20260614-5" />
-
+        if (theme === "dark" || theme === "light") {
+          document.documentElement.dataset.theme = theme;
+        } else if (
+          window.matchMedia &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches
+        ) {
+          document.documentElement.dataset.theme = "dark";
+        } else {
+          document.documentElement.dataset.theme = "light";
+        }
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
+    <link rel="stylesheet" href="./styles.css?v=20260614-7" />
   </head>
   <body>
     <main class="app">
-      <header class="header">
-        <div>
-          <h1>Напоминания</h1>
-          <p id="chat-title" class="muted">Загрузка чата...</p>
+      <header class="hero">
+        <div class="hero-brand">
+          <div class="brand-mark" aria-hidden="true">🌸</div>
+          <div>
+            <p class="eyebrow">Незабудка</p>
+            <h1>Напоминания</h1>
+            <p id="chat-title" class="hero-subtitle">Загрузка чата...</p>
+          </div>
         </div>
+
         <div class="header-actions" aria-label="Действия">
-  <button id="reload-button" type="button" class="secondary-button">Обновить</button>
-  <button
-    id="theme-toggle-button"
-    type="button"
-    class="secondary-button theme-toggle-button"
-    aria-pressed="false"
-  >
-    ☾ Тёмная
-  </button>
-</div>
+          <button id="reload-button" type="button" class="secondary-button icon-button">
+            Обновить
+          </button>
+          <button
+            id="theme-toggle-button"
+            type="button"
+            class="secondary-button theme-toggle-button"
+            aria-pressed="false"
+          >
+            ☾ Тёмная
+          </button>
+        </div>
       </header>
 
       <section id="status" class="status" hidden></section>
 
-<details class="card collapsible-card timezone-card">
-  <summary class="timezone-summary">
-    <span id="timezone-summary-text">Таймзона чата: загружается...</span>
-    <span class="timezone-summary-action">Настроить</span>
-  </summary>
+      <details class="card collapsible-card timezone-card">
+        <summary class="timezone-summary">
+          <span id="timezone-summary-text">Таймзона чата: загружается...</span>
+          <span class="timezone-summary-action">Настроить</span>
+        </summary>
 
-  <div class="collapsible-content">
-    <p class="muted">
-      Таймзона общая для всего чата. По ней бот рассчитывает время
-      срабатывания новых напоминаний.
-    </p>
+        <div class="collapsible-content">
+          <p class="muted">
+            Таймзона общая для всего чата. По ней бот рассчитывает время
+            срабатывания новых напоминаний.
+          </p>
 
-    <div id="device-timezone-block" class="timezone-suggestion" hidden>
-      <p class="muted">Таймзона устройства:</p>
-      <p id="device-timezone-name" class="timezone-suggestion-value"></p>
+          <div id="device-timezone-block" class="timezone-suggestion" hidden>
+            <div>
+              <p class="muted">Таймзона устройства</p>
+              <p id="device-timezone-name" class="timezone-suggestion-value"></p>
+            </div>
 
-      <button
-        id="use-device-timezone-button"
-        class="secondary-button"
-        type="button"
-      >
-        Использовать таймзону устройства
-      </button>
-    </div>
+            <button
+              id="use-device-timezone-button"
+              class="secondary-button"
+              type="button"
+            >
+              Использовать
+            </button>
+          </div>
 
-    <form id="timezone-form" class="form">
-      <label class="field">
-        <span>Таймзона чата</span>
-        <input
-          id="chat-timezone-name"
-          name="timezone_name"
-          type="text"
-          placeholder="Asia/Yekaterinburg"
-          autocomplete="off"
-          required
-        />
-      </label>
+          <form id="timezone-form" class="form">
+            <label class="field">
+              <span>Таймзона чата</span>
+              <input
+                id="chat-timezone-name"
+                name="timezone_name"
+                type="text"
+                placeholder="Asia/Yekaterinburg"
+                autocomplete="off"
+                required
+              />
+            </label>
 
-      <p class="muted">Формат: Europe/Moscow, Asia/Yekaterinburg, Asia/Almaty.</p>
+            <p class="muted">Формат: Europe/Moscow, Asia/Yekaterinburg, Asia/Almaty.</p>
 
-      <div class="actions">
-        <button
-          id="timezone-save-button"
-          class="secondary-button"
-          type="submit"
-        >
-          Сохранить таймзону
-        </button>
-      </div>
-    </form>
-  </div>
-</details>
-      <section class="card">
-        <h2 id="form-title">Создать напоминание</h2>
+            <div class="actions">
+              <button
+                id="timezone-save-button"
+                class="secondary-button"
+                type="submit"
+              >
+                Сохранить таймзону
+              </button>
+            </div>
+          </form>
+        </div>
+      </details>
+
+      <section class="card form-card">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">Новое дело</p>
+            <h2 id="form-title">Создать напоминание</h2>
+          </div>
+          <p class="card-heading-note">Текст → расписание → первое срабатывание</p>
+        </div>
+
         <form id="reminder-form" class="form">
           <input id="reminder-id" type="hidden" />
           <input id="timezone-name" name="timezone_name" type="hidden" />
 
-          <label class="field">
-            <span>Текст</span>
+          <label class="field field-main">
+            <span>Что напомнить?</span>
             <textarea
               id="reminder-text"
               name="reminder_text"
@@ -116,86 +132,90 @@
             ></textarea>
           </label>
 
-          <label class="field">
-            <span>Тип расписания</span>
-            <select id="schedule-type" name="schedule_type" required>
-              <option value="once">Один раз</option>
-              <option value="yearly_date">Каждый год в дату</option>
-              <option value="every_days">Каждые N дней</option>
-              <option value="every_week">Каждые N недель</option>
-              <option value="monthly_weekday">N-й день недели месяца</option>
-              <option value="monthly_day">День месяца</option>
-            </select>
-          </label>
+          <div class="form-section">
+            <p class="section-label">Когда напомнить</p>
 
-          <label class="field">
-            <span>Первое срабатывание</span>
-            <input id="start-at" name="start_at" type="datetime-local" required />
-            <span id="start-at-hint" class="field-hint"></span>
-            <span id="start-at-error" class="field-error" hidden></span>
-          </label>
-
-          <div id="interval-days-field" class="field conditional-field">
-            <label>
-              <span>Интервал в днях</span>
-              <input
-                id="interval-days"
-                name="interval_days"
-                type="number"
-                min="1"
-                step="1"
-                inputmode="numeric"
-              />
-            </label>
-          </div>
-
-          <div id="weekly-fields" class="field-grid conditional-field">
             <label class="field">
-              <span>Интервал в неделях</span>
-              <input
-                id="interval-weeks"
-                name="interval_weeks"
-                type="number"
-                min="1"
-                step="1"
-                inputmode="numeric"
-              />
-            </label>
-            <label class="field">
-              <span>День недели</span>
-              <select id="day-of-week" name="day_of_week">
-                <option value="">Не выбрано</option>
+              <span>Тип расписания</span>
+              <select id="schedule-type" name="schedule_type" required>
+                <option value="once">Один раз</option>
+                <option value="yearly_date">Каждый год в дату</option>
+                <option value="every_days">Каждые N дней</option>
+                <option value="every_week">Каждые N недель</option>
+                <option value="monthly_weekday">N-й день недели месяца</option>
+                <option value="monthly_day">День месяца</option>
               </select>
             </label>
-          </div>
 
-          <div id="monthly-weekday-fields" class="field-grid conditional-field">
             <label class="field">
-              <span>Неделя месяца</span>
-              <select id="month-week-number" name="month_week_number">
-                <option value="">Не выбрано</option>
-              </select>
+              <span>Первое срабатывание</span>
+              <input id="start-at" name="start_at" type="datetime-local" required />
+              <span id="start-at-hint" class="field-hint"></span>
+              <span id="start-at-error" class="field-error" hidden></span>
             </label>
-            <label class="field">
-              <span>День недели</span>
-              <select id="month-day-of-week" name="month_day_of_week">
-                <option value="">Не выбрано</option>
-              </select>
-            </label>
-          </div>
 
-          <div id="month-day-field" class="field conditional-field">
-            <label>
-              <span>День месяца</span>
-              <select id="month-day" name="month_day">
-                <option value="">Не выбрано</option>
-              </select>
-            </label>
+            <div id="interval-days-field" class="field conditional-field">
+              <label>
+                <span>Интервал в днях</span>
+                <input
+                  id="interval-days"
+                  name="interval_days"
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputmode="numeric"
+                />
+              </label>
+            </div>
+
+            <div id="weekly-fields" class="field-grid conditional-field">
+              <label class="field">
+                <span>Интервал в неделях</span>
+                <input
+                  id="interval-weeks"
+                  name="interval_weeks"
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputmode="numeric"
+                />
+              </label>
+              <label class="field">
+                <span>День недели</span>
+                <select id="day-of-week" name="day_of_week">
+                  <option value="">Не выбрано</option>
+                </select>
+              </label>
+            </div>
+
+            <div id="monthly-weekday-fields" class="field-grid conditional-field">
+              <label class="field">
+                <span>Неделя месяца</span>
+                <select id="month-week-number" name="month_week_number">
+                  <option value="">Не выбрано</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>День недели</span>
+                <select id="month-day-of-week" name="month_day_of_week">
+                  <option value="">Не выбрано</option>
+                </select>
+              </label>
+            </div>
+
+            <div id="month-day-field" class="field conditional-field">
+              <label>
+                <span>День месяца</span>
+                <select id="month-day" name="month_day">
+                  <option value="">Не выбрано</option>
+                </select>
+              </label>
+            </div>
           </div>
 
           <section id="preview" class="preview" hidden></section>
 
-          <div class="actions">
+          <div class="actions form-actions">
             <button id="preview-button" class="secondary-button" type="button">
               Предпросмотр
             </button>
@@ -214,14 +234,21 @@
         </form>
       </section>
 
-      <section class="card">
-        <h2>Активные напоминания</h2>
+      <section class="card reminders-card">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">Список</p>
+            <h2>Активные напоминания</h2>
+          </div>
+          <span id="reminders-count" class="count-badge">0 активных</span>
+        </div>
+
         <div id="reminders-list" class="reminders-list">
           <p class="muted">Загрузка...</p>
         </div>
       </section>
     </main>
 
-    <script src="./app.js?v=20260614-16"></script>
+    <script src="./app.js?v=20260614-17"></script>
   </body>
 </html>

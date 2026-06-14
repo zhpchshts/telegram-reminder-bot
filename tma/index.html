@@ -22,7 +22,7 @@
     document.documentElement.dataset.theme = "light";
   }
 </script>
-    <link rel="stylesheet" href="./styles.css?v=20260614-4" />
+    <link rel="stylesheet" href="./styles.css?v=20260614-5" />
 
   </head>
   <body>
@@ -47,52 +47,58 @@
 
       <section id="status" class="status" hidden></section>
 
-      <section class="card">
-        <h2>Таймзона чата</h2>
-        <p class="muted">
-          Таймзона общая для всего чата. По ней бот рассчитывает время
-          срабатывания новых напоминаний.
-        </p>
+<details class="card collapsible-card timezone-card">
+  <summary class="timezone-summary">
+    <span id="timezone-summary-text">Таймзона чата: загружается...</span>
+    <span class="timezone-summary-action">Настроить</span>
+  </summary>
 
-        <div id="device-timezone-block" class="timezone-suggestion" hidden>
-          <p class="muted">Таймзона устройства:</p>
-          <p id="device-timezone-name" class="timezone-suggestion-value"></p>
-          <button
-            id="use-device-timezone-button"
-            class="secondary-button"
-            type="button"
-          >
-            Использовать таймзону устройства
-          </button>
-        </div>
+  <div class="collapsible-content">
+    <p class="muted">
+      Таймзона общая для всего чата. По ней бот рассчитывает время
+      срабатывания новых напоминаний.
+    </p>
 
-        <form id="timezone-form" class="form">
-          <label class="field">
-            <span>Таймзона чата</span>
-            <input
-              id="chat-timezone-name"
-              name="timezone_name"
-              type="text"
-              placeholder="Asia/Yekaterinburg"
-              autocomplete="off"
-              required
-            />
-          </label>
-          <p class="muted">
-            Формат: Europe/Moscow, Asia/Yekaterinburg, Asia/Almaty.
-          </p>
-          <div class="actions">
-            <button
-              id="timezone-save-button"
-              class="secondary-button"
-              type="submit"
-            >
-              Сохранить таймзону
-            </button>
-          </div>
-        </form>
-      </section>
+    <div id="device-timezone-block" class="timezone-suggestion" hidden>
+      <p class="muted">Таймзона устройства:</p>
+      <p id="device-timezone-name" class="timezone-suggestion-value"></p>
 
+      <button
+        id="use-device-timezone-button"
+        class="secondary-button"
+        type="button"
+      >
+        Использовать таймзону устройства
+      </button>
+    </div>
+
+    <form id="timezone-form" class="form">
+      <label class="field">
+        <span>Таймзона чата</span>
+        <input
+          id="chat-timezone-name"
+          name="timezone_name"
+          type="text"
+          placeholder="Asia/Yekaterinburg"
+          autocomplete="off"
+          required
+        />
+      </label>
+
+      <p class="muted">Формат: Europe/Moscow, Asia/Yekaterinburg, Asia/Almaty.</p>
+
+      <div class="actions">
+        <button
+          id="timezone-save-button"
+          class="secondary-button"
+          type="submit"
+        >
+          Сохранить таймзону
+        </button>
+      </div>
+    </form>
+  </div>
+</details>
       <section class="card">
         <h2 id="form-title">Создать напоминание</h2>
         <form id="reminder-form" class="form">
@@ -216,6 +222,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260614-15"></script>
+    <script src="./app.js?v=20260614-16"></script>
   </body>
 </html>

@@ -124,6 +124,7 @@ const state = {
 
 const elements = {
   chatTitle: document.querySelector("#chat-title"),
+  timezoneSummaryText: document.querySelector("#timezone-summary-text"),
   status: document.querySelector("#status"),
   deviceTimezoneBlock: document.querySelector("#device-timezone-block"),
   deviceTimezoneName: document.querySelector("#device-timezone-name"),
@@ -310,10 +311,16 @@ async function loadBootstrap() {
 function renderContext() {
   const chat = state.context?.chat;
   const title = chat?.title || chat?.type || "Telegram chat";
+  const timezoneName = state.context.timezone_name;
 
-  elements.chatTitle.textContent = `${title} · ${state.context.timezone_name}`;
-  elements.chatTimezoneName.value = state.context.timezone_name;
-  elements.timezoneName.value = state.context.timezone_name;
+  elements.chatTitle.textContent = title;
+
+  if (elements.timezoneSummaryText) {
+    elements.timezoneSummaryText.textContent = `Таймзона чата: ${timezoneName}`;
+  }
+
+  elements.chatTimezoneName.value = timezoneName;
+  elements.timezoneName.value = timezoneName;
   renderStartAtHint();
 }
 

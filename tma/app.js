@@ -1011,4 +1011,3 @@ elements.timezoneForm.addEventListener("submit", (event) => {
 });
 
 window.setTimeout(() => handleAsync(() => loadBootstrap("startup")), 0);
-loadTelegramSdkAfterStartup();

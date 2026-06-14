@@ -1,5 +1,3 @@
-const appScriptStartedAt = performance.now();
-let telegramReadyCalledAt = null;
 let telegram = window.Telegram?.WebApp || null;
 
 function refreshTelegramWebApp() {
@@ -43,88 +41,6 @@ function buildMissingInitDataMessage() {
     "",
     `Debug: WebApp=${currentTelegram ? "yes" : "no"}, platform=${currentTelegram?.platform || "unknown"}, version=${currentTelegram?.version || "unknown"}, hash_has_tgWebAppData=${hashParams.has("tgWebAppData") ? "yes" : "no"}, search_has_tgWebAppData=${searchParams.has("tgWebAppData") ? "yes" : "no"}`,
   ].join("\n");
-}
-
-function roundTiming(value) {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  return Math.round(value * 10) / 10;
-}
-
-function buildClientTimingPayload(event, source, timings = {}, error = null) {
-  const webApp = refreshTelegramWebApp();
-
-  return {
-    event,
-    source,
-    platform: webApp?.platform || "unknown",
-    version: webApp?.version || "unknown",
-    has_init_data: Boolean(getTelegramInitData()),
-    script_started_ms: roundTiming(appScriptStartedAt),
-    ready_called_ms: roundTiming(telegramReadyCalledAt),
-    bootstrap_started_ms: roundTiming(timings.bootstrapStartedAt),
-    fetch_started_ms: roundTiming(timings.fetchStartedAt),
-    fetch_finished_ms: roundTiming(timings.fetchFinishedAt),
-    render_finished_ms: roundTiming(timings.renderFinishedAt),
-    total_ms: roundTiming(timings.totalMs),
-    error_name: error?.name || null,
-    error_message: error?.message || null,
-  };
-}
-
-function sendClientTiming(event, source, timings = {}, error = null) {
-  const payload = buildClientTimingPayload(event, source, timings, error);
-
-  fetch("/api/tma/client-timing", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-    keepalive: true,
-  }).catch(() => {});
-}
-
-function markTelegramReady(source) {
-  const webApp = refreshTelegramWebApp();
-
-  if (!webApp) {
-    return false;
-  }
-
-  webApp.ready();
-  telegramReadyCalledAt = performance.now();
-  webApp.expand();
-
-  sendClientTiming("telegram_sdk_ready", source, {
-    totalMs: telegramReadyCalledAt - appScriptStartedAt,
-  });
-
-  return true;
-}
-
-function loadTelegramSdkAfterStartup() {
-  if (markTelegramReady("already_available")) {
-    return;
-  }
-
-  const script = document.createElement("script");
-  script.src = "https://telegram.org/js/telegram-web-app.js";
-  script.async = true;
-
-  script.addEventListener("load", () => {
-    markTelegramReady("dynamic_load");
-  });
-
-  script.addEventListener("error", () => {
-    sendClientTiming("telegram_sdk_error", "dynamic_load", {
-      totalMs: performance.now() - appScriptStartedAt,
-    });
-  });
-
-  document.head.append(script);
 }
 
 function getDeviceTimezone() {
@@ -307,57 +223,23 @@ async function apiRequest(path, options = {}) {
   return body;
 }
 
-async function loadBootstrap(source = "unknown") {
-  const bootstrapStartedAt = performance.now();
-  let fetchStartedAt = null;
-  let fetchFinishedAt = null;
-  let renderFinishedAt = null;
-
+async function loadBootstrap() {
   hideStatus();
   hidePreview();
   clearFieldErrors();
   elements.chatTitle.textContent = "Загрузка чата...";
 
-  try {
-    fetchStartedAt = performance.now();
-    const bootstrap = await apiRequest("/api/tma/bootstrap");
-    fetchFinishedAt = performance.now();
+  const bootstrap = await apiRequest("/api/tma/bootstrap");
 
-    state.context = bootstrap.context;
-    state.reminderOptions = bootstrap.reminder_options;
-    state.reminders = sortReminders(bootstrap.active_reminders);
+  state.context = bootstrap.context;
+  state.reminderOptions = bootstrap.reminder_options;
+  state.reminders = sortReminders(bootstrap.active_reminders);
 
-    renderContext();
-    renderDeviceTimezoneSuggestion();
-    renderOptions();
-    renderReminders();
-    setDefaultStartAtIfEmpty();
-
-    renderFinishedAt = performance.now();
-
-    sendClientTiming("bootstrap_success", source, {
-      bootstrapStartedAt,
-      fetchStartedAt,
-      fetchFinishedAt,
-      renderFinishedAt,
-      totalMs: renderFinishedAt - bootstrapStartedAt,
-    });
-  } catch (error) {
-    sendClientTiming(
-      "bootstrap_error",
-      source,
-      {
-        bootstrapStartedAt,
-        fetchStartedAt,
-        fetchFinishedAt,
-        renderFinishedAt,
-        totalMs: performance.now() - bootstrapStartedAt,
-      },
-      error,
-    );
-
-    throw error;
-  }
+  renderContext();
+  renderDeviceTimezoneSuggestion();
+  renderOptions();
+  renderReminders();
+  setDefaultStartAtIfEmpty();
 }
 
 function renderContext() {
@@ -991,9 +873,7 @@ async function handleAsync(action) {
   }
 }
 
-elements.reloadButton.addEventListener("click", () =>
-  handleAsync(() => loadBootstrap("reload")),
-);
+elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
 elements.startAt.addEventListener("input", clearStartAtError);
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
@@ -1010,4 +890,4 @@ elements.timezoneForm.addEventListener("submit", (event) => {
   handleAsync(saveTimezone);
 });
 
-window.setTimeout(() => handleAsync(() => loadBootstrap("startup")), 0);
+window.setTimeout(() => handleAsync(loadBootstrap), 0);

@@ -306,6 +306,53 @@ def test_preview_tma_reminder_returns_normalized_preview() -> None:
     )
 
 
+def test_preview_tma_reminder_accepts_weekly_weekday_value_from_form_options() -> None:
+    options = get_reminder_form_options()
+    thursday = next(
+        weekday for weekday in options.weekdays if weekday.label == "Четверг"
+    )
+
+    result = preview_tma_reminder(
+        request=ReminderCreateRequest(
+            reminder_text="Проверить фильтры",
+            schedule_type="every_week",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            interval_weeks=1,
+            day_of_week=thursday.value,
+        ),
+        _chat_id=100,
+    )
+
+    assert result.schedule_type == "every_week"
+    assert result.period is not None
+    assert "четвер" in result.period
+
+
+def test_preview_tma_reminder_accepts_monthly_weekday_value_from_form_options() -> None:
+    options = get_reminder_form_options()
+    thursday = next(
+        weekday for weekday in options.weekdays if weekday.label == "Четверг"
+    )
+
+    result = preview_tma_reminder(
+        request=ReminderCreateRequest(
+            reminder_text="Проверить фильтры",
+            schedule_type="monthly_weekday",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            month_week_number=3,
+            day_of_week=thursday.value,
+        ),
+        _chat_id=100,
+    )
+
+    assert result.schedule_type == "monthly_weekday"
+    assert result.period is not None
+    assert "3" in result.period
+    assert "четвер" in result.period
+
+
 def test_create_tma_reminder_returns_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -370,6 +417,72 @@ def test_create_tma_reminder_returns_response(
         period="каждые 3 дн.",
         interval_days=3,
     )
+
+
+def test_create_tma_reminder_accepts_monthly_weekday_value_from_form_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_create_scheduled_reminder(
+        *,
+        bot: object,
+        chat_id: int,
+        data: ReminderCreateData,
+    ) -> int:
+        captured_calls.append(
+            {
+                "bot": bot,
+                "chat_id": chat_id,
+                "data": data,
+            }
+        )
+        return 42
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    options = get_reminder_form_options()
+    thursday = next(
+        weekday for weekday in options.weekdays if weekday.label == "Четверг"
+    )
+
+    result = create_tma_reminder(
+        chat_id=100,
+        request=ReminderCreateRequest(
+            reminder_text="Проверить фильтры",
+            schedule_type="monthly_weekday",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            month_week_number=3,
+            day_of_week=thursday.value,
+        ),
+        bot=BOT,
+    )
+
+    expected_data = ReminderCreateData(
+        reminder_text="Проверить фильтры",
+        schedule_type="monthly_weekday",
+        start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+        timezone_name="Asia/Yekaterinburg",
+        month_week_number=3,
+        day_of_week=thursday.value,
+    )
+
+    assert captured_calls == [
+        {
+            "bot": BOT,
+            "chat_id": 100,
+            "data": expected_data,
+        }
+    ]
+    assert result.id == 42
+    assert result.schedule_type == "monthly_weekday"
+    assert result.day_of_week == thursday.value
+    assert result.month_week_number == 3
 
 
 def test_update_tma_reminder_returns_response(

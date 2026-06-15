@@ -16,6 +16,7 @@ Database: SQLite
 Bot mode: long polling
 HTTP API: FastAPI / Uvicorn
 Mini App static: /tma
+Mini App static mount: ./tma:/app/tma:ro
 Local API port: 127.0.0.1:8000
 ```
 
@@ -301,6 +302,50 @@ curl -I https://PUBLIC_DOMAIN/tma/
 
 Если менялся backend/Python-код, нужно проверить и Telegram-команды, и HTTP API, и Mini App.
 
+## Frontend-only deploy
+
+После настройки bind mount:
+
+```text
+./tma:/app/tma:ro
+```
+
+frontend-only правки в `tma/app.js`, `tma/styles.css` и `tma/index.html` не требуют пересборки backend image.
+
+Для frontend-only deploy на VPS достаточно обновить рабочую копию репозитория:
+
+```bash
+cd /opt/telegram-reminder-bot
+git pull --ff-only
+```
+
+После этого проверить, что backend отдаёт обновлённую Mini App статику:
+
+```bash
+curl -I http://127.0.0.1:8000/tma/
+curl -I https://PUBLIC_DOMAIN/tma/
+```
+
+Контейнер перезапускать не нужно, потому что файлы `tma/` читаются из host-директории, смонтированной в контейнер.
+
+Если менялся только frontend, не нужно выполнять:
+
+```bash
+docker compose build
+docker compose up -d --force-recreate
+```
+
+Полный deploy через `/opt/deploy-telegram-reminder-bot.sh` нужен, если менялись:
+
+* Python/backend-код;
+* зависимости;
+* Dockerfile;
+* docker-compose.yml;
+* настройки runtime;
+* миграции или структура базы.
+
+
+
 ## Старый systemd-сервис
 
 Старый Python-сервис должен быть отключён и остановлен:
@@ -435,6 +480,9 @@ environment:
   API_PORT: 8000
 ports:
   - "127.0.0.1:8000:8000"
+volumes:
+  - ./reminders.db:/data/reminders.db
+  - ./tma:/app/tma:ro
 ```
 
 Права на `.env`:

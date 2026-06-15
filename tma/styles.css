@@ -68,6 +68,18 @@
   box-sizing: border-box;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip: rect(0, 0, 0, 0);
+}
+
 html {
   min-height: 100%;
 }
@@ -172,9 +184,9 @@ h1 {
 
 h2 {
   margin-bottom: 0;
-  font-size: 21px;
-  line-height: 1.12;
-  letter-spacing: -0.025em;
+  font-size: 20px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
 }
 
 h3 {
@@ -215,7 +227,7 @@ h3 {
   gap: 12px;
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .card-heading-note {
@@ -258,41 +270,41 @@ h3 {
 
 .form {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .form-section {
   display: grid;
-  gap: 14px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .section-label {
-  margin-bottom: -2px;
-  color: var(--accent);
+  margin-bottom: -1px;
+  color: var(--muted);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 680;
 }
 
 .field,
 .field label {
   display: grid;
-  gap: 7px;
+  gap: 6px;
 }
 
 .field > span,
 .field label > span {
   color: var(--text);
   font-size: 14px;
-  font-weight: 750;
+  font-weight: 640;
 }
 
 .field-main textarea {
-  min-height: 104px;
-  font-size: 17px;
+  min-height: 96px;
+  font-size: 16px;
   line-height: 1.45;
 }
 
@@ -305,14 +317,14 @@ h3 {
 .start-at-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(124px, 0.52fr);
-  gap: 10px;
+  gap: 8px;
   align-items: end;
 }
 
 .compact-field {
   display: grid;
   min-width: 0;
-  gap: 6px;
+  gap: 0;
 }
 
 .compact-field span {
@@ -447,7 +459,7 @@ input::-webkit-calendar-picker-indicator {
   border-radius: 999px;
   padding: 11px 16px;
   cursor: pointer;
-  font-weight: 760;
+  font-weight: 700;
   line-height: 1.15;
   transition:
     transform 0.15s ease,
@@ -515,7 +527,7 @@ input::-webkit-calendar-picker-indicator {
   justify-content: space-between;
   padding: 14px 16px;
   cursor: pointer;
-  font-weight: 800;
+  font-weight: 700;
   list-style: none;
 }
 
@@ -568,7 +580,7 @@ input::-webkit-calendar-picker-indicator {
 }
 
 .timezone-suggestion-value {
-  font-weight: 850;
+  font-weight: 700;
   overflow-wrap: anywhere;
 }
 
@@ -579,16 +591,14 @@ input::-webkit-calendar-picker-indicator {
 }
 
 .preview-label {
-  color: var(--accent);
+  color: var(--muted);
   font-size: 12px;
-  font-weight: 850;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-weight: 640;
 }
 
 .preview-title {
-  font-size: 17px;
-  font-weight: 800;
+  font-size: 16px;
+  font-weight: 680;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -608,7 +618,7 @@ input::-webkit-calendar-picker-indicator {
   align-items: center;
   border-radius: 999px;
   font-size: 13px;
-  font-weight: 780;
+  font-weight: 660;
   line-height: 1.15;
 }
 
@@ -665,7 +675,7 @@ input::-webkit-calendar-picker-indicator {
 }
 
 .reminder-card h3 {
-  font-size: 17px;
+  font-size: 16px;
   line-height: 1.32;
   overflow-wrap: anywhere;
 }
@@ -717,7 +727,7 @@ input::-webkit-calendar-picker-indicator {
 }
 
 .empty-state h3 {
-  font-size: 17px;
+  font-size: 16px;
 }
 
 .empty-state p {

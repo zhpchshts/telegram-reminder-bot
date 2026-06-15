@@ -393,8 +393,7 @@ function renderContext() {
 
 function renderStartAtHint() {
   const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
-  const timezoneLabel = getActiveTimezoneLabel(timezoneName);
-  elements.startAtHint.textContent = `Время указывается в ${timezoneLabel}: ${timezoneName}.`;
+  elements.startAtHint.textContent = `Таймзона: ${timezoneName}`;
 }
 
 function getActiveTimezoneLabel(timezoneName) {

@@ -349,8 +349,9 @@ h3 {
   line-height: 1.35;
 }
 
-.field-error {
-  color: var(--danger-strong);
+.field-hint {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 input,
@@ -622,11 +623,19 @@ input::-webkit-calendar-picker-indicator {
   line-height: 1.15;
 }
 
-.preview-chip,
-.reminder-chip {
+.preview-chip {
   padding: 6px 9px;
   background: var(--accent-soft);
   color: var(--accent-text);
+}
+
+.reminder-chip {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .preview-next {

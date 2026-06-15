@@ -2,7 +2,7 @@
   color-scheme: light;
   --bg: #f6f8fb;
   --bg-accent: #eef7ff;
-  --surface: rgb(255 255 255 / 86%);
+  --surface: #ffffff;
   --surface-strong: #ffffff;
   --surface-muted: #f1f5f9;
   --surface-input: #ffffff;
@@ -20,8 +20,8 @@
   --danger: #dc2626;
   --danger-strong: #b91c1c;
   --danger-soft: #fee2e2;
-  --shadow: 0 18px 48px rgb(53 83 116 / 14%);
-  --shadow-soft: 0 10px 28px rgb(53 83 116 / 10%);
+  --shadow: none;
+  --shadow-soft: none;
   --radius-lg: 24px;
   --radius-md: 18px;
   --radius-sm: 14px;
@@ -33,9 +33,7 @@
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  background:
-    radial-gradient(circle at top left, rgb(191 219 254 / 58%), transparent 34rem),
-    linear-gradient(180deg, #f8fbff 0%, var(--bg) 36%, #f3f6fb 100%);
+  background: var(--bg);
   color: var(--text);
 }
 
@@ -43,7 +41,7 @@
   color-scheme: dark;
   --bg: #0b1220;
   --bg-accent: #0f1d33;
-  --surface: rgb(17 24 39 / 86%);
+  --surface: #111827;
   --surface-strong: #111827;
   --surface-muted: #162235;
   --surface-input: #0b1220;
@@ -61,11 +59,9 @@
   --danger: #fb7185;
   --danger-strong: #f43f5e;
   --danger-soft: #4a1724;
-  --shadow: 0 18px 48px rgb(0 0 0 / 34%);
-  --shadow-soft: 0 10px 28px rgb(0 0 0 / 24%);
-  background:
-    radial-gradient(circle at top left, rgb(37 99 235 / 30%), transparent 34rem),
-    linear-gradient(180deg, #0f172a 0%, var(--bg) 48%, #090f1a 100%);
+  --shadow: none;
+  --shadow-soft: none;
+  background: var(--bg);
 }
 
 * {
@@ -112,7 +108,6 @@ button:disabled {
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(16px);
 }
 
 .hero {
@@ -124,16 +119,6 @@ button:disabled {
   border-radius: 22px;
   overflow: hidden;
   position: relative;
-}
-
-.hero::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(circle at 10% 0%, rgb(96 165 250 / 13%), transparent 13rem),
-    radial-gradient(circle at 100% 20%, rgb(34 197 94 / 8%), transparent 12rem);
 }
 
 .hero > * {
@@ -156,8 +141,7 @@ button:disabled {
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 16px;
-  background:
-    linear-gradient(145deg, var(--surface-strong), var(--accent-soft));
+  background: var(--accent-soft);
   box-shadow: var(--shadow-soft);
   font-size: 21px;
 }
@@ -283,7 +267,7 @@ h3 {
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--surface-muted), transparent 28%);
+  background: var(--surface-muted);
 }
 
 .section-label {
@@ -367,7 +351,7 @@ textarea {
   background-color: var(--surface-input);
   color: var(--text);
   outline: none;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%);
+  box-shadow: none;
   transition:
     border-color 0.16s ease,
     box-shadow 0.16s ease,
@@ -390,16 +374,14 @@ select {
   -webkit-appearance: none;
   cursor: pointer;
   padding-right: 42px;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--hint) 50%),
-    linear-gradient(135deg, var(--hint) 50%, transparent 50%);
-  background-position:
-    calc(100% - 21px) 50%,
-    calc(100% - 15px) 50%;
-  background-size:
-    6px 6px,
-    6px 6px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: calc(100% - 14px) 50%;
+  background-size: 18px 18px;
   background-repeat: no-repeat;
+}
+
+:root[data-theme="dark"] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%238ea0b8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 input[type="date"],
@@ -425,18 +407,14 @@ select:focus,
 textarea:focus {
   border-color: color-mix(in srgb, var(--accent), white 10%);
   background-color: color-mix(in srgb, var(--surface-input), var(--accent-soft) 16%);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 18%),
-    0 0 0 4px color-mix(in srgb, var(--accent), transparent 82%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent), transparent 84%);
 }
 
 input[aria-invalid="true"],
 select[aria-invalid="true"],
 textarea[aria-invalid="true"] {
   border-color: var(--danger);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 18%),
-    0 0 0 4px color-mix(in srgb, var(--danger), transparent 84%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger), transparent 86%);
 }
 
 option {
@@ -479,13 +457,13 @@ input::-webkit-calendar-picker-indicator {
 }
 
 .primary-button {
-  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  background: var(--accent);
   color: #ffffff;
-  box-shadow: 0 12px 26px color-mix(in srgb, var(--accent), transparent 72%);
+  box-shadow: none;
 }
 
 .secondary-button {
-  background: color-mix(in srgb, var(--surface-muted), var(--surface-strong) 34%);
+  background: var(--surface-muted);
   color: var(--text);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border), transparent 12%);
 }
@@ -582,7 +560,7 @@ input::-webkit-calendar-picker-indicator {
   padding: 13px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent-soft), transparent 40%);
+  background: var(--accent-soft);
 }
 
 .timezone-suggestion p {
@@ -597,9 +575,7 @@ input::-webkit-calendar-picker-indicator {
 .preview {
   display: grid;
   gap: 9px;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--accent-soft), transparent 12%), transparent),
-    var(--surface);
+  background: var(--surface);
 }
 
 .preview-label {
@@ -651,7 +627,7 @@ input::-webkit-calendar-picker-indicator {
 .count-badge {
   flex: 0 0 auto;
   padding: 7px 10px;
-  background: color-mix(in srgb, var(--accent-soft), transparent 22%);
+  background: var(--accent-soft);
   color: var(--accent-text);
 }
 
@@ -667,9 +643,7 @@ input::-webkit-calendar-picker-indicator {
   padding: 15px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft), transparent 18%), transparent 58%),
-    var(--surface-strong);
+  background: var(--surface-strong);
   box-shadow: var(--shadow-soft);
   overflow: hidden;
 }
@@ -680,7 +654,7 @@ input::-webkit-calendar-picker-indicator {
   inset: 14px auto 14px 0;
   width: 4px;
   border-radius: 0 999px 999px 0;
-  background: linear-gradient(180deg, var(--accent), #8ec5ff);
+  background: var(--accent);
 }
 
 .reminder-content {
@@ -728,7 +702,7 @@ input::-webkit-calendar-picker-indicator {
   padding: 28px 18px;
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--surface-muted), transparent 18%);
+  background: var(--surface-muted);
   text-align: center;
 }
 

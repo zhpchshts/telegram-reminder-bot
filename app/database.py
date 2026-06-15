@@ -199,6 +199,19 @@ def get_all_active_reminders() -> list[sqlite3.Row]:
     return fetch_active_reminders()
 
 
+def count_active_chats() -> int:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT COUNT(DISTINCT chat_id) AS active_chats_count
+            FROM reminders
+            WHERE status = 'active'
+            """
+        ).fetchone()
+
+    return int(row["active_chats_count"])
+
+
 def set_reminder_status(reminder_id: int, status: str) -> None:
     with get_connection() as connection:
         connection.execute(

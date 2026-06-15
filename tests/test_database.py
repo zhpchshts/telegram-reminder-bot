@@ -100,6 +100,50 @@ def test_get_all_active_reminders_returns_all_active(monkeypatch, tmp_path) -> N
     assert reminders[1]["text"] == "Второе"
 
 
+def test_count_active_chats_counts_unique_chats_with_active_reminders(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Первое активное в первом чате",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 12),
+    )
+    database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Второе активное в первом чате",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 12),
+    )
+    database.create_reminder_in_db(
+        chat_id=200,
+        reminder_text="Активное во втором чате",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 12),
+    )
+
+    deleted_reminder_id = database.create_reminder_in_db(
+        chat_id=300,
+        reminder_text="Удалённое напоминание",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 12),
+    )
+    sent_reminder_id = database.create_reminder_in_db(
+        chat_id=400,
+        reminder_text="Отправленное напоминание",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 12),
+    )
+
+    database.mark_reminder_as_deleted(deleted_reminder_id)
+    database.mark_reminder_as_sent(sent_reminder_id)
+
+    assert database.count_active_chats() == 2
+
+
 def test_mark_reminder_as_sent_hides_it_from_active(monkeypatch, tmp_path) -> None:
     use_test_db(monkeypatch, tmp_path)
 

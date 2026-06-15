@@ -57,8 +57,15 @@ class FakeTelegramInitData:
     start_param = "chat_100"
 
 
-def test_health_returns_ok() -> None:
-    assert health() == {"status": "ok"}
+def test_health_returns_status_and_active_chats_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module, "count_active_chats", lambda: 3)
+
+    assert health() == {
+        "status": "ok",
+        "active_chats_count": 3,
+    }
 
 
 def test_configure_cors_skips_empty_origins() -> None:

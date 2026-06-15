@@ -90,11 +90,16 @@ def authenticated_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
         app.dependency_overrides.update(previous_overrides)
 
 
-def test_health_endpoint_returns_ok(client: TestClient) -> None:
+def test_health_endpoint_returns_status_and_active_chats_count(
+    client: TestClient,
+) -> None:
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {
+        "status": "ok",
+        "active_chats_count": 0,
+    }
 
 
 def test_tma_static_index_is_served(client: TestClient) -> None:

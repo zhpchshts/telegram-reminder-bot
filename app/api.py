@@ -32,6 +32,7 @@ from app.api_models import (
     build_tma_context_response,
 )
 from app.config import API_ALLOWED_ORIGINS
+from app.database import count_active_chats
 from app.reminder_models import ReminderCreateData
 from app.reminder_service import (
     create_scheduled_reminder,
@@ -121,8 +122,11 @@ def get_tma_chat_type(
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, str | int]:
+    return {
+        "status": "ok",
+        "active_chats_count": count_active_chats(),
+    }
 
 
 @app.get(

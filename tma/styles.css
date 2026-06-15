@@ -319,13 +319,72 @@ h3 {
 }
 
 .start-at-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.6fr);
-  gap: 12px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(118px, 0.44fr);
+    gap: 10px;
+    align-items: end;
 }
 
 .compact-field {
-  gap: 7px;
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+}
+
+.compact-field span {
+    color: var(--muted-text);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.compact-field input {
+    width: 100%;
+    min-height: 48px;
+}
+
+.compact-field input[type="time"] {
+    min-width: 118px;
+}
+
+@media (max-width: 359px) {
+.start-at-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(118px, 0.44fr);
+    gap: 10px;
+    align-items: end;
+}
+
+.compact-field {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+}
+
+.compact-field span {
+    color: var(--muted-text);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.compact-field input {
+    width: 100%;
+    min-height: 48px;
+}
+
+.compact-field input[type="time"] {
+    min-width: 118px;
+}
+
+@media (max-width: 359px) {
+    .start-at-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .compact-field input[type="time"] {
+        min-width: 0;
+    }
 }
 
 .field-hint,
@@ -755,7 +814,10 @@ input::-webkit-calendar-picker-indicator {
 
 @media (max-width: 560px) {
   .start-at-grid {
-    grid-template-columns: 1fr;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(118px, 0.44fr);
+    gap: 10px;
+    align-items: end;
   }
 
   .app {

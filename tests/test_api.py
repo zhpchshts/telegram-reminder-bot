@@ -144,13 +144,13 @@ def test_get_reminder_form_options_returns_response() -> None:
         "monthly_day",
     ]
     assert [weekday.value for weekday in result.weekdays] == [
-        "MONDAY",
-        "TUESDAY",
-        "WEDNESDAY",
-        "THURSDAY",
-        "FRIDAY",
-        "SATURDAY",
-        "SUNDAY",
+        "MON",
+        "TUE",
+        "WED",
+        "THU",
+        "FRI",
+        "SAT",
+        "SUN",
     ]
     assert result.month_week_numbers == [1, 2, 3, 4, 5]
     assert result.month_days == list(range(1, 32))

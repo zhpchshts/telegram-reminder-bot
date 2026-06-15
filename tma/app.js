@@ -141,6 +141,8 @@ const elements = {
   reminderText: document.querySelector("#reminder-text"),
   scheduleType: document.querySelector("#schedule-type"),
   startAt: document.querySelector("#start-at"),
+  startDate: document.querySelector("#start-date"),
+  startTime: document.querySelector("#start-time"),
   startAtHint: document.querySelector("#start-at-hint"),
   startAtError: document.querySelector("#start-at-error"),
   timezoneName: document.querySelector("#timezone-name"),
@@ -176,25 +178,78 @@ function hideStatus() {
 function showStartAtError(message) {
   elements.startAtError.textContent = message;
   elements.startAtError.hidden = false;
-  elements.startAt.setAttribute("aria-invalid", "true");
+
+  for (const element of [elements.startAt, elements.startDate, elements.startTime]) {
+    element?.setAttribute("aria-invalid", "true");
+  }
 }
 
 function clearStartAtError() {
   elements.startAtError.textContent = "";
   elements.startAtError.hidden = true;
-  elements.startAt.removeAttribute("aria-invalid");
+
+  for (const element of [elements.startAt, elements.startDate, elements.startTime]) {
+    element?.removeAttribute("aria-invalid");
+  }
 }
 
 function clearFieldErrors() {
   clearStartAtError();
 }
 
+function setStartAtValue(value) {
+  const normalizedValue = value || "";
+
+  elements.startAt.value = normalizedValue;
+
+  const [datePart, timePart = ""] = normalizedValue.split("T");
+
+  if (elements.startDate) {
+    elements.startDate.value = datePart || "";
+  }
+
+  if (elements.startTime) {
+    elements.startTime.value = timePart.slice(0, 5) || "";
+  }
+}
+
+function syncStartAtFromParts() {
+  if (!elements.startDate || !elements.startTime) {
+    return;
+  }
+
+  const datePart = elements.startDate.value;
+  const timePart = elements.startTime.value;
+
+  elements.startAt.value = datePart && timePart ? `${datePart}T${timePart}` : "";
+}
+
+function getStartAtFocusTarget() {
+  return elements.startDate || elements.startAt;
+}
+
 function focusStartAtField() {
-  elements.startAt.scrollIntoView({
+  const target = getStartAtFocusTarget();
+
+  target.scrollIntoView({
     behavior: "smooth",
     block: "center",
   });
-  elements.startAt.focus();
+
+  target.focus();
+}
+
+function isMissingChatContextError(error) {
+  return error.message === "Telegram init data start_param is required.";
+}
+
+function buildMissingChatContextMessage() {
+  return [
+    "Не удалось определить чат.",
+    "",
+    "Незабудка хранит напоминания отдельно для каждого Telegram-чата.",
+    "Открой приложение из нужного чата: отправь /app или нажми кнопку «Управлять напоминаниями» в сообщении бота.",
+  ].join("\n");
 }
 
 function buildStartAtPastMessage() {
@@ -209,10 +264,18 @@ function isStartAtPastError(error) {
 }
 
 function handleError(error) {
+  if (isMissingChatContextError(error)) {
+    showStatus(buildMissingChatContextMessage(), "info");
+    return;
+  }
+
   if (isStartAtPastError(error)) {
     hideStatus();
+
     showStartAtError(buildStartAtPastMessage());
+
     focusStartAtField();
+
     return;
   }
 
@@ -541,6 +604,8 @@ function updateConditionalFields() {
 }
 
 function buildRequestPayload() {
+  syncStartAtFromParts();
+
   const scheduleType = elements.scheduleType.value;
 
   const payload = {
@@ -594,11 +659,14 @@ function isPositiveIntegerValue(value) {
 }
 
 function hasValidStartAtValue() {
+  syncStartAtFromParts();
+
   if (!elements.startAt.value) {
     return false;
   }
 
   const date = new Date(elements.startAt.value);
+
   return !Number.isNaN(date.getTime());
 }
 
@@ -680,7 +748,7 @@ function setDefaultStartAt() {
   date.setSeconds(0, 0);
 
   const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
-  elements.startAt.value = toDateTimeLocalValue(date, timezoneName);
+  setStartAtValue(toDateTimeLocalValue(date, timezoneName));
 }
 
 function startEdit(reminder) {
@@ -688,9 +756,11 @@ function startEdit(reminder) {
   elements.formTitle.textContent = "Редактировать напоминание";
   elements.reminderText.value = reminder.reminder_text;
   elements.scheduleType.value = reminder.schedule_type;
-  elements.startAt.value = toDateTimeLocalValue(
-    reminder.start_at,
-    reminder.timezone_name || state.context?.timezone_name,
+  setStartAtValue(
+    toDateTimeLocalValue(
+      reminder.start_at,
+      reminder.timezone_name || state.context?.timezone_name,
+    ),
   );
   elements.timezoneName.value = reminder.timezone_name;
   elements.intervalDays.value = reminder.interval_days || "";
@@ -985,6 +1055,14 @@ async function handleAsync(action) {
 elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
 elements.themeToggleButton.addEventListener("click", toggleTheme);
 elements.startAt.addEventListener("input", clearStartAtError);
+elements.startDate?.addEventListener("input", () => {
+  clearStartAtError();
+  syncStartAtFromParts();
+});
+elements.startTime?.addEventListener("input", () => {
+  clearStartAtError();
+  syncStartAtFromParts();
+});
 elements.scheduleType.addEventListener("change", updateConditionalFields);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
 elements.useDeviceTimezoneButton.addEventListener("click", () =>

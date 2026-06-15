@@ -260,6 +260,12 @@ h3 {
   color: var(--danger-strong);
 }
 
+.status.info {
+  border-color: color-mix(in srgb, var(--accent), var(--border) 48%);
+  background: color-mix(in srgb, var(--accent), transparent 88%);
+  color: var(--text);
+}
+
 .status.success {
   border-color: color-mix(in srgb, var(--success), var(--border) 48%);
   background: var(--success-soft);
@@ -310,6 +316,16 @@ h3 {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
+}
+
+.start-at-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.6fr);
+  gap: 12px;
+}
+
+.compact-field {
+  gap: 7px;
 }
 
 .field-hint,
@@ -738,6 +754,10 @@ input::-webkit-calendar-picker-indicator {
 }
 
 @media (max-width: 560px) {
+  .start-at-grid {
+    grid-template-columns: 1fr;
+  }
+
   .app {
     padding-top: 12px;
   }

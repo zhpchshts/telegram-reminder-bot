@@ -582,10 +582,10 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 }
 
 .timezone-suggestion {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  justify-content: space-between;
   padding: 13px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -599,6 +599,17 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 .timezone-suggestion-value {
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+.timezone-suggestion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
 }
 
 .preview {
@@ -865,7 +876,11 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   }
 
   .timezone-suggestion {
-    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .timezone-suggestion .secondary-button {
+    justify-self: stretch;
   }
 
   .actions > button,

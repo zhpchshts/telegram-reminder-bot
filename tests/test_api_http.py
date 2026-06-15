@@ -3,6 +3,10 @@ from datetime import datetime
 import json
 from time import time
 from urllib.parse import urlencode
+import importlib.metadata
+
+import tzdata
+
 
 import pytest
 from fastapi.testclient import TestClient
@@ -150,6 +154,8 @@ def test_health_endpoint_returns_status_and_active_chats_count(
     assert response.json() == {
         "status": "ok",
         "active_chats_count": 0,
+        "tzdata_package_version": importlib.metadata.version("tzdata"),
+        "tzdata_iana_version": tzdata.IANA_VERSION,
     }
 
 

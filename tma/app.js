@@ -286,7 +286,7 @@ function buildInvalidTimezoneMessage() {
   return [
     "Не удалось сохранить таймзону.",
     "",
-    "Такой таймзоны нет. Проверь значение или скопируй его из поиска таймзоны.",
+    "Такой таймзоны нет. Используй таймзону устройства или скопируй значение из TimeZoneDB.",
   ].join("\n");
 }
 
@@ -452,8 +452,8 @@ function renderDeviceTimezoneSuggestion() {
 
   const isCurrentTimezone = deviceTimezone === state.context?.timezone_name;
   elements.useDeviceTimezoneButton.textContent = isCurrentTimezone
-    ? "Таймзона устройства уже используется"
-    : "Использовать таймзону устройства";
+	? "Используется"
+	: "Использовать";
 }
 
 function renderOptions() {

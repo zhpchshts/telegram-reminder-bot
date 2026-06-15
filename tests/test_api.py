@@ -1,4 +1,8 @@
 from datetime import datetime
+import importlib.metadata
+
+import tzdata
+
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -65,6 +69,8 @@ def test_health_returns_status_and_active_chats_count(
     assert health() == {
         "status": "ok",
         "active_chats_count": 3,
+        "tzdata_package_version": importlib.metadata.version("tzdata"),
+        "tzdata_iana_version": tzdata.IANA_VERSION,
     }
 
 

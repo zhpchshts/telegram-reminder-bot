@@ -1,11 +1,15 @@
+import importlib.metadata
+
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 
 from aiogram import Bot
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import tzdata
 
 from app.api_auth import (
     get_tma_chat,
@@ -121,11 +125,19 @@ def get_tma_chat_type(
     return fallback_chat_type
 
 
+def get_timezone_database_info() -> dict[str, str]:
+    return {
+        "tzdata_package_version": importlib.metadata.version("tzdata"),
+        "tzdata_iana_version": tzdata.IANA_VERSION,
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, str | int]:
     return {
         "status": "ok",
         "active_chats_count": count_active_chats(),
+        **get_timezone_database_info(),
     }
 
 

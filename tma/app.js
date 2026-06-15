@@ -1062,7 +1062,12 @@ elements.startTime?.addEventListener("input", () => {
   clearStartAtError();
   syncStartAtFromParts();
 });
-elements.scheduleType.addEventListener("change", updateConditionalFields);
+elements.scheduleType.addEventListener("change", () => {
+  updateConditionalFields();
+  hidePreview();
+});
+elements.form.addEventListener("input", hidePreview);
+elements.form.addEventListener("change", hidePreview);
 elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
 elements.useDeviceTimezoneButton.addEventListener("click", () =>
   handleAsync(useDeviceTimezone),

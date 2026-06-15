@@ -7,6 +7,20 @@ function refreshTelegramWebApp() {
 
 const DEFAULT_START_OFFSET_MINUTES = 5;
 const THEME_STORAGE_KEY = "telegram-reminder-theme";
+const DARK_THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
+const TELEGRAM_INIT_DATA_QUERY_PARAM = "tgWebAppData";
+const SUPPORTED_THEMES = new Set(["dark", "light"]);
+
+function getTelegramLocationParams() {
+  const hash = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+
+  return {
+    hashParams: new URLSearchParams(hash),
+    searchParams: new URLSearchParams(window.location.search),
+  };
+}
 
 function getTelegramInitData() {
   const sdkInitData = refreshTelegramWebApp()?.initData || "";
@@ -14,33 +28,25 @@ function getTelegramInitData() {
     return sdkInitData;
   }
 
-  const hash = window.location.hash.startsWith("#")
-    ? window.location.hash.slice(1)
-    : window.location.hash;
-  const hashParams = new URLSearchParams(hash);
-  const searchParams = new URLSearchParams(window.location.search);
+  const { hashParams, searchParams } = getTelegramLocationParams();
 
   return (
-    hashParams.get("tgWebAppData") ||
-    searchParams.get("tgWebAppData") ||
+    hashParams.get(TELEGRAM_INIT_DATA_QUERY_PARAM) ||
+    searchParams.get(TELEGRAM_INIT_DATA_QUERY_PARAM) ||
     ""
   );
 }
 
 function buildMissingInitDataMessage() {
   const currentTelegram = refreshTelegramWebApp();
-  const hash = window.location.hash.startsWith("#")
-    ? window.location.hash.slice(1)
-    : window.location.hash;
-  const hashParams = new URLSearchParams(hash);
-  const searchParams = new URLSearchParams(window.location.search);
+  const { hashParams, searchParams } = getTelegramLocationParams();
 
   return [
     "Telegram initData не найден.",
     "",
     "Открой Mini App именно через кнопку /app в Telegram, а не прямой ссылкой в браузере.",
     "",
-    `Debug: WebApp=${currentTelegram ? "yes" : "no"}, platform=${currentTelegram?.platform || "unknown"}, version=${currentTelegram?.version || "unknown"}, hash_has_tgWebAppData=${hashParams.has("tgWebAppData") ? "yes" : "no"}, search_has_tgWebAppData=${searchParams.has("tgWebAppData") ? "yes" : "no"}`,
+    `Debug: WebApp=${currentTelegram ? "yes" : "no"}, platform=${currentTelegram?.platform || "unknown"}, version=${currentTelegram?.version || "unknown"}, hash_has_tgWebAppData=${hashParams.has(TELEGRAM_INIT_DATA_QUERY_PARAM) ? "yes" : "no"}, search_has_tgWebAppData=${searchParams.has(TELEGRAM_INIT_DATA_QUERY_PARAM) ? "yes" : "no"}`,
   ].join("\n");
 }
 
@@ -52,11 +58,15 @@ function getDeviceTimezone() {
   }
 }
 
+function isSupportedTheme(theme) {
+  return SUPPORTED_THEMES.has(theme);
+}
+
 function getStoredTheme() {
   try {
     const theme = localStorage.getItem(THEME_STORAGE_KEY);
 
-    if (theme === "dark" || theme === "light") {
+    if (isSupportedTheme(theme)) {
       return theme;
     }
   } catch {
@@ -75,10 +85,7 @@ function storeTheme(theme) {
 }
 
 function getSystemTheme() {
-  if (
-    window.matchMedia &&
-    window.matchMedia("(prefers-color-scheme: dark)").matches
-  ) {
+  if (window.matchMedia && window.matchMedia(DARK_THEME_MEDIA_QUERY).matches) {
     return "dark";
   }
 
@@ -122,46 +129,54 @@ const state = {
   isBusy: false,
 };
 
+function byId(id) {
+  return document.querySelector(`#${id}`);
+}
+
 const elements = {
-  chatTitle: document.querySelector("#chat-title"),
-  timezoneSummaryText: document.querySelector("#timezone-summary-text"),
-  remindersCount: document.querySelector("#reminders-count"),
-  status: document.querySelector("#status"),
-  deviceTimezoneBlock: document.querySelector("#device-timezone-block"),
-  deviceTimezoneName: document.querySelector("#device-timezone-name"),
-  useDeviceTimezoneButton: document.querySelector("#use-device-timezone-button"),
-  timezoneForm: document.querySelector("#timezone-form"),
-  chatTimezoneName: document.querySelector("#chat-timezone-name"),
-  timezoneSaveButton: document.querySelector("#timezone-save-button"),
-  reloadButton: document.querySelector("#reload-button"),
-  themeToggleButton: document.querySelector("#theme-toggle-button"),
-  form: document.querySelector("#reminder-form"),
-  formTitle: document.querySelector("#form-title"),
-  reminderId: document.querySelector("#reminder-id"),
-  reminderText: document.querySelector("#reminder-text"),
-  scheduleType: document.querySelector("#schedule-type"),
-  startAt: document.querySelector("#start-at"),
-  startDate: document.querySelector("#start-date"),
-  startTime: document.querySelector("#start-time"),
-  startAtHint: document.querySelector("#start-at-hint"),
-  startAtError: document.querySelector("#start-at-error"),
-  timezoneName: document.querySelector("#timezone-name"),
-  intervalDays: document.querySelector("#interval-days"),
-  intervalWeeks: document.querySelector("#interval-weeks"),
-  dayOfWeek: document.querySelector("#day-of-week"),
-  monthDayOfWeek: document.querySelector("#month-day-of-week"),
-  monthWeekNumber: document.querySelector("#month-week-number"),
-  monthDay: document.querySelector("#month-day"),
-  intervalDaysField: document.querySelector("#interval-days-field"),
-  weeklyFields: document.querySelector("#weekly-fields"),
-  monthlyWeekdayFields: document.querySelector("#monthly-weekday-fields"),
-  monthDayField: document.querySelector("#month-day-field"),
-  preview: document.querySelector("#preview"),
-  previewButton: document.querySelector("#preview-button"),
-  saveButton: document.querySelector("#save-button"),
-  cancelEditButton: document.querySelector("#cancel-edit-button"),
-  remindersList: document.querySelector("#reminders-list"),
+  chatTitle: byId("chat-title"),
+  timezoneSummaryText: byId("timezone-summary-text"),
+  remindersCount: byId("reminders-count"),
+  status: byId("status"),
+  deviceTimezoneBlock: byId("device-timezone-block"),
+  deviceTimezoneName: byId("device-timezone-name"),
+  useDeviceTimezoneButton: byId("use-device-timezone-button"),
+  timezoneForm: byId("timezone-form"),
+  chatTimezoneName: byId("chat-timezone-name"),
+  timezoneSaveButton: byId("timezone-save-button"),
+  reloadButton: byId("reload-button"),
+  themeToggleButton: byId("theme-toggle-button"),
+  form: byId("reminder-form"),
+  formTitle: byId("form-title"),
+  reminderId: byId("reminder-id"),
+  reminderText: byId("reminder-text"),
+  scheduleType: byId("schedule-type"),
+  startAt: byId("start-at"),
+  startDate: byId("start-date"),
+  startTime: byId("start-time"),
+  startAtHint: byId("start-at-hint"),
+  startAtError: byId("start-at-error"),
+  timezoneName: byId("timezone-name"),
+  intervalDays: byId("interval-days"),
+  intervalWeeks: byId("interval-weeks"),
+  dayOfWeek: byId("day-of-week"),
+  monthDayOfWeek: byId("month-day-of-week"),
+  monthWeekNumber: byId("month-week-number"),
+  monthDay: byId("month-day"),
+  intervalDaysField: byId("interval-days-field"),
+  weeklyFields: byId("weekly-fields"),
+  monthlyWeekdayFields: byId("monthly-weekday-fields"),
+  monthDayField: byId("month-day-field"),
+  preview: byId("preview"),
+  previewButton: byId("preview-button"),
+  saveButton: byId("save-button"),
+  cancelEditButton: byId("cancel-edit-button"),
+  remindersList: byId("reminders-list"),
 };
+
+function getStartAtFieldElements() {
+  return [elements.startAt, elements.startDate, elements.startTime];
+}
 
 function showStatus(message, type = "success") {
   elements.status.textContent = message;
@@ -179,7 +194,7 @@ function showStartAtError(message) {
   elements.startAtError.textContent = message;
   elements.startAtError.hidden = false;
 
-  for (const element of [elements.startAt, elements.startDate, elements.startTime]) {
+  for (const element of getStartAtFieldElements()) {
     element?.setAttribute("aria-invalid", "true");
   }
 }
@@ -188,7 +203,7 @@ function clearStartAtError() {
   elements.startAtError.textContent = "";
   elements.startAtError.hidden = true;
 
-  for (const element of [elements.startAt, elements.startDate, elements.startTime]) {
+  for (const element of getStartAtFieldElements()) {
     element?.removeAttribute("aria-invalid");
   }
 }
@@ -433,24 +448,26 @@ function renderOptions() {
     state.reminderOptions.weekdays,
     "Не выбрано",
   );
-  fillSelect(
+  fillNumberSelect(
     elements.monthWeekNumber,
-    state.reminderOptions.month_week_numbers.map((value) => ({
-      value,
-      label: `${value}`,
-    })),
+    state.reminderOptions.month_week_numbers,
     "Не выбрано",
   );
-  fillSelect(
+  fillNumberSelect(
     elements.monthDay,
-    state.reminderOptions.month_days.map((value) => ({
-      value,
-      label: `${value}`,
-    })),
+    state.reminderOptions.month_days,
     "Не выбрано",
   );
 
   updateConditionalFields();
+}
+
+function fillNumberSelect(select, values, emptyLabel) {
+  fillSelect(
+    select,
+    values.map((value) => ({ value, label: `${value}` })),
+    emptyLabel,
+  );
 }
 
 function fillSelect(select, options, emptyLabel) {
@@ -476,11 +493,27 @@ function updateRemindersCount() {
 
   const count = state.reminders.length;
   elements.remindersCount.textContent =
-    count === 1
-      ? "1 активное"
-      : count >= 2 && count <= 4
-        ? `${count} активных`
-        : `${count} активных`;
+    count === 1 ? "1 активное" : `${count} активных`;
+}
+
+function createTextElement(tagName, className, textContent) {
+  const element = document.createElement(tagName);
+
+  if (className) {
+    element.className = className;
+  }
+
+  element.textContent = textContent;
+  return element;
+}
+
+function createButton(className, textContent, onClick) {
+  const button = document.createElement("button");
+  button.className = className;
+  button.type = "button";
+  button.textContent = textContent;
+  button.addEventListener("click", onClick);
+  return button;
 }
 
 function renderReminders() {
@@ -490,19 +523,16 @@ function renderReminders() {
   if (!state.reminders.length) {
     const empty = document.createElement("article");
     empty.className = "empty-state";
+    empty.append(
+      createTextElement("div", "empty-state-icon", "🌸"),
+      createTextElement("h3", "", "Пока нет активных напоминаний"),
+      createTextElement(
+        "p",
+        "",
+        "Создай первое — например, про воду, уборку, фильтры или день рождения.",
+      ),
+    );
 
-    const icon = document.createElement("div");
-    icon.className = "empty-state-icon";
-    icon.textContent = "🌸";
-
-    const title = document.createElement("h3");
-    title.textContent = "Пока нет активных напоминаний";
-
-    const text = document.createElement("p");
-    text.textContent =
-      "Создай первое — например, про воду, уборку, фильтры или день рождения.";
-
-    empty.append(icon, title, text);
     elements.remindersList.append(empty);
     return;
   }
@@ -519,15 +549,16 @@ function createReminderCard(reminder) {
   const content = document.createElement("div");
   content.className = "reminder-content";
 
-  const title = document.createElement("h3");
-  title.textContent = reminder.reminder_text;
+  const title = createTextElement("h3", "", reminder.reminder_text);
 
   const meta = document.createElement("div");
   meta.className = "reminder-meta";
 
-  const period = document.createElement("span");
-  period.className = "reminder-chip";
-  period.textContent = reminder.period || "одноразовое";
+  const period = createTextElement(
+    "span",
+    "reminder-chip",
+    reminder.period || "одноразовое",
+  );
 
   const nextRun = document.createElement("span");
   nextRun.className = "reminder-next-run";
@@ -544,18 +575,15 @@ function createReminderCard(reminder) {
   const actions = document.createElement("div");
   actions.className = "reminder-actions";
 
-  const editButton = document.createElement("button");
-  editButton.className = "secondary-button compact-button";
-  editButton.type = "button";
-  editButton.textContent = "Изменить";
-  editButton.addEventListener("click", () => startEdit(reminder));
-
-  const deleteButton = document.createElement("button");
-  deleteButton.className = "danger-button compact-button";
-  deleteButton.type = "button";
-  deleteButton.textContent = "Удалить";
-  deleteButton.addEventListener("click", () =>
-    handleAsync(() => deleteReminder(reminder)),
+  const editButton = createButton(
+    "secondary-button compact-button",
+    "Изменить",
+    () => startEdit(reminder),
+  );
+  const deleteButton = createButton(
+    "danger-button compact-button",
+    "Удалить",
+    () => handleAsync(() => deleteReminder(reminder)),
   );
 
   actions.append(editButton, deleteButton);
@@ -594,12 +622,17 @@ function getReminderSortTime(reminder) {
 }
 
 function updateConditionalFields() {
-  const type = elements.scheduleType.value;
+  const scheduleType = elements.scheduleType.value;
+  const fieldScheduleTypes = [
+    [elements.intervalDaysField, "every_days"],
+    [elements.weeklyFields, "every_week"],
+    [elements.monthlyWeekdayFields, "monthly_weekday"],
+    [elements.monthDayField, "monthly_day"],
+  ];
 
-  elements.intervalDaysField.hidden = type !== "every_days";
-  elements.weeklyFields.hidden = type !== "every_week";
-  elements.monthlyWeekdayFields.hidden = type !== "monthly_weekday";
-  elements.monthDayField.hidden = type !== "monthly_day";
+  for (const [field, fieldScheduleType] of fieldScheduleTypes) {
+    field.hidden = scheduleType !== fieldScheduleType;
+  }
 }
 
 function buildRequestPayload() {
@@ -619,6 +652,12 @@ function buildRequestPayload() {
     month_day: null,
   };
 
+  applySchedulePayload(payload, scheduleType);
+
+  return payload;
+}
+
+function applySchedulePayload(payload, scheduleType) {
   if (scheduleType === "every_days") {
     payload.interval_days = numberOrNull(elements.intervalDays.value);
   }
@@ -636,8 +675,6 @@ function buildRequestPayload() {
   if (scheduleType === "monthly_day") {
     payload.month_day = numberOrNull(elements.monthDay.value);
   }
-
-  return payload;
 }
 
 function numberOrNull(value) {
@@ -681,6 +718,17 @@ function validateTimezoneForm() {
 function validateReminderForm() {
   clearFieldErrors();
 
+  const errors = getReminderFormErrors();
+
+  if (errors.length) {
+    showStatus(errors.join("\n"), "error");
+    return false;
+  }
+
+  return true;
+}
+
+function getReminderFormErrors() {
   const errors = [];
   const scheduleType = elements.scheduleType.value;
 
@@ -696,6 +744,12 @@ function validateReminderForm() {
     errors.push("Укажи таймзону чата.");
   }
 
+  addScheduleValidationErrors(errors, scheduleType);
+
+  return errors;
+}
+
+function addScheduleValidationErrors(errors, scheduleType) {
   if (
     scheduleType === "every_days" &&
     !isPositiveIntegerValue(elements.intervalDays.value)
@@ -726,13 +780,6 @@ function validateReminderForm() {
   if (scheduleType === "monthly_day" && !elements.monthDay.value) {
     errors.push("Для расписания по дню месяца выбери день месяца.");
   }
-
-  if (errors.length) {
-    showStatus(errors.join("\n"), "error");
-    return false;
-  }
-
-  return true;
 }
 
 function setDefaultStartAtIfEmpty() {
@@ -889,27 +936,21 @@ function showDeleteConfirmation(reminder) {
     dialog.setAttribute("aria-modal", "true");
     dialog.setAttribute("aria-labelledby", "delete-confirmation-title");
 
-    const title = document.createElement("h2");
+    const title = createTextElement("h2", "", "Удалить напоминание?");
     title.id = "delete-confirmation-title";
-    title.textContent = "Удалить напоминание?";
 
-    const text = document.createElement("p");
-    text.className = "modal-text";
-    text.textContent = reminder.reminder_text;
+    const text = createTextElement("p", "modal-text", reminder.reminder_text);
 
     const actions = document.createElement("div");
     actions.className = "modal-actions";
 
-    const cancelButton = document.createElement("button");
-    cancelButton.className = "secondary-button";
-    cancelButton.type = "button";
-    cancelButton.textContent = "Отменить";
+    const cancelButton = createButton("secondary-button", "Отменить", () =>
+      close(false),
+    );
+    const confirmButton = createButton("danger-button", "Удалить", () =>
+      close(true),
+    );
     cancelButton.setAttribute("data-modal-button", "");
-
-    const confirmButton = document.createElement("button");
-    confirmButton.className = "danger-button";
-    confirmButton.type = "button";
-    confirmButton.textContent = "Удалить";
     confirmButton.setAttribute("data-modal-button", "");
 
     function close(result) {
@@ -929,8 +970,6 @@ function showDeleteConfirmation(reminder) {
         close(false);
       }
     });
-    cancelButton.addEventListener("click", () => close(false));
-    confirmButton.addEventListener("click", () => close(true));
     document.addEventListener("keydown", handleKeyDown);
 
     actions.append(cancelButton, confirmButton);
@@ -1051,36 +1090,40 @@ async function handleAsync(action) {
   }
 }
 
-elements.reloadButton.addEventListener("click", () => handleAsync(loadBootstrap));
-elements.themeToggleButton.addEventListener("click", toggleTheme);
-elements.startAt.addEventListener("input", clearStartAtError);
-elements.startDate?.addEventListener("input", () => {
+function on(element, eventName, handler) {
+  element?.addEventListener(eventName, handler);
+}
+
+function onSubmit(form, action) {
+  on(form, "submit", (event) => {
+    event.preventDefault();
+    handleAsync(action);
+  });
+}
+
+function clearStartAtErrorAndSync() {
   clearStartAtError();
   syncStartAtFromParts();
-});
-elements.startTime?.addEventListener("input", () => {
-  clearStartAtError();
-  syncStartAtFromParts();
-});
-elements.scheduleType.addEventListener("change", () => {
+}
+
+on(elements.reloadButton, "click", () => handleAsync(loadBootstrap));
+on(elements.themeToggleButton, "click", toggleTheme);
+on(elements.startAt, "input", clearStartAtError);
+on(elements.startDate, "input", clearStartAtErrorAndSync);
+on(elements.startTime, "input", clearStartAtErrorAndSync);
+on(elements.scheduleType, "change", () => {
   updateConditionalFields();
   hidePreview();
 });
-elements.form.addEventListener("input", hidePreview);
-elements.form.addEventListener("change", hidePreview);
-elements.previewButton.addEventListener("click", () => handleAsync(previewReminder));
-elements.useDeviceTimezoneButton.addEventListener("click", () =>
+on(elements.form, "input", hidePreview);
+on(elements.form, "change", hidePreview);
+on(elements.previewButton, "click", () => handleAsync(previewReminder));
+on(elements.useDeviceTimezoneButton, "click", () =>
   handleAsync(useDeviceTimezone),
 );
-elements.form.addEventListener("submit", (event) => {
-  event.preventDefault();
-  handleAsync(saveReminder);
-});
-elements.cancelEditButton.addEventListener("click", resetForm);
-elements.timezoneForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  handleAsync(saveTimezone);
-});
+on(elements.cancelEditButton, "click", resetForm);
+onSubmit(elements.form, saveReminder);
+onSubmit(elements.timezoneForm, saveTimezone);
 
 initTheme();
 window.setTimeout(() => handleAsync(loadBootstrap), 0);

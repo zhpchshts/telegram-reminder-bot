@@ -868,23 +868,6 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   .reminder-actions > button {
     flex: 1 1 auto;
   }
-  .start-at-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .compact-field input[type="time"] {
-    min-width: 0;
-  }
-}
-
-@media (max-width: 359px) {
-  .start-at-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .compact-field input[type="time"] {
-    min-width: 0;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -893,24 +876,5 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   *::after {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
-  }
-}
-
-/* Keep date and time inputs inline in Telegram Mini App. */
-.start-at-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(154px, 0.58fr);
-}
-
-.compact-field input[type="time"] {
-  min-width: 154px;
-}
-
-@media (max-width: 560px) {
-  .start-at-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(154px, 0.58fr);
-  }
-
-  .compact-field input[type="time"] {
-    min-width: 154px;
   }
 }

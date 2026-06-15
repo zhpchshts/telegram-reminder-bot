@@ -1,3 +1,4 @@
+import re
 import pytest
 
 from app.tma_launch import (
@@ -31,6 +32,32 @@ def test_create_and_validate_tma_launch_token() -> None:
         chat_type="supergroup",
         chat_title="Home",
     )
+
+
+def test_create_tma_launch_token_uses_safe_base32_alphabet() -> None:
+    token = create_tma_launch_token(
+        chat_id=-100,
+        chat_type="supergroup",
+        chat_title="Home",
+        secret=SECRET,
+        now=1_700_000_000,
+        max_age_seconds=60,
+    )
+
+    assert re.fullmatch(r"[A-Z2-7]+", token) is not None
+    assert "_" not in token
+    assert "-" not in token
+
+
+def test_validate_tma_launch_token_rejects_base64url_token() -> None:
+    with pytest.raises(TmaLaunchTokenError) as error:
+        validate_tma_launch_token(
+            "eyJwYXlsb2FkIjp7fQ",
+            secret=SECRET,
+            now=1_700_000_030,
+        )
+
+    assert str(error.value) == "TMA launch token is invalid."
 
 
 def test_create_tma_launch_token_without_chat_title() -> None:

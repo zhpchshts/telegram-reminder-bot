@@ -609,6 +609,96 @@ def test_mini_app_first_commands_send_direct_link_button(
     assert button.web_app is None
 
 
+@pytest.mark.parametrize(
+    ("message_text", "expected_text_parts"),
+    [
+        (
+            "создай напоминание",
+            (
+                "Я пока понимаю только команды.",
+                "Открыть интерфейс управления напоминаниями можно через кнопку ниже.",
+                "Доступные команды можно посмотреть через /help.",
+                "Примеры создания напоминаний — через /examples.",
+            ),
+        ),
+        (
+            "/wrong",
+            (
+                "Не знаю такую команду.",
+                "Открыть интерфейс управления напоминаниями можно через кнопку ниже.",
+                "Доступные команды можно посмотреть через /help.",
+                "Примеры создания напоминаний — через /examples.",
+            ),
+        ),
+    ],
+)
+def test_unknown_message_sends_direct_link_button(
+    monkeypatch: pytest.MonkeyPatch,
+    message_text: str,
+    expected_text_parts: tuple[str, ...],
+) -> None:
+    captured_calls: list[dict[str, object]] = []
+
+    def fake_create_tma_launch_token(
+        *,
+        chat_id: int,
+        chat_type: str,
+        secret: str,
+        chat_title: str | None = None,
+    ) -> str:
+        captured_calls.append(
+            {
+                "chat_id": chat_id,
+                "chat_type": chat_type,
+                "chat_title": chat_title,
+                "secret": secret,
+            }
+        )
+        return "SIGNEDTOKEN"
+
+    monkeypatch.setattr(
+        handlers,
+        "TMA_DIRECT_URL",
+        "https://t.me/ZhpchshtsReminderBot?startapp=",
+    )
+    monkeypatch.setattr(handlers, "BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(
+        handlers,
+        "create_tma_launch_token",
+        fake_create_tma_launch_token,
+    )
+
+    message = FakeMessage(
+        message_text,
+        chat_type="supergroup",
+        chat_title="Home",
+    )
+
+    asyncio.run(handlers.unknown_message(message))
+
+    assert captured_calls == [
+        {
+            "chat_id": CHAT_ID,
+            "chat_type": "supergroup",
+            "chat_title": "Home",
+            "secret": "test-bot-token",
+        }
+    ]
+
+    assert len(message.answers) == 1
+    answer_text, kwargs = message.answers[0]
+
+    for expected_text_part in expected_text_parts:
+        assert expected_text_part in answer_text
+
+    reply_markup = kwargs["reply_markup"]
+    button = reply_markup.inline_keyboard[0][0]
+
+    assert button.text == "Открыть Незабудку"
+    assert button.url == "https://t.me/ZhpchshtsReminderBot?startapp=SIGNEDTOKEN"
+    assert button.web_app is None
+
+
 def test_delete_reminder_deletes_active_reminder_for_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

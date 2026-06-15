@@ -1,4 +1,5 @@
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -9,7 +10,7 @@ from typing import Any
 
 DEFAULT_TMA_LAUNCH_TOKEN_MAX_AGE_SECONDS = 24 * 60 * 60
 MAX_TMA_LAUNCH_TOKEN_LENGTH = 512
-TMA_LAUNCH_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+TMA_LAUNCH_TOKEN_PATTERN = re.compile(r"^[A-Z2-7]+$")
 
 
 class TmaLaunchTokenError(ValueError):
@@ -52,7 +53,7 @@ def create_tma_launch_token(
         payload["chat_title"] = chat_title
 
     signature = _sign_payload(payload, secret=secret)
-    token = _base64url_encode(
+    token = _base32_encode(
         json.dumps(
             {
                 "payload": payload,
@@ -89,8 +90,13 @@ def validate_tma_launch_token(
         raise TmaLaunchTokenError("TMA launch token is invalid.")
 
     try:
-        envelope = json.loads(_base64url_decode(token).decode())
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        envelope = json.loads(_base32_decode(token).decode())
+    except (
+        binascii.Error,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as error:
         raise TmaLaunchTokenError("TMA launch token is invalid.") from error
 
     if not isinstance(envelope, dict):
@@ -157,6 +163,10 @@ def _base64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
 
-def _base64url_decode(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(value + padding)
+def _base32_encode(data: bytes) -> str:
+    return base64.b32encode(data).decode().rstrip("=")
+
+
+def _base32_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 8)
+    return base64.b32decode(value + padding)

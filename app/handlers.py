@@ -553,16 +553,22 @@ async def unknown_message(message: Message) -> None:
     if not message.text:
         return
 
+    reply_markup = build_tma_keyboard_for_message(message)
+
     if message.text.startswith("/"):
         await message.answer(
             "Не знаю такую команду.\n\n"
+            "Открыть интерфейс управления напоминаниями можно через кнопку ниже.\n\n"
             "Доступные команды можно посмотреть через /help.\n"
-            "Примеры создания напоминаний — через /examples."
+            "Примеры создания напоминаний — через /examples.",
+            reply_markup=reply_markup,
         )
         return
 
     await message.answer(
         "Я пока понимаю только команды.\n\n"
+        "Открыть интерфейс управления напоминаниями можно через кнопку ниже.\n\n"
         "Доступные команды можно посмотреть через /help.\n"
-        "Примеры создания напоминаний — через /examples."
+        "Примеры создания напоминаний — через /examples.",
+        reply_markup=reply_markup,
     )

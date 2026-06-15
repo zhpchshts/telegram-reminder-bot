@@ -92,7 +92,10 @@ def authenticated_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
 
 def test_health_endpoint_returns_status_and_active_chats_count(
     client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("app.api.count_active_chats", lambda: 0)
+
     response = client.get("/health")
 
     assert response.status_code == 200

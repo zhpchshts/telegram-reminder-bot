@@ -59,6 +59,54 @@ def build_signed_init_data_for_chat(chat_id: int) -> str:
     return urlencode(fields)
 
 
+def expected_reminder_options_response() -> dict[str, object]:
+    return {
+        "schedule_types": [
+            {
+                "value": "once",
+                "label": "Одноразовое напоминание",
+                "required_fields": [],
+            },
+            {
+                "value": "yearly_date",
+                "label": "Каждый год в дату",
+                "required_fields": [],
+            },
+            {
+                "value": "every_days",
+                "label": "Каждые N дней",
+                "required_fields": ["interval_days"],
+            },
+            {
+                "value": "every_week",
+                "label": "Каждые N недель по дню недели",
+                "required_fields": ["interval_weeks", "day_of_week"],
+            },
+            {
+                "value": "monthly_weekday",
+                "label": "Каждый месяц в N-й день недели",
+                "required_fields": ["month_week_number", "day_of_week"],
+            },
+            {
+                "value": "monthly_day",
+                "label": "Каждый месяц в день месяца",
+                "required_fields": ["month_day"],
+            },
+        ],
+        "weekdays": [
+            {"value": "MON", "label": "Понедельник"},
+            {"value": "TUE", "label": "Вторник"},
+            {"value": "WED", "label": "Среда"},
+            {"value": "THU", "label": "Четверг"},
+            {"value": "FRI", "label": "Пятница"},
+            {"value": "SAT", "label": "Суббота"},
+            {"value": "SUN", "label": "Воскресенье"},
+        ],
+        "month_week_numbers": [1, 2, 3, 4, 5],
+        "month_days": list(range(1, 32)),
+    }
+
+
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     def fake_require_matching_chat_id(chat_id: int) -> int:
@@ -330,6 +378,20 @@ def test_tma_context_endpoint_accepts_valid_tma_init_data(
     }
 
 
+def test_tma_reminder_options_endpoint_returns_contract(
+    authenticated_client: TestClient,
+) -> None:
+    response = authenticated_client.get(
+        "/api/tma/reminder-options",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == expected_reminder_options_response()
+
+
 def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
     authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -395,17 +457,7 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
         "chat_type": "group",
         "start_param": build_launch_token_for_chat(100),
     }
-    assert [
-        option["value"]
-        for option in response_json["reminder_options"]["schedule_types"]
-    ] == [
-        "once",
-        "yearly_date",
-        "every_days",
-        "every_week",
-        "monthly_weekday",
-        "monthly_day",
-    ]
+    assert response_json["reminder_options"] == expected_reminder_options_response()
     assert response_json["active_reminders"] == [
         {
             "id": 42,

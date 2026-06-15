@@ -895,3 +895,22 @@ input[type="time"]::-webkit-calendar-picker-indicator {
     scroll-behavior: auto !important;
   }
 }
+
+/* Keep date and time inputs inline in Telegram Mini App. */
+.start-at-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(154px, 0.58fr);
+}
+
+.compact-field input[type="time"] {
+  min-width: 154px;
+}
+
+@media (max-width: 560px) {
+  .start-at-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(154px, 0.58fr);
+  }
+
+  .compact-field input[type="time"] {
+    min-width: 154px;
+  }
+}

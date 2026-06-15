@@ -316,7 +316,7 @@ h3 {
 
 .start-at-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(144px, 0.58fr);
+  grid-template-columns: minmax(0, 1fr) minmax(154px, 0.58fr);
   gap: 8px;
   align-items: end;
 }
@@ -340,7 +340,7 @@ h3 {
 }
 
 .compact-field input[type="time"] {
-  min-width: 144px;
+  min-width: 154px;
 }
 
 .field-hint,

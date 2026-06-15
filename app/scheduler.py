@@ -9,6 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.config import APP_TIMEZONE_NAME
 from app.constants import APSCHEDULER_WEEKDAYS
 from app.database import (
+    count_active_chats,
     get_all_active_reminders,
     mark_reminder_as_missed,
     mark_reminder_as_sent,
@@ -26,6 +27,7 @@ async def send_healthcheck(
 ) -> None:
     now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
     active_reminders_count = len(get_all_active_reminders())
+    active_chats_count = count_active_chats()
     scheduled_jobs_count = len(scheduler.get_jobs())
     scheduler_status = "running" if scheduler.running else "stopped"
 
@@ -36,7 +38,8 @@ async def send_healthcheck(
             f"Время сервера UTC: {now_utc}\n"
             f"Scheduler: {scheduler_status}\n"
             f"Запланированных jobs: {scheduled_jobs_count}\n"
-            f"Активных напоминаний в базе: {active_reminders_count}"
+            f"Активных напоминаний в базе: {active_reminders_count}\n"
+            f"Чатов с активными напоминаниями: {active_chats_count}"
         ),
     )
 

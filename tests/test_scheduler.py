@@ -316,6 +316,7 @@ def test_send_healthcheck_sends_status_message(monkeypatch) -> None:
         "get_all_active_reminders",
         lambda: [object(), object()],
     )
+    monkeypatch.setattr(scheduler_module, "count_active_chats", lambda: 1)
 
     asyncio.run(
         send_healthcheck(
@@ -334,3 +335,4 @@ def test_send_healthcheck_sends_status_message(monkeypatch) -> None:
     assert "Scheduler: running" in message["text"]
     assert "Запланированных jobs: 3" in message["text"]
     assert "Активных напоминаний в базе: 2" in message["text"]
+    assert "Чатов с активными напоминаниями: 1" in message["text"]

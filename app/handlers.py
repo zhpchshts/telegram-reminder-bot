@@ -50,7 +50,7 @@ def build_tma_keyboard(launch_url: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Управлять напоминаниями",
+                    text="Открыть Незабудку",
                     url=launch_url,
                 )
             ]
@@ -71,6 +71,18 @@ def build_tma_launch_url(
         secret=BOT_TOKEN,
     )
     return f"{TMA_DIRECT_URL}{token}"
+
+
+def build_tma_keyboard_for_message(message: Message) -> InlineKeyboardMarkup | None:
+    if not TMA_DIRECT_URL:
+        return None
+
+    launch_url = build_tma_launch_url(
+        chat_id=message.chat.id,
+        chat_type=message.chat.type,
+        chat_title=message.chat.title,
+    )
+    return build_tma_keyboard(launch_url)
 
 
 async def reject_past_datetime(
@@ -209,59 +221,47 @@ async def handle_create_command(
 async def start(message: Message) -> None:
     await message.answer(
         "Привет.\n"
-        "Я бот для напоминаний.\n\n"
-        "Доступные команды:\n"
-        "/start — запустить бота\n"
-        "/help — показать справку\n"
-        "/examples — показать примеры команд\n"
-        "/app — открыть напоминания\n"
-        "/remind — создать одноразовое напоминание\n"
-        "/every_days — повтор каждые N дней\n"
-        "/every_days_from — повтор каждые N дней с указанной даты\n"
-        "/every_week — повтор каждые N недель в день недели\n"
-        "/every_week_from — повтор каждые N недель в день недели с указанной даты\n"
-        "/monthly_weekday — повтор в N-й день недели месяца\n"
-        "/monthly_weekday_from — повтор в N-й день недели месяца с указанной даты\n"
-        "/monthly_day — повтор в конкретный день месяца\n"
-        "/monthly_day_from — повтор в конкретный день месяца с указанной даты\n"
-        "/list — показать активные напоминания\n"
-        "/timezone — показать или задать таймзону чата\n"
-        "/delete — удалить напоминание"
+        "Я Незабудка — бот для напоминаний в Telegram-чатах.\n\n"
+        "Основной сценарий теперь в Mini App: там можно создать, посмотреть "
+        "и удалить напоминания.\n\n"
+        "Текстовые команды остаются как запасной способ управления:\n"
+        "/help — справка\n"
+        "/examples — примеры команд\n"
+        "/timezone — таймзона чата",
+        reply_markup=build_tma_keyboard_for_message(message),
     )
 
 
 @router.message(Command("app"))
 async def app_command(message: Message) -> None:
-    if not TMA_DIRECT_URL:
+    reply_markup = build_tma_keyboard_for_message(message)
+
+    if reply_markup is None:
         await message.answer(
             "Mini App пока не настроен.\n\n"
             "Администратору нужно задать переменную окружения TMA_DIRECT_URL."
         )
         return
 
-    launch_url = build_tma_launch_url(
-        chat_id=message.chat.id,
-        chat_type=message.chat.type,
-        chat_title=message.chat.title,
-    )
-
     await message.answer(
-        "Открой управление напоминаниями:",
-        reply_markup=build_tma_keyboard(launch_url),
+        "Открой Незабудку для управления напоминаниями:",
+        reply_markup=reply_markup,
     )
 
 
 @router.message(Command("help"))
 async def help_command(message: Message) -> None:
     await message.answer(
-        "Краткая справка по боту.\n\n"
-        "Основные команды:\n"
-        "/app — открыть интерфейс управления напоминаниями\n"
-        "/timezone — показать или задать таймзону текущего чата\n"
+        "Незабудка — бот для напоминаний в Telegram-чатах.\n\n"
+        "Основной сценарий — Mini App: создать, посмотреть и удалить "
+        "напоминания можно через интерфейс.\n\n"
+        "Текстовые команды на случай, если удобнее управлять из чата:\n"
+        "/app — открыть Mini App\n"
         "/examples — показать примеры создания напоминаний\n"
+        "/timezone — показать или задать таймзону текущего чата\n"
         "/list — показать активные напоминания текущего чата\n"
         "/delete ID — удалить напоминание из текущего чата\n\n"
-        "Типы напоминаний:\n"
+        "Команды создания через текст:\n"
         "/remind — одноразовое напоминание\n"
         "/every_days — повтор каждые N дней\n"
         "/every_week — повтор каждые N недель\n"
@@ -280,6 +280,7 @@ async def help_command(message: Message) -> None:
         f"{TIMEZONE_LOOKUP_URL}\n\n"
         "Чтобы посмотреть готовые примеры команд, отправь:\n"
         "/examples",
+        reply_markup=build_tma_keyboard_for_message(message),
         link_preview_options=NO_LINK_PREVIEW,
     )
 

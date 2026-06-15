@@ -316,7 +316,7 @@ h3 {
 
 .start-at-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(124px, 0.52fr);
+  grid-template-columns: minmax(0, 1fr) minmax(144px, 0.58fr);
   gap: 8px;
   align-items: end;
 }
@@ -340,7 +340,7 @@ h3 {
 }
 
 .compact-field input[type="time"] {
-  min-width: 124px;
+  min-width: 144px;
 }
 
 .field-hint,
@@ -402,9 +402,9 @@ input[type="time"] {
   appearance: none;
   -webkit-appearance: none;
   min-height: 48px;
-  padding-right: 42px;
+  padding-right: 36px;
   color-scheme: light;
-  background-position: calc(100% - 14px) 50%;
+  background-position: calc(100% - 12px) 50%;
   background-size: 18px 18px;
   background-repeat: no-repeat;
 }
@@ -457,9 +457,9 @@ option {
 
 input[type="date"]::-webkit-calendar-picker-indicator,
 input[type="time"]::-webkit-calendar-picker-indicator {
-  width: 38px;
+  width: 32px;
   height: 100%;
-  margin-right: -8px;
+  margin-right: -6px;
   cursor: pointer;
   opacity: 0;
 }

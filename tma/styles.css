@@ -319,72 +319,32 @@ h3 {
 }
 
 .start-at-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(118px, 0.44fr);
-    gap: 10px;
-    align-items: end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(124px, 0.52fr);
+  gap: 10px;
+  align-items: end;
 }
 
 .compact-field {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
+  display: grid;
+  min-width: 0;
+  gap: 6px;
 }
 
 .compact-field span {
-    color: var(--muted-text);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .compact-field input {
-    width: 100%;
-    min-height: 48px;
+  width: 100%;
+  min-height: 48px;
 }
 
 .compact-field input[type="time"] {
-    min-width: 118px;
-}
-
-@media (max-width: 359px) {
-.start-at-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(118px, 0.44fr);
-    gap: 10px;
-    align-items: end;
-}
-
-.compact-field {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
-}
-
-.compact-field span {
-    color: var(--muted-text);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-}
-
-.compact-field input {
-    width: 100%;
-    min-height: 48px;
-}
-
-.compact-field input[type="time"] {
-    min-width: 118px;
-}
-
-@media (max-width: 359px) {
-    .start-at-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .compact-field input[type="time"] {
-        min-width: 0;
-    }
+  min-width: 124px;
 }
 
 .field-hint,
@@ -401,20 +361,58 @@ input,
 select,
 textarea {
   width: 100%;
+  min-height: 44px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 12px 13px;
-  background: var(--surface-input);
+  background-color: var(--surface-input);
   color: var(--text);
   outline: none;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%);
   transition:
     border-color 0.16s ease,
     box-shadow 0.16s ease,
+    background-color 0.16s ease,
     transform 0.16s ease;
 }
 
+input,
+select {
+  padding: 0 13px;
+}
+
 textarea {
+  padding: 12px 13px;
   resize: vertical;
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  padding-right: 42px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--hint) 50%),
+    linear-gradient(135deg, var(--hint) 50%, transparent 50%);
+  background-position:
+    calc(100% - 21px) 50%,
+    calc(100% - 15px) 50%;
+  background-size:
+    6px 6px,
+    6px 6px;
+  background-repeat: no-repeat;
+}
+
+input[type="date"],
+input[type="time"] {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 48px;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] input[type="date"],
+:root[data-theme="dark"] input[type="time"] {
+  color-scheme: dark;
 }
 
 input::placeholder,
@@ -426,14 +424,19 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: color-mix(in srgb, var(--accent), white 10%);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent), transparent 82%);
+  background-color: color-mix(in srgb, var(--surface-input), var(--accent-soft) 16%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 18%),
+    0 0 0 4px color-mix(in srgb, var(--accent), transparent 82%);
 }
 
 input[aria-invalid="true"],
 select[aria-invalid="true"],
 textarea[aria-invalid="true"] {
   border-color: var(--danger);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger), transparent 84%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 18%),
+    0 0 0 4px color-mix(in srgb, var(--danger), transparent 84%);
 }
 
 option {
@@ -783,7 +786,8 @@ input::-webkit-calendar-picker-indicator {
   gap: 8px;
 }
 
-[hidden] {
+[hidden],
+.hidden {
   display: none !important;
 }
 
@@ -813,13 +817,6 @@ input::-webkit-calendar-picker-indicator {
 }
 
 @media (max-width: 560px) {
-  .start-at-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(118px, 0.44fr);
-    gap: 10px;
-    align-items: end;
-  }
-
   .app {
     padding-top: 12px;
   }
@@ -865,6 +862,16 @@ input::-webkit-calendar-picker-indicator {
 
   .reminder-actions > button {
     flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 359px) {
+  .start-at-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-field input[type="time"] {
+    min-width: 0;
   }
 }
 

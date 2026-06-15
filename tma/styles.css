@@ -619,16 +619,10 @@ input::-webkit-calendar-picker-indicator {
   align-items: center;
   border-radius: 999px;
   font-size: 13px;
-  font-weight: 660;
   line-height: 1.15;
 }
 
-.preview-chip {
-  padding: 6px 9px;
-  background: var(--accent-soft);
-  color: var(--accent-text);
-}
-
+.preview-chip,
 .reminder-chip {
   padding: 5px 8px;
   border: 1px solid var(--border);
@@ -645,9 +639,17 @@ input::-webkit-calendar-picker-indicator {
 
 .count-badge {
   flex: 0 0 auto;
-  padding: 7px 10px;
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.reminders-card .card-heading {
+  align-items: center;
 }
 
 .reminders-list {
@@ -825,6 +827,12 @@ input::-webkit-calendar-picker-indicator {
 
   .card-heading {
     display: grid;
+  }
+
+  .reminders-card .card-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
 
   .card-heading-note {

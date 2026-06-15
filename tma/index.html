@@ -22,7 +22,7 @@
         document.documentElement.dataset.theme = "light";
       }
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20260615-15" />
+    <link rel="stylesheet" href="./styles.css?v=20260615-16" />
   </head>
   <body>
     <main class="app">
@@ -84,11 +84,20 @@
                 type="text"
                 placeholder="Asia/Yekaterinburg"
                 autocomplete="off"
+                aria-describedby="chat-timezone-hint"
                 required
               />
             </label>
 
-            <p class="muted">Пример: Asia/Yekaterinburg</p>
+            <p id="chat-timezone-hint" class="muted">
+              Пример: Asia/Yekaterinburg.
+              Не знаешь свою таймзону?
+              <a
+                href="https://www.addevent.com/c/documentation/tools/time-zone-lookup"
+                target="_blank"
+                rel="noopener noreferrer"
+              >Открой поиск</a>, введи город и нажми найденное значение, чтобы скопировать.
+            </p>
 
             <div class="actions">
               <button
@@ -263,6 +272,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260615-15"></script>
+    <script src="./app.js?v=20260615-16"></script>
   </body>
 </html>

@@ -201,6 +201,18 @@ h3 {
   color: var(--muted);
 }
 
+.muted a,
+.field-hint a {
+  color: var(--accent);
+  font-weight: 750;
+  text-underline-offset: 2px;
+}
+
+.muted a:visited,
+.field-hint a:visited {
+  color: var(--accent);
+}
+
 .hero-subtitle {
   margin-bottom: 0;
   font-size: 14px;

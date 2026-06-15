@@ -278,6 +278,18 @@ function isStartAtPastError(error) {
   return error.message === "start_at must be in the future.";
 }
 
+function isInvalidTimezoneError(error) {
+  return error.message === "Invalid timezone name.";
+}
+
+function buildInvalidTimezoneMessage() {
+  return [
+    "Не удалось сохранить таймзону.",
+    "",
+    "Такой таймзоны нет. Проверь значение или скопируй его из поиска таймзоны.",
+  ].join("\n");
+}
+
 function handleError(error) {
   if (isMissingChatContextError(error)) {
     showStatus(buildMissingChatContextMessage(), "info");
@@ -286,11 +298,14 @@ function handleError(error) {
 
   if (isStartAtPastError(error)) {
     hideStatus();
-
     showStartAtError(buildStartAtPastMessage());
-
     focusStartAtField();
+    return;
+  }
 
+  if (isInvalidTimezoneError(error)) {
+    showStatus(buildInvalidTimezoneMessage(), "error");
+    elements.chatTimezoneName.focus();
     return;
   }
 

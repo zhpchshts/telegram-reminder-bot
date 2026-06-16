@@ -338,6 +338,7 @@ def test_preview_tma_reminder_accepts_weekly_weekday_value_from_form_options() -
     )
 
     assert result.schedule_type == "every_week"
+    assert result.start_at == datetime.fromisoformat("2099-06-11T12:12:00+05:00")
     assert result.period is not None
     assert "четвер" in result.period
 
@@ -361,9 +362,51 @@ def test_preview_tma_reminder_accepts_monthly_weekday_value_from_form_options() 
     )
 
     assert result.schedule_type == "monthly_weekday"
+    assert result.start_at == datetime.fromisoformat("2099-06-18T12:12:00+05:00")
     assert result.period is not None
     assert "3" in result.period
     assert "четвер" in result.period
+
+
+def test_preview_tma_reminder_normalizes_monthly_day_start_at() -> None:
+    result = preview_tma_reminder(
+        request=ReminderCreateRequest(
+            reminder_text="Проверить фильтры",
+            schedule_type="monthly_day",
+            start_at=datetime(2099, 6, 16, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            month_day=23,
+        ),
+        _chat_id=100,
+    )
+
+    assert result.schedule_type == "monthly_day"
+    assert result.start_at == datetime.fromisoformat("2099-06-23T12:12:00+05:00")
+    assert result.period is not None
+    assert "23" in result.period
+
+
+def test_preview_tma_reminder_normalizes_monthly_weekday_to_next_month() -> None:
+    options = get_reminder_form_options()
+    friday = next(weekday for weekday in options.weekdays if weekday.label == "Пятница")
+
+    result = preview_tma_reminder(
+        request=ReminderCreateRequest(
+            reminder_text="Проверить фильтры",
+            schedule_type="monthly_weekday",
+            start_at=datetime(2099, 6, 16, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            month_week_number=2,
+            day_of_week=friday.value,
+        ),
+        _chat_id=100,
+    )
+
+    assert result.schedule_type == "monthly_weekday"
+    assert result.start_at == datetime.fromisoformat("2099-07-10T12:12:00+05:00")
+    assert result.period is not None
+    assert "2" in result.period
+    assert "пятниц" in result.period
 
 
 def test_create_tma_reminder_returns_response(
@@ -479,7 +522,7 @@ def test_create_tma_reminder_accepts_monthly_weekday_value_from_form_options(
     expected_data = ReminderCreateData(
         reminder_text="Проверить фильтры",
         schedule_type="monthly_weekday",
-        start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+        start_at=datetime.fromisoformat("2099-06-18T12:12:00+05:00"),
         timezone_name="Asia/Yekaterinburg",
         month_week_number=3,
         day_of_week=thursday.value,

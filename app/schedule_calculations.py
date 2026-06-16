@@ -203,6 +203,51 @@ def get_monthly_day_datetime_on_or_after(
     raise RuntimeError("Could not find monthly day occurrence.")
 
 
+def get_schedule_start_at_on_or_after(
+    *,
+    schedule_type: str,
+    start_at: datetime,
+    day_of_week: str | None = None,
+    month_week_number: int | None = None,
+    month_day: int | None = None,
+) -> datetime:
+    time_text = start_at.strftime("%H:%M")
+
+    if schedule_type == "every_week":
+        if day_of_week is None:
+            return start_at
+
+        return get_first_weekday_datetime_on_or_after_date(
+            day_of_week=day_of_week,
+            date_text=start_at.strftime("%Y-%m-%d"),
+            time_text=time_text,
+            timezone=start_at.tzinfo,
+        )
+
+    if schedule_type == "monthly_weekday":
+        if month_week_number is None or day_of_week is None:
+            return start_at
+
+        return get_monthly_weekday_datetime_on_or_after(
+            month_week_number=month_week_number,
+            day_of_week=day_of_week,
+            time_text=time_text,
+            lower_bound=start_at,
+        )
+
+    if schedule_type == "monthly_day":
+        if month_day is None:
+            return start_at
+
+        return get_monthly_day_datetime_on_or_after(
+            month_day=month_day,
+            time_text=time_text,
+            lower_bound=start_at,
+        )
+
+    return start_at
+
+
 def normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value

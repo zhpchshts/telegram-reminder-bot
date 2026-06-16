@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from app.formatting import format_period_line
 from app.reminder_models import ReminderCreateData, ReminderReadData
+from app.schedule_calculations import get_schedule_start_at_on_or_after
 
 
 class ReminderResponse(BaseModel):
@@ -148,10 +149,19 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
 def build_reminder_create_data(
     request: ReminderCreateRequest,
 ) -> ReminderCreateData:
+    start_at = normalize_start_at(request.start_at, request.timezone_name)
+    schedule_start_at = get_schedule_start_at_on_or_after(
+        schedule_type=request.schedule_type,
+        start_at=start_at,
+        day_of_week=request.day_of_week,
+        month_week_number=request.month_week_number,
+        month_day=request.month_day,
+    )
+
     return ReminderCreateData(
         reminder_text=request.reminder_text,
         schedule_type=request.schedule_type,
-        start_at=normalize_start_at(request.start_at, request.timezone_name),
+        start_at=schedule_start_at,
         timezone_name=request.timezone_name,
         interval_days=request.interval_days,
         interval_weeks=request.interval_weeks,

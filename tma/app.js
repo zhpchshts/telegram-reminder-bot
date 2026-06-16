@@ -98,18 +98,28 @@ function getCurrentTheme() {
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-
   if (!elements.themeToggleButton) {
     return;
   }
 
   const isDark = theme === "dark";
-  elements.themeToggleButton.textContent = isDark ? "☀ Светлая" : "☾ Тёмная";
-  elements.themeToggleButton.setAttribute("aria-pressed", String(isDark));
-  elements.themeToggleButton.setAttribute(
-    "aria-label",
-    isDark ? "Включить светлую тему" : "Включить тёмную тему",
+  const nextThemeLabel = isDark
+    ? "Включить светлую тему"
+    : "Включить тёмную тему";
+  const themeIcon = elements.themeToggleButton.querySelector(
+    "[aria-hidden='true']",
   );
+
+  elements.themeToggleButton.setAttribute("aria-pressed", String(isDark));
+  elements.themeToggleButton.setAttribute("aria-label", nextThemeLabel);
+  elements.themeToggleButton.setAttribute("title", nextThemeLabel);
+
+  if (themeIcon) {
+    themeIcon.textContent = isDark ? "☀" : "☾";
+    return;
+  }
+
+  elements.themeToggleButton.textContent = isDark ? "☀" : "☾";
 }
 
 function initTheme() {

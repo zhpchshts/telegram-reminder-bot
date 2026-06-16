@@ -112,7 +112,6 @@ button:disabled {
   padding: 18px 14px 28px;
 }
 
-.hero,
 .card,
 .status,
 .preview,
@@ -124,12 +123,12 @@ button:disabled {
 
 .hero {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  padding: 14px;
-  margin-bottom: 14px;
-  border-radius: 22px;
-  overflow: hidden;
+  padding: 4px 2px 16px;
+  margin-bottom: 8px;
+  overflow: visible;
   position: relative;
 }
 
@@ -223,9 +222,9 @@ h3 {
 .header-actions {
   display: flex;
   flex: 0 0 auto;
-  flex-wrap: wrap;
   gap: 8px;
-  justify-content: flex-start;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .card {
@@ -518,14 +517,21 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   }
 }
 
-.icon-button,
-.theme-toggle-button {
-  padding: 9px 13px;
+.header-icon-button {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  padding: 0;
+  border-radius: 14px;
+  font-size: 20px;
+  line-height: 1;
   white-space: nowrap;
 }
 
-.theme-toggle-button {
-  min-width: 98px;
+.header-icon-button span {
+  display: block;
+  transform: translateY(-1px);
 }
 
 .collapsible-card {
@@ -814,10 +820,6 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 }
 
 @media (min-width: 720px) {
-  .hero {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
   .header-actions {
     justify-content: flex-end;
   }
@@ -843,13 +845,20 @@ input[type="time"]::-webkit-calendar-picker-indicator {
     padding-top: 12px;
   }
 
+  .hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 10px;
+    padding-top: 2px;
+  }
+
   .header-actions {
-    width: 100%;
-    justify-content: stretch;
+    width: auto;
+    justify-content: flex-end;
   }
 
   .header-actions > button {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
   }
 
   .card-heading {

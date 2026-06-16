@@ -22,7 +22,7 @@
         document.documentElement.dataset.theme = "light";
       }
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20260615-17" />
+    <link rel="stylesheet" href="./styles.css?v=20260617-01" />
   </head>
   <body>
     <main class="app">
@@ -37,16 +37,24 @@
         </div>
 
         <div class="header-actions" aria-label="Действия">
-          <button id="reload-button" type="button" class="secondary-button icon-button">
-            Обновить
+          <button
+            id="reload-button"
+            type="button"
+            class="secondary-button header-icon-button"
+            aria-label="Обновить"
+            title="Обновить"
+          >
+            <span aria-hidden="true">↻</span>
           </button>
           <button
             id="theme-toggle-button"
             type="button"
-            class="secondary-button theme-toggle-button"
+            class="secondary-button header-icon-button"
             aria-pressed="false"
+            aria-label="Включить тёмную тему"
+            title="Включить тёмную тему"
           >
-            ☾ Тёмная
+            <span aria-hidden="true">☾</span>
           </button>
         </div>
       </header>
@@ -274,6 +282,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260615-17"></script>
+    <script src="./app.js?v=20260617-01"></script>
   </body>
 </html>

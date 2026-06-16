@@ -132,21 +132,19 @@
           <input id="timezone-name" name="timezone_name" type="hidden" />
 
           <label class="field field-main">
-            <span>Текст напоминания</span>
             <textarea
               id="reminder-text"
               name="reminder_text"
               rows="3"
               placeholder="Например: заказать воду"
+              aria-label="Что напомнить?"
               required
             ></textarea>
           </label>
 
           <div class="form-section">
-            <p class="section-label">Расписание</p>
-
             <label class="field">
-              <span>Тип расписания</span>
+              <span>Повтор</span>
               <select id="schedule-type" name="schedule_type" required>
                 <option value="once">Один раз</option>
                 <option value="yearly_date">Каждый год в дату</option>
@@ -158,7 +156,7 @@
             </label>
 
             <div class="field">
-              <span>Дата и время первого срабатывания</span>
+              <span>Первое срабатывание</span>
               <input id="start-at" name="start_at" type="hidden" />
 
               <div class="start-at-grid">

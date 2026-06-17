@@ -609,13 +609,12 @@ def test_mini_app_first_commands_send_direct_link_button(
     assert button.web_app is None
 
 
-def test_unknown_message_ignores_plain_reply_to_current_bot(
+def test_unknown_message_ignores_plain_reply_to_any_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_build_tma_keyboard_for_message(_: object) -> None:
         pytest.fail("Keyboard should not be built for ignored replies")
 
-    monkeypatch.setattr(handlers, "BOT_TOKEN", "42:test-bot-token")
     monkeypatch.setattr(
         handlers,
         "build_tma_keyboard_for_message",
@@ -626,8 +625,8 @@ def test_unknown_message_ignores_plain_reply_to_current_bot(
         "ок",
         reply_to_message=SimpleNamespace(
             from_user=SimpleNamespace(
-                id=42,
-                is_bot=True,
+                id=777,
+                is_bot=False,
             ),
         ),
     )
@@ -637,10 +636,9 @@ def test_unknown_message_ignores_plain_reply_to_current_bot(
     assert message.answers == []
 
 
-def test_unknown_message_does_not_ignore_command_reply_to_current_bot(
+def test_unknown_message_does_not_ignore_command_reply_to_any_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(handlers, "BOT_TOKEN", "42:test-bot-token")
     monkeypatch.setattr(
         handlers,
         "build_tma_keyboard_for_message",
@@ -651,8 +649,8 @@ def test_unknown_message_does_not_ignore_command_reply_to_current_bot(
         "/unknown",
         reply_to_message=SimpleNamespace(
             from_user=SimpleNamespace(
-                id=42,
-                is_bot=True,
+                id=777,
+                is_bot=False,
             ),
         ),
     )

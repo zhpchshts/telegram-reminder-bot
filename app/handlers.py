@@ -45,23 +45,11 @@ NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 ParseCommand = Callable[[str | None, str], ReminderParseResult]
 
 
-def is_plain_reply_to_current_bot(message: Message) -> bool:
+def is_plain_reply_message(message: Message) -> bool:
     if not message.text or message.text.startswith("/"):
         return False
 
-    reply_to_message = message.reply_to_message
-    if reply_to_message is None:
-        return False
-
-    reply_author = reply_to_message.from_user
-    if reply_author is None or not reply_author.is_bot:
-        return False
-
-    bot_id_text, separator, _ = BOT_TOKEN.partition(":")
-    if not separator or not bot_id_text.isdecimal():
-        return False
-
-    return reply_author.id == int(bot_id_text)
+    return message.reply_to_message is not None
 
 
 def build_tma_keyboard(launch_url: str) -> InlineKeyboardMarkup:
@@ -572,7 +560,7 @@ async def unknown_message(message: Message) -> None:
     if not message.text:
         return
 
-    if is_plain_reply_to_current_bot(message):
+    if is_plain_reply_message(message):
         return
 
     reply_markup = build_tma_keyboard_for_message(message)

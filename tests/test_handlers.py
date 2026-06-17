@@ -31,6 +31,7 @@ class FakeMessage:
         *,
         chat_type: str = "private",
         chat_title: str | None = None,
+        reply_to_message: object | None = None,
     ) -> None:
         self.text = text
         self.chat = SimpleNamespace(
@@ -38,6 +39,7 @@ class FakeMessage:
             type=chat_type,
             title=chat_title,
         )
+        self.reply_to_message = reply_to_message
         self.answers: list[tuple[str, dict[str, object]]] = []
 
     async def answer(self, text: str, **kwargs: object) -> None:
@@ -234,7 +236,8 @@ def test_create_commands_use_parser_result(
     message = FakeMessage(case.command_text)
 
     def fake_parser(
-        command_text: str | None, timezone_name: str
+        command_text: str | None,
+        timezone_name: str,
     ) -> ReminderParseResult:
         assert command_text == case.command_text
         assert timezone_name == TIMEZONE_NAME
@@ -307,7 +310,8 @@ def test_create_command_answers_parse_error(
     message = FakeMessage("/every_days")
 
     def fake_parser(
-        command_text: str | None, timezone_name: str
+        command_text: str | None,
+        timezone_name: str,
     ) -> ReminderParseResult:
         assert command_text == "/every_days"
         assert timezone_name == TIMEZONE_NAME
@@ -350,7 +354,6 @@ def test_timezone_command_answers_current_timezone() -> None:
     assert len(message.answers) == 1
 
     answer_text, kwargs = message.answers[0]
-
     assert "Текущая таймзона этого чата:" in answer_text
     assert TIMEZONE_NAME in answer_text
     assert "/timezone Asia/Yekaterinburg" in answer_text
@@ -425,7 +428,6 @@ def test_timezone_command_answers_invalid_timezone(
     assert len(message.answers) == 1
 
     answer_text, kwargs = message.answers[0]
-
     assert answer_text.startswith("Не смог распознать таймзону.")
     assert "/timezone Asia/Yekaterinburg" in answer_text
     assert "link_preview_options" in kwargs
@@ -502,12 +504,10 @@ def test_app_command_sends_direct_link_button(
     assert len(message.answers) == 1
 
     answer_text, kwargs = message.answers[0]
-
     assert answer_text == "Открой Незабудку для управления напоминаниями:"
 
     reply_markup = kwargs["reply_markup"]
     button = reply_markup.inline_keyboard[0][0]
-
     assert button.text == "Открыть Незабудку"
     assert button.url == "https://t.me/ZhpchshtsReminderBot?startapp=signed-token"
     assert button.web_app is None
@@ -584,6 +584,7 @@ def test_mini_app_first_commands_send_direct_link_button(
     )
 
     handler = getattr(handlers, handler_name)
+
     asyncio.run(handler(message))
 
     assert captured_calls == [
@@ -594,8 +595,8 @@ def test_mini_app_first_commands_send_direct_link_button(
             "secret": "test-bot-token",
         }
     ]
-
     assert len(message.answers) == 1
+
     answer_text, kwargs = message.answers[0]
 
     for expected_text_part in expected_text_parts:
@@ -603,10 +604,63 @@ def test_mini_app_first_commands_send_direct_link_button(
 
     reply_markup = kwargs["reply_markup"]
     button = reply_markup.inline_keyboard[0][0]
-
     assert button.text == "Открыть Незабудку"
     assert button.url == "https://t.me/ZhpchshtsReminderBot?startapp=signed-token"
     assert button.web_app is None
+
+
+def test_unknown_message_ignores_plain_reply_to_current_bot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_build_tma_keyboard_for_message(_: object) -> None:
+        pytest.fail("Keyboard should not be built for ignored replies")
+
+    monkeypatch.setattr(handlers, "BOT_TOKEN", "42:test-bot-token")
+    monkeypatch.setattr(
+        handlers,
+        "build_tma_keyboard_for_message",
+        fake_build_tma_keyboard_for_message,
+    )
+
+    message = FakeMessage(
+        "ок",
+        reply_to_message=SimpleNamespace(
+            from_user=SimpleNamespace(
+                id=42,
+                is_bot=True,
+            ),
+        ),
+    )
+
+    asyncio.run(handlers.unknown_message(message))
+
+    assert message.answers == []
+
+
+def test_unknown_message_does_not_ignore_command_reply_to_current_bot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(handlers, "BOT_TOKEN", "42:test-bot-token")
+    monkeypatch.setattr(
+        handlers,
+        "build_tma_keyboard_for_message",
+        lambda _: None,
+    )
+
+    message = FakeMessage(
+        "/unknown",
+        reply_to_message=SimpleNamespace(
+            from_user=SimpleNamespace(
+                id=42,
+                is_bot=True,
+            ),
+        ),
+    )
+
+    asyncio.run(handlers.unknown_message(message))
+
+    assert len(message.answers) == 1
+    assert message.answers[0][0].startswith("Не знаю такую команду.")
 
 
 @pytest.mark.parametrize(
@@ -684,8 +738,8 @@ def test_unknown_message_sends_direct_link_button(
             "secret": "test-bot-token",
         }
     ]
-
     assert len(message.answers) == 1
+
     answer_text, kwargs = message.answers[0]
 
     for expected_text_part in expected_text_parts:
@@ -693,7 +747,6 @@ def test_unknown_message_sends_direct_link_button(
 
     reply_markup = kwargs["reply_markup"]
     button = reply_markup.inline_keyboard[0][0]
-
     assert button.text == "Открыть Незабудку"
     assert button.url == "https://t.me/ZhpchshtsReminderBot?startapp=SIGNEDTOKEN"
     assert button.web_app is None

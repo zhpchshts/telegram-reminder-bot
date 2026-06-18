@@ -105,8 +105,7 @@ def parse_weather_locations(raw_locations: str) -> list[str]:
 
     if len(unique_locations) > MAX_WEATHER_LOCATIONS:
         raise ValueError(
-            f"weather_locations must contain no more than "
-            f"{MAX_WEATHER_LOCATIONS} locations."
+            f"Можно указать не больше {MAX_WEATHER_LOCATIONS} населённых пунктов."
         )
 
     return unique_locations

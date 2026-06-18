@@ -128,7 +128,7 @@ def build_weather_report(raw_locations: str) -> str:
 
     return "\n\n".join(
         [
-            "Погода сегодня",
+            "<b>Прогноз погоды на сегодня</b>",
             *location_blocks,
             OPEN_METEO_ATTRIBUTION,
         ]

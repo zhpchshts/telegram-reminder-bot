@@ -33,6 +33,14 @@ APSCHEDULER_WEEKDAYS = {
     "SUN": "sun",
 }
 
+REMINDER_KIND_TEXT = "text"
+REMINDER_KIND_WEATHER = "weather"
+
+VALID_REMINDER_KINDS = {
+    REMINDER_KIND_TEXT,
+    REMINDER_KIND_WEATHER,
+}
+
 WEEKDAY_NAMES_RU_PLURAL = {
     "MON": "понедельникам",
     "TUE": "вторникам",
@@ -65,6 +73,7 @@ REMINDER_COLUMNS = """
     id,
     chat_id,
     text,
+    reminder_kind,
     schedule_type,
     status,
     start_at,
@@ -77,6 +86,7 @@ REMINDER_COLUMNS = """
 """
 
 SCHEMA_MIGRATIONS = {
+    "reminder_kind": "reminder_kind TEXT NOT NULL DEFAULT 'text'",
     "interval_weeks": "interval_weeks INTEGER",
     "day_of_week": "day_of_week TEXT",
     "month_week_number": "month_week_number INTEGER",

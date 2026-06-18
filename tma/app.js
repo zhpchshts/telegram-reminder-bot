@@ -10,6 +10,8 @@ const THEME_STORAGE_KEY = "telegram-reminder-theme";
 const DARK_THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const TELEGRAM_INIT_DATA_QUERY_PARAM = "tgWebAppData";
 const SUPPORTED_THEMES = new Set(["dark", "light"]);
+const REMINDER_KIND_TEXT = "text";
+const REMINDER_KIND_WEATHER = "weather";
 
 function getTelegramLocationParams() {
   const hash = window.location.hash.startsWith("#")
@@ -159,6 +161,9 @@ const elements = {
   form: byId("reminder-form"),
   formTitle: byId("form-title"),
   reminderId: byId("reminder-id"),
+  reminderKind: byId("reminder-kind"),
+  reminderTextLabel: byId("reminder-text-label"),
+  reminderTextHint: byId("reminder-text-hint"),
   reminderText: byId("reminder-text"),
   scheduleType: byId("schedule-type"),
   startAt: byId("start-at"),
@@ -338,23 +343,74 @@ function showPreview(preview) {
   const period = preview.period || "одноразовое";
   const timezoneName =
     preview.timezone_name || elements.timezoneName.value || state.context?.timezone_name;
+  const reminderKind = preview.reminder_kind || getReminderKind();
 
   elements.preview.innerHTML = `
     <div class="preview-label">Предпросмотр</div>
     <div class="preview-title">${escapeHtml(preview.reminder_text)}</div>
     <div class="preview-grid">
+      <span class="preview-chip">${escapeHtml(getReminderKindLabel(reminderKind))}</span>
       <span class="preview-chip">${escapeHtml(period)}</span>
       <span class="preview-next">Первое срабатывание: ${escapeHtml(
         formatDateTimeWithConditionalTimezone(preview.start_at, timezoneName),
       )}</span>
     </div>
   `;
+
   elements.preview.hidden = false;
 }
 
 function hidePreview() {
   elements.preview.hidden = true;
   elements.preview.textContent = "";
+}
+
+function getReminderKind() {
+  return elements.reminderKind?.value || REMINDER_KIND_TEXT;
+}
+
+function getReminderKindLabel(reminderKind) {
+  return reminderKind === REMINDER_KIND_WEATHER ? "Погода" : "Обычное";
+}
+
+function getReminderTextLabel(reminderKind = getReminderKind()) {
+  return reminderKind === REMINDER_KIND_WEATHER
+    ? "Населённые пункты"
+    : "Текст напоминания";
+}
+
+function getReminderTextPlaceholder(reminderKind = getReminderKind()) {
+  return reminderKind === REMINDER_KIND_WEATHER
+    ? "Например: Екатеринбург; Москва"
+    : "Например: заказать воду";
+}
+
+function getReminderTextRequiredMessage() {
+  return getReminderKind() === REMINDER_KIND_WEATHER
+    ? "Укажи хотя бы один населённый пункт."
+    : "Укажи текст напоминания.";
+}
+
+function updateReminderKindFields() {
+  const reminderKind = getReminderKind();
+  const label = getReminderTextLabel(reminderKind);
+
+  if (elements.reminderTextLabel) {
+    elements.reminderTextLabel.textContent = label;
+  }
+
+  if (elements.reminderText) {
+    elements.reminderText.placeholder = getReminderTextPlaceholder(reminderKind);
+    elements.reminderText.setAttribute("aria-label", label);
+  }
+
+  if (elements.reminderTextHint) {
+    const isWeather = reminderKind === REMINDER_KIND_WEATHER;
+    elements.reminderTextHint.hidden = !isWeather;
+    elements.reminderTextHint.textContent = isWeather
+      ? "Можно указать до 5 населённых пунктов через точку с запятой или с новой строки."
+      : "";
+  }
 }
 
 function escapeHtml(value) {
@@ -574,7 +630,11 @@ function createReminderCard(reminder) {
   const content = document.createElement("div");
   content.className = "reminder-content";
 
-  const title = createTextElement("h3", "", reminder.reminder_text);
+  const titleText =
+    reminder.reminder_kind === REMINDER_KIND_WEATHER
+      ? `Погода: ${reminder.reminder_text}`
+      : reminder.reminder_text;
+  const title = createTextElement("h3", "", titleText);
 
   const meta = document.createElement("div");
   meta.className = "reminder-meta";
@@ -593,6 +653,10 @@ function createReminderCard(reminder) {
     nextRunAt,
     timezoneName,
   )}`;
+
+  if (reminder.reminder_kind === REMINDER_KIND_WEATHER) {
+    meta.append(createTextElement("span", "reminder-chip", "Погода"));
+  }
 
   meta.append(period, nextRun);
   content.append(title, meta);
@@ -666,6 +730,7 @@ function buildRequestPayload() {
   const scheduleType = elements.scheduleType.value;
 
   const payload = {
+    reminder_kind: getReminderKind(),
     reminder_text: elements.reminderText.value.trim(),
     schedule_type: scheduleType,
     start_at: elements.startAt.value,
@@ -758,7 +823,7 @@ function getReminderFormErrors() {
   const scheduleType = elements.scheduleType.value;
 
   if (!elements.reminderText.value.trim()) {
-    errors.push("Укажи текст напоминания.");
+    errors.push(getReminderTextRequiredMessage());
   }
 
   if (!hasValidStartAtValue()) {
@@ -825,7 +890,14 @@ function setDefaultStartAt() {
 function startEdit(reminder) {
   elements.reminderId.value = reminder.id;
   elements.formTitle.textContent = "Редактировать напоминание";
+  if (elements.reminderKind) {
+    elements.reminderKind.value = reminder.reminder_kind || REMINDER_KIND_TEXT;
+  }
+
   elements.reminderText.value = reminder.reminder_text;
+
+  updateReminderKindFields();
+
   elements.scheduleType.value = reminder.schedule_type;
   setStartAtValue(
     toDateTimeLocalValue(
@@ -857,6 +929,7 @@ function resetForm() {
   elements.form.reset();
   elements.reminderId.value = "";
   elements.formTitle.textContent = "Создать напоминание";
+  updateReminderKindFields();
   elements.timezoneName.value = state.context?.timezone_name || "";
   setDefaultStartAt();
   elements.saveButton.textContent = "Сохранить";
@@ -1140,6 +1213,10 @@ on(elements.scheduleType, "change", () => {
   updateConditionalFields();
   hidePreview();
 });
+on(elements.reminderKind, "change", () => {
+  updateReminderKindFields();
+  hidePreview();
+});
 on(elements.form, "input", hidePreview);
 on(elements.form, "change", hidePreview);
 on(elements.previewButton, "click", () => handleAsync(previewReminder));
@@ -1151,4 +1228,5 @@ onSubmit(elements.form, saveReminder);
 onSubmit(elements.timezoneForm, saveTimezone);
 
 initTheme();
+updateReminderKindFields();
 window.setTimeout(() => handleAsync(loadBootstrap), 0);

@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from app.config import APP_TIMEZONE_NAME
+from app.constants import REMINDER_KIND_TEXT
 from app.reminder_mapping import build_reminder_read_data
 from app.reminder_models import ReminderReadData
 
@@ -12,6 +13,7 @@ def test_build_reminder_read_data_maps_row_to_read_model() -> None:
         "id": 42,
         "chat_id": 100,
         "text": "Проверить релиз",
+        "reminder_kind": REMINDER_KIND_TEXT,
         "schedule_type": "every_days",
         "start_at": start_at.isoformat(timespec="seconds"),
         "interval_days": 3,
@@ -26,6 +28,7 @@ def test_build_reminder_read_data_maps_row_to_read_model() -> None:
         id=42,
         chat_id=100,
         reminder_text="Проверить релиз",
+        reminder_kind=REMINDER_KIND_TEXT,
         schedule_type="every_days",
         start_at=start_at,
         timezone_name="Asia/Yekaterinburg",
@@ -42,6 +45,7 @@ def test_build_reminder_read_data_uses_default_timezone_when_row_timezone_is_non
         "id": 42,
         "chat_id": 100,
         "text": "Проверить релиз",
+        "reminder_kind": None,
         "schedule_type": "once",
         "start_at": start_at.isoformat(timespec="seconds"),
         "interval_days": None,
@@ -56,6 +60,7 @@ def test_build_reminder_read_data_uses_default_timezone_when_row_timezone_is_non
         id=42,
         chat_id=100,
         reminder_text="Проверить релиз",
+        reminder_kind=REMINDER_KIND_TEXT,
         schedule_type="once",
         start_at=start_at,
         timezone_name=APP_TIMEZONE_NAME,

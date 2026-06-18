@@ -131,15 +131,27 @@
           <input id="reminder-id" type="hidden" />
           <input id="timezone-name" name="timezone_name" type="hidden" />
 
+          <label class="field">
+            <span>Тип уведомления</span>
+            <select id="reminder-kind" name="reminder_kind" required>
+              <option value="text">Обычное напоминание</option>
+              <option value="weather">Погода</option>
+            </select>
+          </label>
+
           <label class="field field-main">
+            <span id="reminder-text-label">Текст напоминания</span>
             <textarea
               id="reminder-text"
               name="reminder_text"
               rows="3"
               placeholder="Например: заказать воду"
-              aria-label="Что напомнить?"
+              aria-label="Текст напоминания"
+              aria-describedby="reminder-text-hint"
               required
             ></textarea>
+
+            <span id="reminder-text-hint" class="field-hint" hidden></span>
           </label>
 
           <div class="form-section">
@@ -280,6 +292,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260617-01"></script>
+    <script src="./app.js?v=20260619-01"></script>
   </body>
 </html>

@@ -15,6 +15,7 @@ from app import api as api_module
 from app import api_auth as api_auth_module
 from app.api import app
 from app.api_auth import TMA_INIT_DATA_HEADER, require_matching_chat_id
+from app.constants import REMINDER_KIND_TEXT
 from app.reminder_models import ReminderReadData
 from app.tma_auth import calculate_init_data_hash
 from app.tma_launch import create_tma_launch_token
@@ -416,6 +417,7 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
                 id=42,
                 chat_id=100,
                 reminder_text="Проверить релиз",
+                reminder_kind=REMINDER_KIND_TEXT,
                 schedule_type="every_days",
                 start_at=datetime(2099, 6, 10, 12, 12),
                 timezone_name="Asia/Yekaterinburg",
@@ -469,6 +471,7 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
             "id": 42,
             "chat_id": 100,
             "reminder_text": "Проверить релиз",
+            "reminder_kind": REMINDER_KIND_TEXT,
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
@@ -497,6 +500,7 @@ def test_tma_reminder_preview_endpoint_accepts_valid_tma_init_data(
     assert response.status_code == 200
     assert response.json() == {
         "reminder_text": "Проверить релиз",
+        "reminder_kind": REMINDER_KIND_TEXT,
         "schedule_type": "every_days",
         "start_at": "2099-06-10T12:12:00+05:00",
         "timezone_name": "Asia/Yekaterinburg",
@@ -537,6 +541,7 @@ def test_get_chat_reminders_endpoint_accepts_valid_tma_init_data(
                 id=42,
                 chat_id=100,
                 reminder_text="Проверить релиз",
+                reminder_kind=REMINDER_KIND_TEXT,
                 schedule_type="every_days",
                 start_at=datetime(2099, 6, 10, 12, 12),
                 timezone_name="Asia/Yekaterinburg",
@@ -564,6 +569,7 @@ def test_get_chat_reminders_endpoint_accepts_valid_tma_init_data(
             "id": 42,
             "chat_id": 100,
             "reminder_text": "Проверить релиз",
+            "reminder_kind": REMINDER_KIND_TEXT,
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
@@ -621,6 +627,7 @@ def test_get_chat_reminders_endpoint_returns_json(
                 id=42,
                 chat_id=100,
                 reminder_text="Проверить релиз",
+                reminder_kind=REMINDER_KIND_TEXT,
                 schedule_type="every_days",
                 start_at=datetime(2099, 6, 10, 12, 12),
                 timezone_name="Asia/Yekaterinburg",
@@ -643,6 +650,7 @@ def test_get_chat_reminders_endpoint_returns_json(
             "id": 42,
             "chat_id": 100,
             "reminder_text": "Проверить релиз",
+            "reminder_kind": REMINDER_KIND_TEXT,
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
@@ -823,6 +831,7 @@ def test_delete_chat_reminder_endpoint_rejects_unknown_reminder(
 def build_create_reminder_request(
     *,
     reminder_text: str = "Проверить релиз",
+    reminder_kind: str = REMINDER_KIND_TEXT,
     schedule_type: str = "every_days",
     start_at: str = "2099-06-10T12:12:00",
     timezone_name: str = "Asia/Yekaterinburg",
@@ -830,6 +839,7 @@ def build_create_reminder_request(
 ) -> dict[str, object]:
     return {
         "reminder_text": reminder_text,
+        "reminder_kind": reminder_kind,
         "schedule_type": schedule_type,
         "start_at": start_at,
         "timezone_name": timezone_name,
@@ -850,6 +860,7 @@ def test_get_tma_reminders_endpoint_accepts_valid_tma_init_data(
                 id=42,
                 chat_id=100,
                 reminder_text="Проверить релиз",
+                reminder_kind=REMINDER_KIND_TEXT,
                 schedule_type="every_days",
                 start_at=datetime(2099, 6, 10, 12, 12),
                 timezone_name="Asia/Yekaterinburg",
@@ -877,6 +888,7 @@ def test_get_tma_reminders_endpoint_accepts_valid_tma_init_data(
             "id": 42,
             "chat_id": 100,
             "reminder_text": "Проверить релиз",
+            "reminder_kind": REMINDER_KIND_TEXT,
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
@@ -935,6 +947,7 @@ def test_create_tma_reminder_endpoint_accepts_valid_tma_init_data(
 
     data = captured_calls[0]["data"]
     assert data.reminder_text == "Проверить релиз"
+    assert data.reminder_kind == REMINDER_KIND_TEXT
     assert data.schedule_type == "every_days"
     assert data.timezone_name == "Asia/Yekaterinburg"
     assert data.interval_days == 3
@@ -944,6 +957,7 @@ def test_create_tma_reminder_endpoint_accepts_valid_tma_init_data(
     assert response_json["id"] == 42
     assert response_json["chat_id"] == 100
     assert response_json["reminder_text"] == "Проверить релиз"
+    assert response_json["reminder_kind"] == REMINDER_KIND_TEXT
     assert response_json["schedule_type"] == "every_days"
     assert response_json["start_at"].startswith("2099-06-10T12:12:00")
     assert response_json["timezone_name"] == "Asia/Yekaterinburg"

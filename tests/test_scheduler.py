@@ -4,7 +4,9 @@ from datetime import datetime
 import pytest
 
 from app import scheduler as scheduler_module
+from app.constants import REMINDER_KIND_TEXT, REMINDER_KIND_WEATHER
 from app.scheduler import (
+    build_reminder_message,
     format_next_run_line,
     schedule_healthcheck,
     schedule_reminder,
@@ -79,7 +81,7 @@ def test_schedule_once_reminder_adds_date_job(monkeypatch) -> None:
     assert job["run_date"] == start_at
     assert job["id"] == "1"
     assert job["replace_existing"] is True
-    assert job["args"][1:] == [100, "Тест once", 1]
+    assert job["args"][1:] == [100, "Тест once", REMINDER_KIND_TEXT, 1]
 
 
 def test_schedule_every_days_reminder_adds_interval_job(monkeypatch) -> None:
@@ -217,6 +219,7 @@ def test_send_once_reminder_sends_message_and_marks_sent(monkeypatch) -> None:
             bot=bot,
             chat_id=100,
             reminder_text="Тест once",
+            reminder_kind=REMINDER_KIND_TEXT,
             reminder_id=1,
         )
     )
@@ -238,6 +241,7 @@ def test_send_repeating_reminder_sends_message() -> None:
             bot=bot,
             chat_id=100,
             reminder_text="Тест repeating",
+            reminder_kind=REMINDER_KIND_TEXT,
             reminder_id=2,
         )
     )
@@ -248,6 +252,85 @@ def test_send_repeating_reminder_sends_message() -> None:
             "text": "Тест repeating",
         }
     ]
+
+
+def test_build_reminder_message_returns_text_for_text_reminder() -> None:
+    assert (
+        build_reminder_message(
+            reminder_text="Тест text",
+            reminder_kind=REMINDER_KIND_TEXT,
+        )
+        == "Тест text"
+    )
+
+
+def test_build_reminder_message_builds_weather_report(monkeypatch) -> None:
+    calls = []
+
+    def fake_build_weather_report(raw_locations: str) -> str:
+        calls.append(raw_locations)
+        return "Погода на сегодня\n\n🌤 Екатеринбург"
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_weather_report",
+        fake_build_weather_report,
+    )
+
+    assert (
+        build_reminder_message(
+            reminder_text="Екатеринбург",
+            reminder_kind=REMINDER_KIND_WEATHER,
+        )
+        == "Погода на сегодня\n\n🌤 Екатеринбург"
+    )
+    assert calls == ["Екатеринбург"]
+
+
+def test_build_reminder_message_returns_readable_weather_validation_error(
+    monkeypatch,
+) -> None:
+    def fake_build_weather_report(raw_locations: str) -> str:
+        raise ValueError("weather_locations are required.")
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_weather_report",
+        fake_build_weather_report,
+    )
+
+    assert (
+        build_reminder_message(
+            reminder_text="",
+            reminder_kind=REMINDER_KIND_WEATHER,
+        )
+        == "Не смог подготовить прогноз погоды.\n"
+        "weather_locations are required."
+    )
+
+
+def test_build_reminder_message_returns_readable_weather_service_error(
+    monkeypatch,
+) -> None:
+    def fake_build_weather_report(raw_locations: str) -> str:
+        raise scheduler_module.WeatherServiceError(
+            "Погодный сервис временно недоступен."
+        )
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_weather_report",
+        fake_build_weather_report,
+    )
+
+    assert (
+        build_reminder_message(
+            reminder_text="Екатеринбург",
+            reminder_kind=REMINDER_KIND_WEATHER,
+        )
+        == "Не смог получить прогноз погоды.\n"
+        "Погодный сервис временно недоступен."
+    )
 
 
 def test_schedule_monthly_day_reminder_adds_cron_job(monkeypatch) -> None:

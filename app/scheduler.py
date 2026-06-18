@@ -7,7 +7,11 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import APP_TIMEZONE_NAME
-from app.constants import APSCHEDULER_WEEKDAYS
+from app.constants import (
+    APSCHEDULER_WEEKDAYS,
+    REMINDER_KIND_TEXT,
+    REMINDER_KIND_WEATHER,
+)
 from app.database import (
     count_active_chats,
     get_all_active_reminders,
@@ -17,6 +21,7 @@ from app.database import (
 from app.formatting import format_datetime_ru
 from app.reminder_mapping import build_reminder_read_data
 from app.schedule_calculations import get_month_day_range_for_week_number
+from app.weather_service import WeatherServiceError, build_weather_report
 
 scheduler = AsyncIOScheduler()
 
@@ -79,15 +84,28 @@ def format_next_run_line(
     return f"Следующее срабатывание: {format_datetime_ru(next_run_at, timezone_name)}"
 
 
+def build_reminder_message(reminder_text: str, reminder_kind: str) -> str:
+    if reminder_kind != REMINDER_KIND_WEATHER:
+        return reminder_text
+
+    try:
+        return build_weather_report(reminder_text)
+    except ValueError as error:
+        return f"Не смог подготовить прогноз погоды.\n{error}"
+    except WeatherServiceError as error:
+        return f"Не смог получить прогноз погоды.\n{error}"
+
+
 async def send_once_reminder(
     bot: Bot,
     chat_id: int,
     reminder_text: str,
+    reminder_kind: str,
     reminder_id: int,
 ) -> None:
     await bot.send_message(
         chat_id=chat_id,
-        text=reminder_text,
+        text=build_reminder_message(reminder_text, reminder_kind),
     )
     mark_reminder_as_sent(reminder_id)
 
@@ -96,11 +114,12 @@ async def send_repeating_reminder(
     bot: Bot,
     chat_id: int,
     reminder_text: str,
+    reminder_kind: str,
     reminder_id: int,
 ) -> None:
     await bot.send_message(
         chat_id=chat_id,
-        text=reminder_text,
+        text=build_reminder_message(reminder_text, reminder_kind),
     )
 
 
@@ -110,6 +129,7 @@ def schedule_reminder(
     reminder_id: int,
     chat_id: int,
     reminder_text: str,
+    reminder_kind: str = REMINDER_KIND_TEXT,
     schedule_type: str,
     start_at: datetime,
     interval_days: int | None = None,
@@ -121,7 +141,7 @@ def schedule_reminder(
 ) -> None:
     job_timezone = ZoneInfo(timezone_name or APP_TIMEZONE_NAME)
     job_kwargs: dict[str, Any] = {
-        "args": [bot, chat_id, reminder_text, reminder_id],
+        "args": [bot, chat_id, reminder_text, reminder_kind, reminder_id],
         "id": str(reminder_id),
         "replace_existing": True,
     }
@@ -215,6 +235,7 @@ def schedule_reminder_from_row(bot: Bot, reminder: sqlite3.Row) -> None:
         reminder_id=reminder_data.id,
         chat_id=reminder_data.chat_id,
         reminder_text=reminder_data.reminder_text,
+        reminder_kind=reminder_data.reminder_kind,
         schedule_type=reminder_data.schedule_type,
         start_at=reminder_data.start_at,
         interval_days=reminder_data.interval_days,

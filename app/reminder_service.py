@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from aiogram import Bot
 
 from app.config import APP_TIMEZONE_NAME
-from app.constants import VALID_WEEKDAYS
+from app.constants import VALID_REMINDER_KINDS, VALID_WEEKDAYS
 from app.database import (
     create_reminder_in_db,
     get_active_reminder_for_chat,
@@ -56,7 +56,13 @@ def validate_day_of_week(day_of_week: str | None) -> None:
         raise ValueError("day_of_week is invalid.")
 
 
+def validate_reminder_kind(reminder_kind: str) -> None:
+    if reminder_kind not in VALID_REMINDER_KINDS:
+        raise ValueError("reminder_kind is invalid.")
+
+
 def validate_reminder_create_data(data: ReminderCreateData) -> None:
+    validate_reminder_kind(data.reminder_kind)
     if not data.reminder_text.strip():
         raise ValueError("reminder_text is required.")
 
@@ -122,6 +128,7 @@ def create_scheduled_reminder(
     reminder_id = create_reminder_in_db(
         chat_id=chat_id,
         reminder_text=data.reminder_text,
+        reminder_kind=data.reminder_kind,
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         interval_days=data.interval_days,
@@ -137,6 +144,7 @@ def create_scheduled_reminder(
         reminder_id=reminder_id,
         chat_id=chat_id,
         reminder_text=data.reminder_text,
+        reminder_kind=data.reminder_kind,
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         interval_days=data.interval_days,
@@ -169,6 +177,7 @@ def update_active_reminder_for_chat(
         reminder_id=reminder_id,
         chat_id=chat_id,
         reminder_text=data.reminder_text,
+        reminder_kind=data.reminder_kind,
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         interval_days=data.interval_days,
@@ -186,6 +195,7 @@ def update_active_reminder_for_chat(
         reminder_id=reminder_id,
         chat_id=chat_id,
         reminder_text=data.reminder_text,
+        reminder_kind=data.reminder_kind,
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         interval_days=data.interval_days,

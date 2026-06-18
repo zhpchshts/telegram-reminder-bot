@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel
 
 from app.formatting import format_period_line
+from app.constants import REMINDER_KIND_TEXT
 from app.reminder_models import ReminderCreateData, ReminderReadData
 from app.schedule_calculations import get_schedule_start_at_on_or_after
 
@@ -12,6 +13,7 @@ class ReminderResponse(BaseModel):
     id: int
     chat_id: int
     reminder_text: str
+    reminder_kind: str = REMINDER_KIND_TEXT
     schedule_type: str
     start_at: datetime
     next_run_at: datetime | None = None
@@ -27,6 +29,7 @@ class ReminderResponse(BaseModel):
 
 class ReminderCreateRequest(BaseModel):
     reminder_text: str
+    reminder_kind: str = REMINDER_KIND_TEXT
     schedule_type: str
     start_at: datetime
     timezone_name: str
@@ -39,6 +42,7 @@ class ReminderCreateRequest(BaseModel):
 
 class ReminderPreviewResponse(BaseModel):
     reminder_text: str
+    reminder_kind: str = REMINDER_KIND_TEXT
     schedule_type: str
     start_at: datetime
     timezone_name: str
@@ -117,6 +121,7 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
         "id": reminder.id,
         "chat_id": reminder.chat_id,
         "reminder_text": reminder.reminder_text,
+        "reminder_kind": reminder.reminder_kind,
         "schedule_type": reminder.schedule_type,
         "start_at": reminder.start_at,
         "timezone_name": reminder.timezone_name,
@@ -160,6 +165,7 @@ def build_reminder_create_data(
 
     return ReminderCreateData(
         reminder_text=request.reminder_text,
+        reminder_kind=request.reminder_kind,
         schedule_type=request.schedule_type,
         start_at=schedule_start_at,
         timezone_name=request.timezone_name,
@@ -201,6 +207,7 @@ def build_reminder_preview_response(
 ) -> ReminderPreviewResponse:
     return ReminderPreviewResponse(
         reminder_text=data.reminder_text,
+        reminder_kind=data.reminder_kind,
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         timezone_name=data.timezone_name,
@@ -229,6 +236,7 @@ def build_created_reminder_response(
         "id": reminder_id,
         "chat_id": chat_id,
         "reminder_text": data.reminder_text,
+        "reminder_kind": data.reminder_kind,
         "schedule_type": data.schedule_type,
         "start_at": data.start_at,
         "timezone_name": data.timezone_name,

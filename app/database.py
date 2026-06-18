@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from app.config import DB_PATH
-from app.constants import REMINDER_COLUMNS, SCHEMA_MIGRATIONS
+from app.constants import REMINDER_COLUMNS, REMINDER_KIND_TEXT, SCHEMA_MIGRATIONS
 
 
 def get_connection() -> sqlite3.Connection:
@@ -20,6 +20,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id INTEGER NOT NULL,
                 text TEXT NOT NULL,
+                reminder_kind TEXT NOT NULL DEFAULT 'text',
                 schedule_type TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active',
                 start_at TEXT NOT NULL,
@@ -61,6 +62,7 @@ def create_reminder_in_db(
     *,
     chat_id: int,
     reminder_text: str,
+    reminder_kind: str = REMINDER_KIND_TEXT,
     schedule_type: str,
     start_at: datetime,
     interval_days: int | None = None,
@@ -78,6 +80,7 @@ def create_reminder_in_db(
             INSERT INTO reminders (
                 chat_id,
                 text,
+                reminder_kind,
                 schedule_type,
                 status,
                 start_at,
@@ -89,11 +92,12 @@ def create_reminder_in_db(
                 timezone,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
                 reminder_text,
+                reminder_kind,
                 schedule_type,
                 "active",
                 start_at.isoformat(timespec="seconds"),
@@ -115,6 +119,7 @@ def update_reminder_in_db(
     reminder_id: int,
     chat_id: int,
     reminder_text: str,
+    reminder_kind: str = REMINDER_KIND_TEXT,
     schedule_type: str,
     start_at: datetime,
     interval_days: int | None = None,
@@ -130,6 +135,7 @@ def update_reminder_in_db(
             UPDATE reminders
             SET
                 text = ?,
+                reminder_kind = ?,
                 schedule_type = ?,
                 start_at = ?,
                 interval_days = ?,
@@ -142,6 +148,7 @@ def update_reminder_in_db(
             """,
             (
                 reminder_text,
+                reminder_kind,
                 schedule_type,
                 start_at.isoformat(timespec="seconds"),
                 interval_days,

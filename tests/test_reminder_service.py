@@ -3,6 +3,7 @@ from datetime import datetime
 import pytest
 
 from app import reminder_service as reminder_service_module
+from app.constants import REMINDER_KIND_TEXT
 from app.reminder_service import (
     build_active_reminders_list_text_for_chat,
     build_created_reminder_text,
@@ -271,6 +272,7 @@ def test_create_scheduled_reminder_creates_db_record_and_schedules_job(
         {
             "chat_id": 100,
             "reminder_text": "Проверить релиз",
+            "reminder_kind": REMINDER_KIND_TEXT,
             "schedule_type": "every_days",
             "start_at": start_at,
             "interval_days": 3,
@@ -287,6 +289,7 @@ def test_create_scheduled_reminder_creates_db_record_and_schedules_job(
             "reminder_id": 42,
             "chat_id": 100,
             "reminder_text": "Проверить релиз",
+            "reminder_kind": REMINDER_KIND_TEXT,
             "schedule_type": "every_days",
             "start_at": start_at,
             "interval_days": 3,
@@ -493,6 +496,7 @@ def test_list_active_reminders_for_chat_returns_read_models(
             "id": 42,
             "chat_id": 100,
             "text": "Проверить релиз",
+            "reminder_kind": REMINDER_KIND_TEXT,
             "schedule_type": "every_days",
             "start_at": start_at.isoformat(timespec="seconds"),
             "interval_days": 3,
@@ -522,6 +526,7 @@ def test_list_active_reminders_for_chat_returns_read_models(
             id=42,
             chat_id=100,
             reminder_text="Проверить релиз",
+            reminder_kind=REMINDER_KIND_TEXT,
             schedule_type="every_days",
             start_at=start_at,
             timezone_name="Asia/Yekaterinburg",
@@ -541,6 +546,16 @@ def test_list_active_reminders_for_chat_returns_read_models(
                 timezone_name="Asia/Yekaterinburg",
             ),
             "reminder_text is required.",
+        ),
+        (
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                reminder_kind="unknown",
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            "reminder_kind is invalid.",
         ),
         (
             ReminderCreateData(

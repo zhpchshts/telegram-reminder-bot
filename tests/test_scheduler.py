@@ -49,11 +49,17 @@ class FakeBot:
     def __init__(self) -> None:
         self.messages = []
 
-    async def send_message(self, chat_id: int, text: str) -> None:
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        parse_mode: str | None = None,
+    ) -> None:
         self.messages.append(
             {
                 "chat_id": chat_id,
                 "text": text,
+                "parse_mode": parse_mode,
             }
         )
 
@@ -228,6 +234,7 @@ def test_send_once_reminder_sends_message_and_marks_sent(monkeypatch) -> None:
         {
             "chat_id": 100,
             "text": "Тест once",
+            "parse_mode": None,
         }
     ]
     assert marked_ids == [1]
@@ -250,6 +257,47 @@ def test_send_repeating_reminder_sends_message() -> None:
         {
             "chat_id": 100,
             "text": "Тест repeating",
+            "parse_mode": None,
+        }
+    ]
+
+
+def test_send_repeating_weather_reminder_uses_html_parse_mode(monkeypatch) -> None:
+    bot = FakeBot()
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_weather_report",
+        lambda raw_locations: (
+            "Погода сегодня\n\n"
+            "☁️ <b>Екатеринбург · Свердловская область</b>\n"
+            "Сейчас 17°, днём до 26°. Пасмурно.\n"
+            "Осадки маловероятны.\n\n"
+            "Источник: Open-Meteo"
+        ),
+    )
+
+    asyncio.run(
+        send_repeating_reminder(
+            bot=bot,
+            chat_id=100,
+            reminder_text="Екатеринбург",
+            reminder_kind=REMINDER_KIND_WEATHER,
+            reminder_id=2,
+        )
+    )
+
+    assert bot.messages == [
+        {
+            "chat_id": 100,
+            "text": (
+                "Погода сегодня\n\n"
+                "☁️ <b>Екатеринбург · Свердловская область</b>\n"
+                "Сейчас 17°, днём до 26°. Пасмурно.\n"
+                "Осадки маловероятны.\n\n"
+                "Источник: Open-Meteo"
+            ),
+            "parse_mode": "HTML",
         }
     ]
 
@@ -269,7 +317,7 @@ def test_build_reminder_message_builds_weather_report(monkeypatch) -> None:
 
     def fake_build_weather_report(raw_locations: str) -> str:
         calls.append(raw_locations)
-        return "Погода на сегодня\n\n🌤 Екатеринбург"
+        return "Погода сегодня\n\n☁️ <b>Екатеринбург</b>"
 
     monkeypatch.setattr(
         scheduler_module,
@@ -282,7 +330,7 @@ def test_build_reminder_message_builds_weather_report(monkeypatch) -> None:
             reminder_text="Екатеринбург",
             reminder_kind=REMINDER_KIND_WEATHER,
         )
-        == "Погода на сегодня\n\n🌤 Екатеринбург"
+        == "Погода сегодня\n\n☁️ <b>Екатеринбург</b>"
     )
     assert calls == ["Екатеринбург"]
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import re
 import urllib.error
@@ -12,7 +13,7 @@ GEOCODING_API_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_API_URL = "https://api.open-meteo.com/v1/forecast"
 
 MAX_WEATHER_LOCATIONS = 5
-OPEN_METEO_ATTRIBUTION = "Данные: Open-Meteo"
+OPEN_METEO_ATTRIBUTION = "Источник: Open-Meteo"
 
 WEATHER_CODE_DESCRIPTIONS = {
     0: "ясно",
@@ -43,6 +44,37 @@ WEATHER_CODE_DESCRIPTIONS = {
     95: "гроза",
     96: "гроза с градом",
     99: "сильная гроза с градом",
+}
+
+WEATHER_CODE_EMOJIS = {
+    0: "☀️",
+    1: "🌤",
+    2: "🌤",
+    3: "☁️",
+    45: "🌫",
+    48: "🌫",
+    51: "🌦",
+    53: "🌦",
+    55: "🌦",
+    56: "🌦",
+    57: "🌦",
+    61: "🌧",
+    63: "🌧",
+    65: "🌧",
+    66: "🌧",
+    67: "🌧",
+    71: "🌨",
+    73: "🌨",
+    75: "🌨",
+    77: "🌨",
+    80: "🌧",
+    81: "🌧",
+    82: "🌧",
+    85: "🌨",
+    86: "🌨",
+    95: "⛈",
+    96: "⛈",
+    99: "⛈",
 }
 
 
@@ -90,11 +122,13 @@ def build_weather_report(raw_locations: str) -> str:
             forecast = fetch_forecast(location)
             location_blocks.append(format_location_forecast(location, forecast))
         except WeatherServiceError as error:
-            location_blocks.append(f"⚠️ {location_name}\n{error}")
+            location_blocks.append(
+                f"⚠️ <b>{escape_html(location_name)}</b>\n{escape_html(str(error))}"
+            )
 
     return "\n\n".join(
         [
-            "Погода на сегодня",
+            "Погода сегодня",
             *location_blocks,
             OPEN_METEO_ATTRIBUTION,
         ]
@@ -196,30 +230,24 @@ def format_location_forecast(
     daily = get_dict(forecast, "daily")
 
     current_temperature = format_temperature(current.get("temperature_2m"))
-    apparent_temperature = format_temperature(current.get("apparent_temperature"))
-    current_weather = format_weather_code(current.get("weather_code"))
-
-    min_temperature = format_temperature(first(daily.get("temperature_2m_min")))
     max_temperature = format_temperature(first(daily.get("temperature_2m_max")))
-    daily_weather = format_weather_code(first(daily.get("weather_code")))
+
+    daily_weather_code = first(daily.get("weather_code"))
+    daily_weather = format_weather_sentence(daily_weather_code)
+    weather_emoji = format_weather_emoji(daily_weather_code)
 
     precipitation_probability = first(daily.get("precipitation_probability_max"))
     precipitation_sum = first(daily.get("precipitation_sum"))
-    precipitation_line = format_precipitation_line(
-        precipitation_probability,
-        precipitation_sum,
-    )
-
-    wind_speed = format_number(current.get("wind_speed_10m"))
 
     return "\n".join(
         [
-            f"🌤 {format_location_name(location)}",
-            f"Сейчас: {current_temperature}, ощущается как "
-            f"{apparent_temperature}, {current_weather}",
-            f"Днём: {min_temperature}…{max_temperature}, {daily_weather}",
-            precipitation_line,
-            f"Ветер: {wind_speed} м/с",
+            f"{weather_emoji} <b>{format_location_name(location)}</b>",
+            f"Сейчас {current_temperature}, днём до {max_temperature}. "
+            f"{daily_weather}.",
+            format_precipitation_line(
+                precipitation_probability,
+                precipitation_sum,
+            ),
         ]
     )
 
@@ -241,16 +269,27 @@ def first(value: object) -> object:
 
 def format_location_name(location: dict[str, Any]) -> str:
     name = str(location.get("name") or "Населённый пункт")
-    admin1 = location.get("admin1")
-    country = location.get("country")
+    admin1 = normalize_location_part(location.get("admin1"))
+    country = normalize_location_part(location.get("country"))
 
-    if admin1:
-        return f"{name}, {admin1}"
+    if admin1 and admin1.casefold() != name.casefold():
+        return escape_html(f"{name} · {admin1}")
 
-    if country:
-        return f"{name}, {country}"
+    if country and country.casefold() != name.casefold():
+        return escape_html(f"{name} · {country}")
 
-    return name
+    return escape_html(name)
+
+
+def normalize_location_part(value: object) -> str:
+    if not value:
+        return ""
+
+    return str(value).strip().capitalize()
+
+
+def escape_html(value: object) -> str:
+    return html.escape(str(value), quote=False)
 
 
 def format_temperature(value: object) -> str:
@@ -268,17 +307,64 @@ def format_weather_code(value: object) -> str:
     return WEATHER_CODE_DESCRIPTIONS.get(weather_code, "погода неизвестна")
 
 
+def format_weather_sentence(value: object) -> str:
+    description = format_weather_code(value)
+
+    if description == "погода неизвестна":
+        return "Погода неизвестна"
+
+    return description.capitalize()
+
+
+def format_weather_emoji(value: object) -> str:
+    if value is None:
+        return "🌡"
+
+    weather_code = int(value)
+    return WEATHER_CODE_EMOJIS.get(weather_code, "🌡")
+
+
 def format_precipitation_line(
     precipitation_probability: object,
     precipitation_sum: object,
 ) -> str:
-    precipitation_sum_text = format_number(precipitation_sum)
+    probability = as_float(precipitation_probability)
+    precipitation = as_float(precipitation_sum)
 
-    if precipitation_probability is None:
-        return f"Осадки: {precipitation_sum_text} мм"
+    if is_precipitation_likely(probability, precipitation):
+        return "Осадки вероятны."
 
-    probability_text = f"{round(float(precipitation_probability))}%"
-    return f"Осадки: {probability_text}, {precipitation_sum_text} мм"
+    if is_precipitation_possible(probability, precipitation):
+        return "Осадки возможны."
+
+    return "Осадки маловероятны."
+
+
+def is_precipitation_likely(
+    probability: float | None,
+    precipitation: float | None,
+) -> bool:
+    if probability is not None and probability >= 70:
+        return True
+
+    return precipitation is not None and precipitation >= 5
+
+
+def is_precipitation_possible(
+    probability: float | None,
+    precipitation: float | None,
+) -> bool:
+    if probability is not None and probability >= 30:
+        return True
+
+    return precipitation is not None and precipitation > 0
+
+
+def as_float(value: object) -> float | None:
+    if value is None:
+        return None
+
+    return float(value)
 
 
 def format_number(value: object) -> str:

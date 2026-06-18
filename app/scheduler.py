@@ -96,6 +96,28 @@ def build_reminder_message(reminder_text: str, reminder_kind: str) -> str:
         return f"Не смог получить прогноз погоды.\n{error}"
 
 
+async def send_reminder_message(
+    bot: Bot,
+    chat_id: int,
+    reminder_text: str,
+    reminder_kind: str,
+) -> None:
+    message = build_reminder_message(reminder_text, reminder_kind)
+
+    if reminder_kind == REMINDER_KIND_WEATHER:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=message,
+            parse_mode="HTML",
+        )
+        return
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text=message,
+    )
+
+
 async def send_once_reminder(
     bot: Bot,
     chat_id: int,
@@ -103,9 +125,11 @@ async def send_once_reminder(
     reminder_kind: str,
     reminder_id: int,
 ) -> None:
-    await bot.send_message(
+    await send_reminder_message(
+        bot=bot,
         chat_id=chat_id,
-        text=build_reminder_message(reminder_text, reminder_kind),
+        reminder_text=reminder_text,
+        reminder_kind=reminder_kind,
     )
     mark_reminder_as_sent(reminder_id)
 
@@ -117,9 +141,11 @@ async def send_repeating_reminder(
     reminder_kind: str,
     reminder_id: int,
 ) -> None:
-    await bot.send_message(
+    await send_reminder_message(
+        bot=bot,
         chat_id=chat_id,
-        text=build_reminder_message(reminder_text, reminder_kind),
+        reminder_text=reminder_text,
+        reminder_kind=reminder_kind,
     )
 
 

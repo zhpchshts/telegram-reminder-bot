@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_TMA_LAUNCH_TOKEN_MAX_AGE_SECONDS = 24 * 60 * 60
+DEFAULT_TMA_LAUNCH_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 MAX_TMA_LAUNCH_TOKEN_LENGTH = 512
 TMA_LAUNCH_TOKEN_PATTERN = re.compile(r"^[A-Z2-7]+$")
 

@@ -379,20 +379,6 @@ ufw status verbose
 
 ## Важное правило
 
-Не запускать одновременно два экземпляра бота.
-
-Нельзя одновременно запускать Docker Compose runtime:
-
-```bash
-docker compose up -d
-```
-
-и старый systemd-сервис:
-
-```bash
-systemctl start telegram-reminder-bot.service
-```
-
-Оба процесса будут использовать один и тот же `BOT_TOKEN`, из-за чего Telegram long polling может конфликтовать.
+Не запускать одновременно два экземпляра бота с одним `BOT_TOKEN`.
 
 Production runtime — Docker Compose.

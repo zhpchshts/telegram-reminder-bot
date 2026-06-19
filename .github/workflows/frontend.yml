@@ -1,0 +1,29 @@
+name: Frontend checks
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "tma/**"
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - "tma/**"
+      - ".github/workflows/**"
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Check TMA JavaScript syntax
+        run: node --check tma/app.js

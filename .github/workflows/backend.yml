@@ -1,17 +1,31 @@
-name: Tests
+name: Backend checks
 
 on:
   push:
     branches:
       - main
-    paths-ignore:
-      - "**/*.md"
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "scripts/**"
+      - ".github/workflows/**"
   pull_request:
-    paths-ignore:
-      - "**/*.md"
-      
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "scripts/**"
+      - ".github/workflows/**"
+
 jobs:
-  checks:
+  backend:
     runs-on: ubuntu-latest
 
     env:
@@ -25,12 +39,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-          
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"         
-         
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -41,9 +50,6 @@ jobs:
 
       - name: Run Ruff
         run: ruff check .
-        
-      - name: Check TMA JavaScript syntax
-        run: node --check tma/app.js
 
       - name: Run tests
         run: pytest

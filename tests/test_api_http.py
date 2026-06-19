@@ -1455,9 +1455,9 @@ def test_tma_static_files_disable_cache() -> None:
 
 
 def test_non_tma_response_keeps_default_cache_headers() -> None:
-    response = TestClient(app).get("/health")
+    response = TestClient(app).get("/not-tma")
 
-    assert response.status_code == 200
+    assert response.status_code == 404
     assert "cache-control" not in response.headers
     assert "pragma" not in response.headers
     assert "expires" not in response.headers

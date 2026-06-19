@@ -1443,3 +1443,21 @@ def test_create_chat_reminder_endpoint_accepts_valid_tma_init_data(
     assert response_json["day_of_week"] is None
     assert response_json["month_week_number"] is None
     assert response_json["month_day"] is None
+
+
+def test_tma_static_files_disable_cache() -> None:
+    response = TestClient(app).get("/tma/")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["expires"] == "0"
+
+
+def test_non_tma_response_keeps_default_cache_headers() -> None:
+    response = TestClient(app).get("/health")
+
+    assert response.status_code == 200
+    assert "cache-control" not in response.headers
+    assert "pragma" not in response.headers
+    assert "expires" not in response.headers

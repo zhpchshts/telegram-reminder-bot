@@ -57,6 +57,22 @@ app = FastAPI(
     version="0.1.0",
 )
 
+TMA_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+@app.middleware("http")
+async def add_no_cache_headers_for_tma(request, call_next):
+    response = await call_next(request)
+
+    if request.url.path == "/tma" or request.url.path.startswith("/tma/"):
+        response.headers.update(TMA_NO_CACHE_HEADERS)
+
+    return response
+
 
 def configure_cors(
     fastapi_app: FastAPI,

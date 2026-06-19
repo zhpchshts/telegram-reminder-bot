@@ -26,6 +26,16 @@ from app.weather_service import WeatherServiceError, build_weather_report
 scheduler = AsyncIOScheduler()
 
 
+def ensure_timezone_aware(
+    value: datetime,
+    timezone_name: str | None = None,
+) -> datetime:
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=ZoneInfo(timezone_name or APP_TIMEZONE_NAME))
+
+    return value
+
+
 async def send_healthcheck(
     bot: Bot,
     chat_id: int,
@@ -274,14 +284,18 @@ def schedule_reminder_from_row(bot: Bot, reminder: sqlite3.Row) -> None:
 
 
 async def restore_active_reminders(bot: Bot) -> None:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     restored_count = 0
     missed_count = 0
 
     for reminder in get_all_active_reminders():
         reminder_data = build_reminder_read_data(reminder)
+        start_at = ensure_timezone_aware(
+            reminder_data.start_at,
+            reminder_data.timezone_name,
+        )
 
-        if reminder_data.schedule_type == "once" and reminder_data.start_at <= now:
+        if reminder_data.schedule_type == "once" and start_at <= now:
             mark_reminder_as_missed(reminder_data.id)
             missed_count += 1
             continue

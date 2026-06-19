@@ -2,16 +2,11 @@
 set -euo pipefail
 
 PROJECT_DIR="/opt/telegram-reminder-bot"
-OLD_SERVICE_NAME="telegram-reminder-bot.service"
 IMAGE_NAME="telegram-reminder-bot:latest"
 CONTAINER_NAME="telegram-reminder-bot"
 
 echo "Creating database backup..."
 /opt/backup-telegram-reminder-bot.sh
-
-echo "Ensuring old systemd service is stopped and disabled..."
-systemctl stop "$OLD_SERVICE_NAME" || true
-systemctl disable "$OLD_SERVICE_NAME" || true
 
 echo "Updating code..."
 cd "$PROJECT_DIR"

@@ -324,27 +324,23 @@ function handleError(error) {
     showStatus(buildMissingChatContextMessage(), "info");
     return;
   }
-
+  if (isExpiredLaunchTokenError(error)) {
+    showStatus(buildExpiredLaunchTokenMessage(), "info");
+    return;
+  }
   if (isStartAtPastError(error)) {
     hideStatus();
     showStartAtError(buildStartAtPastMessage());
     focusStartAtField();
     return;
   }
-
   if (isInvalidTimezoneError(error)) {
     showStatus(buildInvalidTimezoneMessage(), "error");
     elements.chatTimezoneName.focus();
     return;
   }
-
   showStatus(error.message, "error");
 }
-
-  if (isExpiredLaunchTokenError(error)) {
-    showStatus(buildExpiredLaunchTokenMessage(), "info");
-    return;
-  }
 
 function setBusy(isBusy) {
   state.isBusy = isBusy;

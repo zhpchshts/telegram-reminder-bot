@@ -273,6 +273,20 @@ function isMissingChatContextError(error) {
   return error.message === "Telegram init data start_param is required.";
 }
 
+function isExpiredLaunchTokenError(error) {
+  return error.message === "TMA launch token is expired.";
+}
+
+function buildExpiredLaunchTokenMessage() {
+  return [
+    "Ссылка на Mini App устарела.",
+    "",
+    "Открой Незабудку заново из Telegram: отправь /app в нужном чате и нажми свежую кнопку.",
+    "",
+    "Старые кнопки из истории чата могут перестать работать.",
+  ].join("\n");
+}
+
 function buildMissingChatContextMessage() {
   return [
     "Не удалось определить чат.",
@@ -326,6 +340,11 @@ function handleError(error) {
 
   showStatus(error.message, "error");
 }
+
+  if (isExpiredLaunchTokenError(error)) {
+    showStatus(buildExpiredLaunchTokenMessage(), "info");
+    return;
+  }
 
 function setBusy(isBusy) {
   state.isBusy = isBusy;

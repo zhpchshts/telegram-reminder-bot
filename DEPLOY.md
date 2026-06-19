@@ -14,6 +14,7 @@ Database: SQLite
 Bot mode: long polling
 HTTP API: FastAPI / Uvicorn
 Mini App static: /tma
+Mini App static mount: ./tma:/app/tma:ro
 Local API port: 127.0.0.1:8000
 ```
 
@@ -44,24 +45,14 @@ Backup script: /opt/backup-telegram-reminder-bot.sh
 Compose file: /opt/telegram-reminder-bot/docker-compose.yml
 ```
 
-SQLite-база хранится на хосте:
-
-```text
-/opt/telegram-reminder-bot/reminders.db
-```
-
-В контейнер она монтируется как:
-
-```text
-/data/reminders.db
-```
-
 ## Подключение к серверу
 
 ```bash
-ssh <user>@<server>
+ssh USER@SERVER
 cd /opt/telegram-reminder-bot
 ```
+
+`USER` и `SERVER` нужно заменить на актуальные значения из личных заметок.
 
 ## Быстрая диагностика
 
@@ -101,24 +92,20 @@ curl -s http://127.0.0.1:8000/health
 }
 ```
 
-`active_chats_count` и версии `tzdata` зависят от текущего состояния приложения.
-
 Проверить, что backend отдаёт Mini App:
 
 ```bash
 curl -I http://127.0.0.1:8000/tma/
 ```
 
-Ожидаемо: успешный `2xx`-ответ.
-
 Проверить публичный HTTPS-доступ:
 
 ```bash
-curl -s https://<public-domain>/health
-curl -I https://<public-domain>/tma/
+curl -s https://PUBLIC_DOMAIN/health
+curl -I https://PUBLIC_DOMAIN/tma/
 ```
 
-`<public-domain>` нужно заменить на актуальный production-домен.
+`PUBLIC_DOMAIN` нужно заменить на актуальный production-домен.
 
 ## Frontend-only deploy
 
@@ -143,7 +130,7 @@ git pull --ff-only
 
 ```bash
 curl -I http://127.0.0.1:8000/tma/
-curl -I https://<public-domain>/tma/
+curl -I https://PUBLIC_DOMAIN/tma/
 ```
 
 Контейнер перезапускать не нужно.
@@ -182,8 +169,8 @@ docker compose ps
 docker logs --tail 80 telegram-reminder-bot
 curl -s http://127.0.0.1:8000/health
 curl -I http://127.0.0.1:8000/tma/
-curl -s https://<public-domain>/health
-curl -I https://<public-domain>/tma/
+curl -s https://PUBLIC_DOMAIN/health
+curl -I https://PUBLIC_DOMAIN/tma/
 ```
 
 В Telegram проверить:
@@ -193,13 +180,7 @@ curl -I https://<public-domain>/tma/
 /list
 ```
 
-В Mini App проверить, что:
-
-1. приложение открывается;
-2. список напоминаний загружается;
-3. форма создания/редактирования работает;
-4. preview строится;
-5. сохранение изменений работает.
+В Mini App проверить, что приложение открывается, список напоминаний загружается, preview строится и сохранение изменений работает.
 
 Если менялась только документация, deploy не нужен.
 
@@ -214,21 +195,7 @@ cd /opt/telegram-reminder-bot
 docker compose restart
 ```
 
-Остановить приложение:
-
-```bash
-cd /opt/telegram-reminder-bot
-docker compose stop
-```
-
-Запустить приложение:
-
-```bash
-cd /opt/telegram-reminder-bot
-docker compose up -d
-```
-
-После ручного запуска или перезапуска проверить:
+После перезапуска проверить:
 
 ```bash
 docker compose ps
@@ -299,41 +266,17 @@ TMA_DIRECT_URL
 
 Не выводить содержимое `.env` в консоль и не отправлять его в чаты.
 
-Проверить права на `.env`:
-
-```bash
-ls -la /opt/telegram-reminder-bot/.env
-```
-
 ## Healthcheck-сообщения в Telegram
 
-Бот может отправлять периодические healthcheck-сообщения в чат, указанный через `.env`:
+Если `HEALTHCHECK_CHAT_ID` задан, бот отправляет периодические healthcheck-сообщения.
+
+Интервал задаётся через:
 
 ```text
-HEALTHCHECK_CHAT_ID
 HEALTHCHECK_INTERVAL_MINUTES
 ```
 
 Если `HEALTHCHECK_CHAT_ID` не задан, healthcheck-сообщения отключены.
-
-Ожидаемое сообщение содержит:
-
-```text
-✅ Бот работает.
-Время сервера UTC: ...
-Scheduler: running
-Запланированных jobs: ...
-Активных напоминаний в базе: ...
-Чатов с активными напоминаниями: ...
-```
-
-Для текущей модели:
-
-```text
-Запланированных jobs = активные напоминания + 1 healthcheck job
-```
-
-если healthcheck job включён.
 
 ## Troubleshooting
 

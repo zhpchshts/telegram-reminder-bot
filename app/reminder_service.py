@@ -7,7 +7,7 @@ from app.config import APP_TIMEZONE_NAME
 from app.constants import VALID_REMINDER_KINDS, VALID_WEEKDAYS
 from app.database import (
     create_reminder_in_db,
-    get_active_reminder_for_chat,
+    get_active_reminder_for_chat as get_active_reminder_from_db_for_chat,
     get_active_reminders_for_chat,
     get_chat_timezone,
     mark_reminder_as_deleted,
@@ -44,6 +44,21 @@ def set_chat_timezone_for_chat(*, chat_id: int, timezone_name: str) -> bool:
         timezone=timezone_name,
     )
     return True
+
+
+def get_active_reminder_for_chat(
+    *,
+    reminder_id: int,
+    chat_id: int,
+) -> ReminderReadData | None:
+    reminder = get_active_reminder_from_db_for_chat(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+    )
+    if not reminder:
+        return None
+
+    return build_reminder_read_data(reminder)
 
 
 def validate_positive_int(value: int | None, field_name: str) -> None:
@@ -213,7 +228,7 @@ def update_active_reminder_for_chat(
     if not updated_reminder:
         return None
 
-    return build_reminder_read_data(updated_reminder)
+    return updated_reminder
 
 
 def build_period_line_for_create_data(data: ReminderCreateData) -> str:

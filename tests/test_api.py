@@ -545,6 +545,25 @@ def test_update_tma_reminder_returns_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_calls: list[dict[str, object]] = []
+    current_reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Исходное напоминание",
+        schedule_type="every_days",
+        start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+    def fake_get_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> ReminderReadData | None:
+        if reminder_id != current_reminder.id or chat_id != current_reminder.chat_id:
+            return None
+
+        return current_reminder
 
     def fake_update_active_reminder_for_chat(
         *,
@@ -565,6 +584,7 @@ def test_update_tma_reminder_returns_response(
             id=reminder_id,
             chat_id=chat_id,
             reminder_text=data.reminder_text,
+            reminder_kind=data.reminder_kind,
             schedule_type=data.schedule_type,
             start_at=data.start_at,
             timezone_name=data.timezone_name,
@@ -575,6 +595,11 @@ def test_update_tma_reminder_returns_response(
             month_day=data.month_day,
         )
 
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        fake_get_active_reminder_for_chat,
+    )
     monkeypatch.setattr(
         api_module,
         "update_active_reminder_for_chat",
@@ -601,7 +626,6 @@ def test_update_tma_reminder_returns_response(
         timezone_name="Asia/Yekaterinburg",
         interval_days=3,
     )
-
     assert captured_calls == [
         {
             "bot": BOT,
@@ -842,6 +866,25 @@ def test_update_chat_reminder_returns_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_calls: list[dict[str, object]] = []
+    current_reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Исходное напоминание",
+        schedule_type="every_days",
+        start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+    def fake_get_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> ReminderReadData | None:
+        if reminder_id != current_reminder.id or chat_id != current_reminder.chat_id:
+            return None
+
+        return current_reminder
 
     def fake_update_active_reminder_for_chat(
         *,
@@ -862,6 +905,7 @@ def test_update_chat_reminder_returns_response(
             id=reminder_id,
             chat_id=chat_id,
             reminder_text=data.reminder_text,
+            reminder_kind=data.reminder_kind,
             schedule_type=data.schedule_type,
             start_at=data.start_at,
             timezone_name=data.timezone_name,
@@ -872,6 +916,11 @@ def test_update_chat_reminder_returns_response(
             month_day=data.month_day,
         )
 
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        fake_get_active_reminder_for_chat,
+    )
     monkeypatch.setattr(
         api_module,
         "update_active_reminder_for_chat",
@@ -898,7 +947,6 @@ def test_update_chat_reminder_returns_response(
         timezone_name="Asia/Yekaterinburg",
         interval_days=3,
     )
-
     assert captured_calls == [
         {
             "bot": BOT,
@@ -1131,23 +1179,10 @@ def test_delete_chat_reminder_rejects_unknown_reminder(
 def test_update_chat_reminder_rejects_unknown_reminder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_update_active_reminder_for_chat(
-        *,
-        bot: object,
-        reminder_id: int,
-        chat_id: int,
-        data: ReminderCreateData,
-    ) -> None:
-        assert bot is BOT
-        assert reminder_id == 42
-        assert chat_id == 100
-        assert data.reminder_text == "Проверить релиз"
-        return None
-
     monkeypatch.setattr(
         api_module,
-        "update_active_reminder_for_chat",
-        fake_update_active_reminder_for_chat,
+        "get_active_reminder_for_chat",
+        lambda **_kwargs: None,
     )
 
     with pytest.raises(HTTPException) as error:
@@ -1181,3 +1216,182 @@ def test_api_registers_initial_routes() -> None:
     assert "/api/tma/timezone" in route_paths
     assert "/api/tma/reminders/{reminder_id}" in route_paths
     assert "/api/tma/reminder-preview" in route_paths
+
+
+def test_update_tma_repeating_reminder_allows_past_unchanged_start_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    past_start_at = api_module.normalize_start_at(
+        datetime(2000, 6, 10, 12, 12),
+        "Asia/Yekaterinburg",
+    )
+    current_reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Исходное напоминание",
+        schedule_type="every_days",
+        start_at=past_start_at,
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+    captured_data: list[ReminderCreateData] = []
+
+    def fake_get_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> ReminderReadData | None:
+        if reminder_id != current_reminder.id or chat_id != current_reminder.chat_id:
+            return None
+
+        return current_reminder
+
+    def fake_update_active_reminder_for_chat(
+        *,
+        bot: object,
+        reminder_id: int,
+        chat_id: int,
+        data: ReminderCreateData,
+    ) -> ReminderReadData:
+        captured_data.append(data)
+        return ReminderReadData(
+            id=reminder_id,
+            chat_id=chat_id,
+            reminder_text=data.reminder_text,
+            reminder_kind=data.reminder_kind,
+            schedule_type=data.schedule_type,
+            start_at=data.start_at,
+            timezone_name=data.timezone_name,
+            interval_days=data.interval_days,
+        )
+
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        fake_get_active_reminder_for_chat,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "update_active_reminder_for_chat",
+        fake_update_active_reminder_for_chat,
+    )
+
+    result = update_tma_reminder(
+        reminder_id=42,
+        chat_id=100,
+        request=ReminderCreateRequest(
+            reminder_text="Обновлённое напоминание",
+            schedule_type="every_days",
+            start_at=datetime(2000, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=7,
+        ),
+        bot=BOT,
+    )
+
+    assert captured_data == [
+        ReminderCreateData(
+            reminder_text="Обновлённое напоминание",
+            schedule_type="every_days",
+            start_at=past_start_at,
+            timezone_name="Asia/Yekaterinburg",
+            interval_days=7,
+        )
+    ]
+    assert result.reminder_text == "Обновлённое напоминание"
+    assert result.start_at == past_start_at
+    assert result.interval_days == 7
+
+
+def test_update_tma_once_reminder_rejects_past_start_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Исходное напоминание",
+        schedule_type="once",
+        start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+        timezone_name="Asia/Yekaterinburg",
+    )
+
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        lambda **_kwargs: current_reminder,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        update_tma_reminder(
+            reminder_id=42,
+            chat_id=100,
+            request=ReminderCreateRequest(
+                reminder_text="Обновлённое напоминание",
+                schedule_type="once",
+                start_at=datetime(2000, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            bot=BOT,
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.detail == "start_at must be in the future."
+
+
+@pytest.mark.parametrize(
+    ("reminder_request", "expected_detail"),
+    [
+        (
+            ReminderCreateRequest(
+                reminder_text="Напоминание",
+                reminder_kind="weather",
+                schedule_type="every_days",
+                start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+                timezone_name="Asia/Yekaterinburg",
+                interval_days=3,
+            ),
+            "reminder_kind cannot be changed.",
+        ),
+        (
+            ReminderCreateRequest(
+                reminder_text="Напоминание",
+                schedule_type="once",
+                start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            "schedule_type cannot be changed.",
+        ),
+        (
+            ReminderCreateRequest(
+                reminder_text="Напоминание",
+                schedule_type="every_days",
+                start_at=datetime.fromisoformat("2099-06-11T12:12:00+05:00"),
+                timezone_name="Asia/Yekaterinburg",
+                interval_days=3,
+            ),
+            "start_at cannot be changed for repeating reminders.",
+        ),
+    ],
+)
+def test_validate_reminder_update_data_rejects_immutable_fields(
+    reminder_request: ReminderCreateRequest,
+    expected_detail: str,
+) -> None:
+    current_reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Напоминание",
+        schedule_type="every_days",
+        start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+        timezone_name="Asia/Yekaterinburg",
+        interval_days=3,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        api_module.validate_reminder_update_data(
+            current_reminder=current_reminder,
+            request=reminder_request,
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.detail == expected_detail

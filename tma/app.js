@@ -193,6 +193,31 @@ function getStartAtFieldElements() {
   return [elements.startAt, elements.startDate, elements.startTime];
 }
 
+function isEditMode() {
+  return Boolean(elements.reminderId.value);
+}
+
+function isRepeatingReminder() {
+  return elements.scheduleType.value !== "once";
+}
+
+function updateFormEditability() {
+  const isEdit = isEditMode();
+  const isRepeatingEdit = isEdit && isRepeatingReminder();
+
+  if (elements.reminderKind) {
+    elements.reminderKind.disabled = isEdit;
+  }
+
+  elements.scheduleType.disabled = isEdit;
+
+  for (const element of [elements.startDate, elements.startTime]) {
+    if (element) {
+      element.disabled = isRepeatingEdit;
+    }
+  }
+}
+
 function showStatus(message, type = "success") {
   elements.status.textContent = message;
   elements.status.className = `status ${type}`;
@@ -503,8 +528,15 @@ function renderContext() {
 }
 
 function renderStartAtHint() {
-  const timezoneName = elements.timezoneName.value || state.context?.timezone_name;
-  elements.startAtHint.textContent = `Таймзона: ${timezoneName}`;
+  const timezoneName =
+    elements.timezoneName.value || state.context?.timezone_name;
+
+  const baseHint = `Таймзона: ${timezoneName}`;
+
+  elements.startAtHint.textContent =
+    isEditMode() && isRepeatingReminder()
+      ? `${baseHint}. Первое срабатывание нельзя изменить у повторяющегося напоминания.`
+      : baseHint;
 }
 
 function getActiveTimezoneLabel(timezoneName) {
@@ -933,6 +965,7 @@ function startEdit(reminder) {
   hidePreview();
   clearFieldErrors();
   updateConditionalFields();
+  updateFormEditability();
   renderStartAtHint();
   showStatus(
     "Редактируешь напоминание.\nВнеси изменения и нажми «Сохранить изменения».",
@@ -954,6 +987,7 @@ function resetForm() {
   hidePreview();
   clearFieldErrors();
   updateConditionalFields();
+  updateFormEditability();
   renderStartAtHint();
 }
 
@@ -1226,6 +1260,8 @@ on(elements.startDate, "input", clearStartAtErrorAndSync);
 on(elements.startTime, "input", clearStartAtErrorAndSync);
 on(elements.scheduleType, "change", () => {
   updateConditionalFields();
+  updateFormEditability();
+  renderStartAtHint();
   hidePreview();
 });
 on(elements.reminderKind, "change", () => {
@@ -1244,4 +1280,5 @@ onSubmit(elements.timezoneForm, saveTimezone);
 
 initTheme();
 updateReminderKindFields();
+updateFormEditability();
 window.setTimeout(() => handleAsync(loadBootstrap), 0);

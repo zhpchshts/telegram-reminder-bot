@@ -29,6 +29,7 @@ from app.api_models import (
     TmaContextResponse,
     build_created_reminder_response,
     build_reminder_create_data,
+    normalize_start_at,
     build_reminder_form_options_response,
     build_reminder_preview_response,
     build_reminder_response,
@@ -37,10 +38,11 @@ from app.api_models import (
 )
 from app.config import API_ALLOWED_ORIGINS
 from app.database import count_active_chats
-from app.reminder_models import ReminderCreateData
+from app.reminder_models import ReminderCreateData, ReminderReadData
 from app.reminder_service import (
     create_scheduled_reminder,
     delete_active_reminder_for_chat,
+    get_active_reminder_for_chat,
     get_chat_timezone_name,
     list_active_reminders_for_chat,
     set_chat_timezone_for_chat,
@@ -128,6 +130,37 @@ def is_start_at_in_past(data: ReminderCreateData) -> bool:
         start_at = start_at.replace(tzinfo=timezone)
 
     return start_at <= now
+
+
+def validate_reminder_update_data(
+    *,
+    current_reminder: ReminderReadData,
+    request: ReminderCreateRequest,
+) -> None:
+    if request.reminder_kind != current_reminder.reminder_kind:
+        raise HTTPException(
+            status_code=400,
+            detail="reminder_kind cannot be changed.",
+        )
+
+    if request.schedule_type != current_reminder.schedule_type:
+        raise HTTPException(
+            status_code=400,
+            detail="schedule_type cannot be changed.",
+        )
+
+    if current_reminder.schedule_type == "once":
+        return
+
+    requested_start_at = normalize_start_at(
+        request.start_at,
+        request.timezone_name,
+    )
+    if requested_start_at != current_reminder.start_at:
+        raise HTTPException(
+            status_code=400,
+            detail="start_at cannot be changed for repeating reminders.",
+        )
 
 
 def get_tma_chat_type(
@@ -411,6 +444,8 @@ def delete_chat_reminder(
 
 def build_validated_reminder_create_data(
     request: ReminderCreateRequest,
+    *,
+    allow_past_start_at: bool = False,
 ) -> ReminderCreateData:
     try:
         data = build_reminder_create_data(request)
@@ -420,7 +455,7 @@ def build_validated_reminder_create_data(
             detail="Invalid timezone name.",
         ) from error
 
-    if is_start_at_in_past(data):
+    if not allow_past_start_at and is_start_at_in_past(data):
         raise HTTPException(
             status_code=400,
             detail="start_at must be in the future.",
@@ -471,7 +506,24 @@ def update_reminder_for_chat(
     chat_id: int,
     bot: Bot,
 ) -> ReminderResponse:
-    data = build_validated_reminder_create_data(request)
+    current_reminder = get_active_reminder_for_chat(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+    )
+    if current_reminder is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Reminder not found.",
+        )
+
+    data = build_validated_reminder_create_data(
+        request,
+        allow_past_start_at=current_reminder.schedule_type != "once",
+    )
+    validate_reminder_update_data(
+        current_reminder=current_reminder,
+        request=request,
+    )
 
     try:
         reminder = update_active_reminder_for_chat(

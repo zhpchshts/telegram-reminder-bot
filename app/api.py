@@ -22,6 +22,7 @@ from app.api_models import (
     ChatTimezoneUpdateRequest,
     DeleteReminderResponse,
     ReminderCreateRequest,
+    ReminderPreviewRequest,
     ReminderFormOptionsResponse,
     ReminderPreviewResponse,
     ReminderResponse,
@@ -49,6 +50,8 @@ from app.reminder_service import (
     update_active_reminder_for_chat,
     validate_reminder_create_data,
 )
+from app.schedule_calculations import get_yearly_datetime_on_or_after
+from app.scheduler import get_next_run_at_for_schedule
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TMA_STATIC_DIR = PROJECT_ROOT / "tma"
@@ -149,18 +152,89 @@ def validate_reminder_update_data(
             detail="schedule_type cannot be changed.",
         )
 
-    if current_reminder.schedule_type == "once":
-        return
 
+def build_repeating_reminder_update_request(
+    *,
+    current_reminder: ReminderReadData,
+    request: ReminderCreateRequest,
+) -> ReminderCreateRequest:
     requested_start_at = normalize_start_at(
         request.start_at,
         request.timezone_name,
     )
-    if requested_start_at != current_reminder.start_at:
+    current_start_at = normalize_start_at(
+        current_reminder.start_at,
+        request.timezone_name,
+    )
+
+    if current_reminder.schedule_type == "yearly_date":
+        schedule_start_at = get_yearly_datetime_on_or_after(
+            selected_start_at=requested_start_at,
+            lower_bound=current_start_at,
+        )
+    else:
+        schedule_start_at = datetime.combine(
+            current_start_at.date(),
+            requested_start_at.timetz(),
+        )
+
+    return ReminderCreateRequest(
+        reminder_text=request.reminder_text,
+        reminder_kind=request.reminder_kind,
+        schedule_type=request.schedule_type,
+        start_at=schedule_start_at,
+        timezone_name=request.timezone_name,
+        interval_days=request.interval_days,
+        interval_weeks=request.interval_weeks,
+        day_of_week=request.day_of_week,
+        month_week_number=request.month_week_number,
+        month_day=request.month_day,
+    )
+
+
+def build_validated_reminder_update_data(
+    *,
+    current_reminder: ReminderReadData,
+    request: ReminderCreateRequest,
+) -> ReminderCreateData:
+    validate_reminder_update_data(
+        current_reminder=current_reminder,
+        request=request,
+    )
+
+    if current_reminder.schedule_type == "once":
+        return build_validated_reminder_create_data(request)
+
+    try:
+        repeating_request = build_repeating_reminder_update_request(
+            current_reminder=current_reminder,
+            request=request,
+        )
+    except ZoneInfoNotFoundError as error:
         raise HTTPException(
             status_code=400,
-            detail="start_at cannot be changed for repeating reminders.",
-        )
+            detail="Invalid timezone name.",
+        ) from error
+
+    return build_validated_reminder_create_data(
+        repeating_request,
+        allow_past_start_at=True,
+    )
+
+
+def get_next_run_at_for_reminder_data(
+    data: ReminderCreateData,
+) -> datetime | None:
+    return get_next_run_at_for_schedule(
+        schedule_type=data.schedule_type,
+        start_at=data.start_at,
+        interval_days=data.interval_days,
+        interval_weeks=data.interval_weeks,
+        day_of_week=data.day_of_week,
+        month_week_number=data.month_week_number,
+        month_day=data.month_day,
+        timezone_name=data.timezone_name,
+    )
 
 
 def get_tma_chat_type(
@@ -248,14 +322,34 @@ def get_tma_bootstrap(
 @app.post(
     "/api/tma/reminder-preview",
     response_model=ReminderPreviewResponse,
+    response_model_exclude_unset=True,
 )
 def preview_tma_reminder(
-    request: ReminderCreateRequest,
+    request: ReminderPreviewRequest,
     _chat_id: int = Depends(get_tma_chat_id),
 ) -> ReminderPreviewResponse:
-    data = build_validated_reminder_create_data(request)
+    if request.reminder_id is None:
+        data = build_validated_reminder_create_data(request)
+        return build_reminder_preview_response(data)
 
-    return build_reminder_preview_response(data)
+    current_reminder = get_active_reminder_for_chat(
+        reminder_id=request.reminder_id,
+        chat_id=_chat_id,
+    )
+    if current_reminder is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Reminder not found.",
+        )
+
+    data = build_validated_reminder_update_data(
+        current_reminder=current_reminder,
+        request=request,
+    )
+    return build_reminder_preview_response(
+        data,
+        next_run_at=get_next_run_at_for_reminder_data(data),
+    )
 
 
 @app.get(
@@ -516,11 +610,7 @@ def update_reminder_for_chat(
             detail="Reminder not found.",
         )
 
-    data = build_validated_reminder_create_data(
-        request,
-        allow_past_start_at=current_reminder.schedule_type != "once",
-    )
-    validate_reminder_update_data(
+    data = build_validated_reminder_update_data(
         current_reminder=current_reminder,
         request=request,
     )

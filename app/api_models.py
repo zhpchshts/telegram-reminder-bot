@@ -40,6 +40,10 @@ class ReminderCreateRequest(BaseModel):
     month_day: int | None = None
 
 
+class ReminderPreviewRequest(ReminderCreateRequest):
+    reminder_id: int | None = None
+
+
 class ReminderPreviewResponse(BaseModel):
     reminder_text: str
     reminder_kind: str = REMINDER_KIND_TEXT
@@ -48,6 +52,7 @@ class ReminderPreviewResponse(BaseModel):
     timezone_name: str
     is_repeating: bool
     period: str | None = None
+    next_run_at: datetime | None = None
 
 
 class ChatTimezoneResponse(BaseModel):
@@ -204,26 +209,37 @@ def build_reminder_period(
 
 def build_reminder_preview_response(
     data: ReminderCreateData,
+    *,
+    next_run_at: datetime | None = None,
 ) -> ReminderPreviewResponse:
-    return ReminderPreviewResponse(
-        reminder_text=data.reminder_text,
-        reminder_kind=data.reminder_kind,
-        schedule_type=data.schedule_type,
-        start_at=data.start_at,
-        timezone_name=data.timezone_name,
-        is_repeating=data.schedule_type != "once",
-        period=build_reminder_period(
-            schedule_type=data.schedule_type,
-            interval_days=data.interval_days,
-            interval_weeks=data.interval_weeks,
-            day_of_week=data.day_of_week,
-            month_week_number=data.month_week_number,
-            month_day=data.month_day,
-            start_at=data.start_at if data.schedule_type == "yearly_date" else None,
-        )
-        if data.schedule_type != "once"
-        else None,
-    )
+    response_data = {
+        "reminder_text": data.reminder_text,
+        "reminder_kind": data.reminder_kind,
+        "schedule_type": data.schedule_type,
+        "start_at": data.start_at,
+        "timezone_name": data.timezone_name,
+        "is_repeating": data.schedule_type != "once",
+        "period": (
+            build_reminder_period(
+                schedule_type=data.schedule_type,
+                interval_days=data.interval_days,
+                interval_weeks=data.interval_weeks,
+                day_of_week=data.day_of_week,
+                month_week_number=data.month_week_number,
+                month_day=data.month_day,
+                start_at=(
+                    data.start_at if data.schedule_type == "yearly_date" else None
+                ),
+            )
+            if data.schedule_type != "once"
+            else None
+        ),
+    }
+
+    if next_run_at is not None:
+        response_data["next_run_at"] = next_run_at
+
+    return ReminderPreviewResponse(**response_data)
 
 
 def build_created_reminder_response(

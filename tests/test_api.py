@@ -35,6 +35,7 @@ from app.api_models import (
     ChatTimezoneUpdateRequest,
     DeleteReminderResponse,
     ReminderCreateRequest,
+    ReminderPreviewRequest,
     ReminderFormOptionsResponse,
     ReminderPreviewResponse,
     ReminderResponse,
@@ -299,7 +300,7 @@ def test_get_tma_reminders_returns_response_models(
 
 def test_preview_tma_reminder_returns_normalized_preview() -> None:
     result = preview_tma_reminder(
-        request=ReminderCreateRequest(
+        request=ReminderPreviewRequest(
             reminder_text="Проверить релиз",
             schedule_type="every_days",
             start_at=datetime(2099, 6, 10, 12, 12),
@@ -326,7 +327,7 @@ def test_preview_tma_reminder_accepts_weekly_weekday_value_from_form_options() -
     )
 
     result = preview_tma_reminder(
-        request=ReminderCreateRequest(
+        request=ReminderPreviewRequest(
             reminder_text="Проверить фильтры",
             schedule_type="every_week",
             start_at=datetime(2099, 6, 10, 12, 12),
@@ -350,7 +351,7 @@ def test_preview_tma_reminder_accepts_monthly_weekday_value_from_form_options() 
     )
 
     result = preview_tma_reminder(
-        request=ReminderCreateRequest(
+        request=ReminderPreviewRequest(
             reminder_text="Проверить фильтры",
             schedule_type="monthly_weekday",
             start_at=datetime(2099, 6, 10, 12, 12),
@@ -370,7 +371,7 @@ def test_preview_tma_reminder_accepts_monthly_weekday_value_from_form_options() 
 
 def test_preview_tma_reminder_normalizes_monthly_day_start_at() -> None:
     result = preview_tma_reminder(
-        request=ReminderCreateRequest(
+        request=ReminderPreviewRequest(
             reminder_text="Проверить фильтры",
             schedule_type="monthly_day",
             start_at=datetime(2099, 6, 16, 12, 12),
@@ -391,7 +392,7 @@ def test_preview_tma_reminder_normalizes_monthly_weekday_to_next_month() -> None
     friday = next(weekday for weekday in options.weekdays if weekday.label == "Пятница")
 
     result = preview_tma_reminder(
-        request=ReminderCreateRequest(
+        request=ReminderPreviewRequest(
             reminder_text="Проверить фильтры",
             schedule_type="monthly_weekday",
             start_at=datetime(2099, 6, 16, 12, 12),
@@ -1346,7 +1347,9 @@ def test_update_tma_once_reminder_rejects_past_start_at(
                 reminder_text="Напоминание",
                 reminder_kind="weather",
                 schedule_type="every_days",
-                start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+                start_at=datetime.fromisoformat(
+                    "2099-06-10T12:12:00+05:00",
+                ),
                 timezone_name="Asia/Yekaterinburg",
                 interval_days=3,
             ),
@@ -1356,24 +1359,16 @@ def test_update_tma_once_reminder_rejects_past_start_at(
             ReminderCreateRequest(
                 reminder_text="Напоминание",
                 schedule_type="once",
-                start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
+                start_at=datetime.fromisoformat(
+                    "2099-06-10T12:12:00+05:00",
+                ),
                 timezone_name="Asia/Yekaterinburg",
             ),
             "schedule_type cannot be changed.",
         ),
-        (
-            ReminderCreateRequest(
-                reminder_text="Напоминание",
-                schedule_type="every_days",
-                start_at=datetime.fromisoformat("2099-06-11T12:12:00+05:00"),
-                timezone_name="Asia/Yekaterinburg",
-                interval_days=3,
-            ),
-            "start_at cannot be changed for repeating reminders.",
-        ),
     ],
 )
-def test_validate_reminder_update_data_rejects_immutable_fields(
+def test_validate_reminder_update_data_rejects_changed_kind_or_schedule_type(
     reminder_request: ReminderCreateRequest,
     expected_detail: str,
 ) -> None:

@@ -167,38 +167,75 @@
               </select>
             </label>
 
-            <div class="field">
-              <span>Первое срабатывание</span>
-              <input id="start-at" name="start_at" type="hidden" />
+			<div id="start-at-field" class="field">
+			  <span id="start-at-label">Первое срабатывание</span>
 
-              <div class="start-at-grid">
-                <label class="field compact-field">
-                  <span class="sr-only">Дата первого срабатывания</span>
-                  <input
-                    id="start-date"
-                    name="start_date"
-                    type="date"
-                    aria-label="Дата первого срабатывания"
-                    required
-                  />
-                </label>
+			  <input id="start-at" name="start_at" type="hidden" />
+              <div id="yearly-date-field" class="field" hidden>
+                <span>Дата ежегодного уведомления</span>
 
-                <label class="field compact-field">
-                  <span class="sr-only">Время первого срабатывания</span>
-                  <input
-                    id="start-time"
-                    name="start_time"
-                    type="time"
-                    aria-label="Время первого срабатывания"
-                    required
-                  />
-                </label>
+                <div class="start-at-grid">
+                  <label class="field compact-field">
+                    <span class="sr-only">Месяц ежегодного уведомления</span>
+                    <select
+                      id="yearly-month"
+                      name="yearly_month"
+                      aria-label="Месяц ежегодного уведомления"
+                    ></select>
+                  </label>
+
+                  <label class="field compact-field">
+                    <span class="sr-only">День ежегодного уведомления</span>
+                    <select
+                      id="yearly-day"
+                      name="yearly_day"
+                      aria-label="День ежегодного уведомления"
+                    ></select>
+                  </label>
+                </div>
               </div>
+			  <div id="start-at-fields" class="start-at-grid">
+				<label id="start-date-field" class="field compact-field">
+				  <span id="start-date-label" class="sr-only">
+					Дата первого срабатывания
+				  </span>
 
-              <span id="start-at-hint" class="field-hint"></span>
+				  <input
+					id="start-date"
+					name="start_date"
+					type="date"
+					aria-labelledby="start-date-label"
+					required
+				  />
+				</label>
 
-              <span id="start-at-error" class="field-error" hidden></span>
-            </div>
+				<label id="start-time-field" class="field compact-field">
+				  <span id="start-time-label" class="sr-only">
+					Время первого срабатывания
+				  </span>
+
+				  <input
+					id="start-time"
+					name="start_time"
+					type="time"
+					aria-labelledby="start-time-label"
+					required
+				  />
+				</label>
+			  </div>
+
+			  <span id="start-at-hint" class="field-hint"></span>
+			  <span id="start-at-error" class="field-error" hidden></span>
+			</div>
+
+			<div id="next-notification-field" class="field" hidden>
+			  <span>Следующее уведомление</span>
+			  <span
+				id="next-notification-value"
+				class="field-hint"
+				aria-live="polite"
+			  ></span>
+			</div>
 
             <div id="interval-days-field" class="field conditional-field">
               <label>

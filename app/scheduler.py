@@ -5,6 +5,9 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import APP_TIMEZONE_NAME
 from app.constants import (
@@ -159,6 +162,150 @@ async def send_repeating_reminder(
     )
 
 
+def build_reminder_trigger_kwargs(
+    *,
+    schedule_type: str,
+    start_at: datetime,
+    interval_days: int | None = None,
+    interval_weeks: int | None = None,
+    day_of_week: str | None = None,
+    month_week_number: int | None = None,
+    month_day: int | None = None,
+    timezone_name: str | None = None,
+) -> dict[str, Any]:
+    job_timezone = ZoneInfo(timezone_name or APP_TIMEZONE_NAME)
+
+    if schedule_type == "once":
+        return {
+            "trigger": "date",
+            "run_date": start_at,
+            "timezone": job_timezone,
+        }
+
+    if schedule_type == "every_days":
+        return {
+            "trigger": "interval",
+            "days": interval_days,
+            "start_date": start_at,
+            "timezone": job_timezone,
+        }
+
+    if schedule_type == "every_week":
+        return {
+            "trigger": "interval",
+            "weeks": interval_weeks,
+            "start_date": start_at,
+            "timezone": job_timezone,
+        }
+
+    if schedule_type == "monthly_weekday":
+        if month_week_number is None or day_of_week is None:
+            raise ValueError("month_week_number and day_of_week are required.")
+
+        return {
+            "trigger": "cron",
+            "day": get_month_day_range_for_week_number(month_week_number),
+            "day_of_week": APSCHEDULER_WEEKDAYS[day_of_week],
+            "hour": start_at.hour,
+            "minute": start_at.minute,
+            "start_date": start_at,
+            "timezone": job_timezone,
+        }
+
+    if schedule_type == "monthly_day":
+        if month_day is None:
+            raise ValueError("month_day is required.")
+
+        return {
+            "trigger": "cron",
+            "day": month_day,
+            "hour": start_at.hour,
+            "minute": start_at.minute,
+            "start_date": start_at,
+            "timezone": job_timezone,
+        }
+
+    if schedule_type == "yearly_date":
+        return {
+            "trigger": "cron",
+            "month": start_at.month,
+            "day": start_at.day,
+            "hour": start_at.hour,
+            "minute": start_at.minute,
+            "start_date": start_at,
+            "timezone": job_timezone,
+        }
+
+    raise ValueError(f"Unknown schedule_type: {schedule_type}")
+
+
+def build_reminder_trigger(
+    *,
+    schedule_type: str,
+    start_at: datetime,
+    interval_days: int | None = None,
+    interval_weeks: int | None = None,
+    day_of_week: str | None = None,
+    month_week_number: int | None = None,
+    month_day: int | None = None,
+    timezone_name: str | None = None,
+):
+    trigger_kwargs = build_reminder_trigger_kwargs(
+        schedule_type=schedule_type,
+        start_at=start_at,
+        interval_days=interval_days,
+        interval_weeks=interval_weeks,
+        day_of_week=day_of_week,
+        month_week_number=month_week_number,
+        month_day=month_day,
+        timezone_name=timezone_name,
+    )
+    trigger_type = trigger_kwargs.pop("trigger")
+
+    if trigger_type == "date":
+        return DateTrigger(**trigger_kwargs)
+
+    if trigger_type == "interval":
+        return IntervalTrigger(**trigger_kwargs)
+
+    return CronTrigger(**trigger_kwargs)
+
+
+def get_next_run_at_for_schedule(
+    *,
+    schedule_type: str,
+    start_at: datetime,
+    interval_days: int | None = None,
+    interval_weeks: int | None = None,
+    day_of_week: str | None = None,
+    month_week_number: int | None = None,
+    month_day: int | None = None,
+    timezone_name: str | None = None,
+    now: datetime | None = None,
+) -> datetime | None:
+    job_timezone = ZoneInfo(timezone_name or APP_TIMEZONE_NAME)
+
+    if now is None:
+        current_time = datetime.now(job_timezone)
+    elif now.tzinfo is None:
+        current_time = now.replace(tzinfo=job_timezone)
+    else:
+        current_time = now.astimezone(job_timezone)
+
+    trigger = build_reminder_trigger(
+        schedule_type=schedule_type,
+        start_at=start_at,
+        interval_days=interval_days,
+        interval_weeks=interval_weeks,
+        day_of_week=day_of_week,
+        month_week_number=month_week_number,
+        month_day=month_day,
+        timezone_name=timezone_name,
+    )
+
+    return trigger.get_next_fire_time(None, current_time)
+
+
 def schedule_reminder(
     *,
     bot: Bot,
@@ -175,93 +322,30 @@ def schedule_reminder(
     month_day: int | None = None,
     timezone_name: str | None = None,
 ) -> None:
-    job_timezone = ZoneInfo(timezone_name or APP_TIMEZONE_NAME)
     job_kwargs: dict[str, Any] = {
         "args": [bot, chat_id, reminder_text, reminder_kind, reminder_id],
         "id": str(reminder_id),
         "replace_existing": True,
     }
+    trigger_kwargs = build_reminder_trigger_kwargs(
+        schedule_type=schedule_type,
+        start_at=start_at,
+        interval_days=interval_days,
+        interval_weeks=interval_weeks,
+        day_of_week=day_of_week,
+        month_week_number=month_week_number,
+        month_day=month_day,
+        timezone_name=timezone_name,
+    )
+    reminder_function = (
+        send_once_reminder if schedule_type == "once" else send_repeating_reminder
+    )
 
-    if schedule_type == "once":
-        scheduler.add_job(
-            send_once_reminder,
-            trigger="date",
-            run_date=start_at,
-            timezone=job_timezone,
-            **job_kwargs,
-        )
-        return
-
-    if schedule_type == "every_days":
-        scheduler.add_job(
-            send_repeating_reminder,
-            trigger="interval",
-            days=interval_days,
-            start_date=start_at,
-            timezone=job_timezone,
-            **job_kwargs,
-        )
-        return
-
-    if schedule_type == "every_week":
-        scheduler.add_job(
-            send_repeating_reminder,
-            trigger="interval",
-            weeks=interval_weeks,
-            start_date=start_at,
-            timezone=job_timezone,
-            **job_kwargs,
-        )
-        return
-
-    if schedule_type == "monthly_weekday":
-        if month_week_number is None or day_of_week is None:
-            raise ValueError("month_week_number and day_of_week are required.")
-
-        scheduler.add_job(
-            send_repeating_reminder,
-            trigger="cron",
-            day=get_month_day_range_for_week_number(month_week_number),
-            day_of_week=APSCHEDULER_WEEKDAYS[day_of_week],
-            hour=start_at.hour,
-            minute=start_at.minute,
-            start_date=start_at,
-            timezone=job_timezone,
-            **job_kwargs,
-        )
-        return
-
-    if schedule_type == "monthly_day":
-        if month_day is None:
-            raise ValueError("month_day is required.")
-
-        scheduler.add_job(
-            send_repeating_reminder,
-            trigger="cron",
-            day=month_day,
-            hour=start_at.hour,
-            minute=start_at.minute,
-            start_date=start_at,
-            timezone=job_timezone,
-            **job_kwargs,
-        )
-        return
-
-    if schedule_type == "yearly_date":
-        scheduler.add_job(
-            send_repeating_reminder,
-            trigger="cron",
-            month=start_at.month,
-            day=start_at.day,
-            hour=start_at.hour,
-            minute=start_at.minute,
-            start_date=start_at,
-            timezone=job_timezone,
-            **job_kwargs,
-        )
-        return
-
-    raise ValueError(f"Unknown schedule_type: {schedule_type}")
+    scheduler.add_job(
+        reminder_function,
+        **trigger_kwargs,
+        **job_kwargs,
+    )
 
 
 def schedule_reminder_from_row(bot: Bot, reminder: sqlite3.Row) -> None:

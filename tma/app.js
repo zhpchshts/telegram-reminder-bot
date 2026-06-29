@@ -12,6 +12,22 @@ const TELEGRAM_INIT_DATA_QUERY_PARAM = "tgWebAppData";
 const SUPPORTED_THEMES = new Set(["dark", "light"]);
 const REMINDER_KIND_TEXT = "text";
 const REMINDER_KIND_WEATHER = "weather";
+const YEARLY_DATE_REFERENCE_YEAR = 2000;
+
+const YEARLY_MONTHS = [
+  { value: 1, label: "Январь" },
+  { value: 2, label: "Февраль" },
+  { value: 3, label: "Март" },
+  { value: 4, label: "Апрель" },
+  { value: 5, label: "Май" },
+  { value: 6, label: "Июнь" },
+  { value: 7, label: "Июль" },
+  { value: 8, label: "Август" },
+  { value: 9, label: "Сентябрь" },
+  { value: 10, label: "Октябрь" },
+  { value: 11, label: "Ноябрь" },
+  { value: 12, label: "Декабрь" },
+];
 
 function getTelegramLocationParams() {
   const hash = window.location.hash.startsWith("#")
@@ -167,10 +183,20 @@ const elements = {
   reminderText: byId("reminder-text"),
   scheduleType: byId("schedule-type"),
   startAt: byId("start-at"),
+  startAtLabel: byId("start-at-label"),
+  startDateField: byId("start-date-field"),
   startDate: byId("start-date"),
+  startDateLabel: byId("start-date-label"),
+  yearlyDateField: byId("yearly-date-field"),
+  yearlyMonth: byId("yearly-month"),
+  yearlyDay: byId("yearly-day"),
+  startTimeField: byId("start-time-field"),
   startTime: byId("start-time"),
+  startTimeLabel: byId("start-time-label"),
   startAtHint: byId("start-at-hint"),
   startAtError: byId("start-at-error"),
+  nextNotificationField: byId("next-notification-field"),
+  nextNotificationValue: byId("next-notification-value"),
   timezoneName: byId("timezone-name"),
   intervalDays: byId("interval-days"),
   intervalWeeks: byId("interval-weeks"),
@@ -190,7 +216,13 @@ const elements = {
 };
 
 function getStartAtFieldElements() {
-  return [elements.startAt, elements.startDate, elements.startTime];
+  return [
+    elements.startAt,
+    elements.startDate,
+    elements.startTime,
+    elements.yearlyMonth,
+    elements.yearlyDay,
+  ];
 }
 
 function isEditMode() {
@@ -201,9 +233,75 @@ function isRepeatingReminder() {
   return elements.scheduleType.value !== "once";
 }
 
+function isRepeatingEdit() {
+  return isEditMode() && isRepeatingReminder();
+}
+
+function isYearlyDateReminder() {
+  return elements.scheduleType.value === "yearly_date";
+}
+
+function setFieldLabelVisibility(label, isVisible) {
+  label?.classList.toggle("sr-only", !isVisible);
+}
+
+function updateStartAtFields() {
+  const isRecurringEdit = isRepeatingEdit();
+  const shouldShowYearlyDate =
+    isRecurringEdit && isYearlyDateReminder();
+
+  if (elements.startAtLabel) {
+    elements.startAtLabel.hidden = isRecurringEdit;
+  }
+
+  if (elements.startDateField) {
+    elements.startDateField.hidden = isRecurringEdit;
+  }
+
+  if (elements.startDate) {
+    elements.startDate.disabled = isRecurringEdit;
+  }
+
+  if (elements.yearlyDateField) {
+    elements.yearlyDateField.hidden = !shouldShowYearlyDate;
+  }
+
+  if (elements.yearlyMonth) {
+    elements.yearlyMonth.disabled = !shouldShowYearlyDate;
+  }
+
+  if (elements.yearlyDay) {
+    elements.yearlyDay.disabled = !shouldShowYearlyDate;
+  }
+
+  if (elements.startTimeField) {
+    elements.startTimeField.hidden = false;
+  }
+
+  if (elements.startTime) {
+    elements.startTime.disabled = false;
+  }
+
+  if (elements.startDateLabel) {
+    elements.startDateLabel.textContent = "Дата первого срабатывания";
+  }
+
+  if (elements.startTimeLabel) {
+    elements.startTimeLabel.textContent = isRecurringEdit
+      ? "Время уведомления"
+      : "Время первого срабатывания";
+  }
+
+  setFieldLabelVisibility(elements.startDateLabel, false);
+  setFieldLabelVisibility(elements.startTimeLabel, isRecurringEdit);
+
+  if (shouldShowYearlyDate) {
+    syncYearlyDateControlsFromStartDate();
+  }
+}
+
 function updateFormEditability() {
   const isEdit = isEditMode();
-  const isRepeatingEdit = isEdit && isRepeatingReminder();
 
   if (elements.reminderKind) {
     elements.reminderKind.disabled = isEdit;
@@ -211,11 +309,7 @@ function updateFormEditability() {
 
   elements.scheduleType.disabled = isEdit;
 
-  for (const element of [elements.startDate, elements.startTime]) {
-    if (element) {
-      element.disabled = isRepeatingEdit;
-    }
-  }
+  updateStartAtFields();
 }
 
 function showStatus(message, type = "success") {
@@ -254,7 +348,6 @@ function clearFieldErrors() {
 
 function setStartAtValue(value) {
   const normalizedValue = value || "";
-
   elements.startAt.value = normalizedValue;
 
   const [datePart, timePart = ""] = normalizedValue.split("T");
@@ -266,9 +359,91 @@ function setStartAtValue(value) {
   if (elements.startTime) {
     elements.startTime.value = timePart.slice(0, 5) || "";
   }
+
+  syncYearlyDateControlsFromStartDate();
+}
+
+function getYearlyMonthDays(month) {
+  return new Date(
+    Date.UTC(YEARLY_DATE_REFERENCE_YEAR, month, 0),
+  ).getUTCDate();
+}
+
+function fillYearlyDayOptions(selectedDay = "") {
+  if (!elements.yearlyDay) {
+    return;
+  }
+
+  const month = Number(elements.yearlyMonth?.value);
+  const maximumDay = month ? getYearlyMonthDays(month) : 31;
+
+  fillNumberSelect(
+    elements.yearlyDay,
+    Array.from({ length: maximumDay }, (_, index) => index + 1),
+    "День",
+  );
+
+  if (selectedDay) {
+    const day = Math.min(Number(selectedDay), maximumDay);
+    elements.yearlyDay.value = String(day);
+  }
+}
+
+function fillYearlyDateOptions() {
+  if (!elements.yearlyMonth || !elements.yearlyDay) {
+    return;
+  }
+
+  fillSelect(elements.yearlyMonth, YEARLY_MONTHS, "Месяц");
+  fillYearlyDayOptions();
+}
+
+function syncYearlyDateControlsFromStartDate() {
+  if (
+    !elements.startDate?.value ||
+    !elements.yearlyMonth ||
+    !elements.yearlyDay
+  ) {
+    return;
+  }
+
+  const [, monthPart, dayPart] = elements.startDate.value.split("-");
+
+  if (!monthPart || !dayPart) {
+    return;
+  }
+
+  elements.yearlyMonth.value = String(Number(monthPart));
+  fillYearlyDayOptions(String(Number(dayPart)));
+}
+
+function syncStartDateFromYearlyDateControls() {
+  if (
+    !elements.startDate ||
+    !elements.yearlyMonth ||
+    !elements.yearlyDay
+  ) {
+    return;
+  }
+
+  const month = Number(elements.yearlyMonth.value);
+  const day = Number(elements.yearlyDay.value);
+
+  if (!month || !day || day > getYearlyMonthDays(month)) {
+    elements.startDate.value = "";
+    return;
+  }
+
+  elements.startDate.value =
+    `${YEARLY_DATE_REFERENCE_YEAR}-${String(month).padStart(2, "0")}` +
+    `-${String(day).padStart(2, "0")}`;
 }
 
 function syncStartAtFromParts() {
+  if (isRepeatingEdit() && isYearlyDateReminder()) {
+    syncStartDateFromYearlyDateControls();
+  }
+
   if (!elements.startDate || !elements.startTime) {
     return;
   }
@@ -276,10 +451,20 @@ function syncStartAtFromParts() {
   const datePart = elements.startDate.value;
   const timePart = elements.startTime.value;
 
-  elements.startAt.value = datePart && timePart ? `${datePart}T${timePart}` : "";
+  elements.startAt.value = datePart && timePart
+    ? `${datePart}T${timePart}`
+    : "";
 }
 
 function getStartAtFocusTarget() {
+  if (isRepeatingEdit() && isYearlyDateReminder()) {
+    return elements.yearlyMonth || elements.startTime || elements.startAt;
+  }
+
+  if (isRepeatingEdit()) {
+    return elements.startTime || elements.startAt;
+  }
+
   return elements.startDate || elements.startAt;
 }
 
@@ -382,17 +567,31 @@ function setBusy(isBusy) {
 function showPreview(preview) {
   const period = preview.period || "одноразовое";
   const timezoneName =
-    preview.timezone_name || elements.timezoneName.value || state.context?.timezone_name;
+    preview.timezone_name ||
+    elements.timezoneName.value ||
+    state.context?.timezone_name;
   const reminderKind = preview.reminder_kind || getReminderKind();
+  const isRecurringEdit = isRepeatingEdit();
+  const notificationAt = isRecurringEdit
+    ? preview.next_run_at
+    : preview.start_at;
+  const notificationLabel = isRecurringEdit
+    ? "Следующее уведомление"
+    : "Первое срабатывание";
 
   elements.preview.innerHTML = `
     <div class="preview-label">Предпросмотр</div>
     <div class="preview-title">${escapeHtml(preview.reminder_text)}</div>
     <div class="preview-grid">
-      <span class="preview-chip">${escapeHtml(getReminderKindLabel(reminderKind))}</span>
+      <span class="preview-chip">${escapeHtml(
+        getReminderKindLabel(reminderKind),
+      )}</span>
       <span class="preview-chip">${escapeHtml(period)}</span>
-      <span class="preview-next">Первое срабатывание: ${escapeHtml(
-        formatDateTimeWithConditionalTimezone(preview.start_at, timezoneName),
+      <span class="preview-next">${notificationLabel}: ${escapeHtml(
+        formatDateTimeWithConditionalTimezone(
+          notificationAt,
+          timezoneName,
+        ),
       )}</span>
     </div>
   `;
@@ -531,12 +730,47 @@ function renderStartAtHint() {
   const timezoneName =
     elements.timezoneName.value || state.context?.timezone_name;
 
-  const baseHint = `Таймзона: ${timezoneName}`;
+  elements.startAtHint.textContent = `Таймзона: ${timezoneName}`;
+}
 
-  elements.startAtHint.textContent =
-    isEditMode() && isRepeatingReminder()
-      ? `${baseHint}. Первое срабатывание нельзя изменить у повторяющегося напоминания.`
-      : baseHint;
+function hideNextNotification() {
+  if (elements.nextNotificationField) {
+    elements.nextNotificationField.hidden = true;
+  }
+
+  if (elements.nextNotificationValue) {
+    elements.nextNotificationValue.textContent = "";
+  }
+}
+
+function renderNextNotification(value, timezoneName) {
+  if (
+    !isRepeatingEdit() ||
+    !value ||
+    !elements.nextNotificationField ||
+    !elements.nextNotificationValue
+  ) {
+    hideNextNotification();
+    return;
+  }
+
+  elements.nextNotificationValue.textContent =
+    formatDateTimeWithConditionalTimezone(value, timezoneName);
+  elements.nextNotificationField.hidden = false;
+}
+
+function markNextNotificationForPreview() {
+  if (
+    !isRepeatingEdit() ||
+    !elements.nextNotificationField ||
+    !elements.nextNotificationValue
+  ) {
+    return;
+  }
+
+  elements.nextNotificationValue.textContent =
+    "Изменились параметры расписания. Нажми «Предпросмотр», чтобы рассчитать следующее уведомление.";
+  elements.nextNotificationField.hidden = false;
 }
 
 function getActiveTimezoneLabel(timezoneName) {
@@ -586,6 +820,7 @@ function renderOptions() {
     state.reminderOptions.month_days,
     "Не выбрано",
   );
+  fillYearlyDateOptions();
 
   updateConditionalFields();
 }
@@ -794,6 +1029,17 @@ function buildRequestPayload() {
   return payload;
 }
 
+function buildPreviewPayload() {
+  const payload = buildRequestPayload();
+  const reminderId = Number(elements.reminderId.value);
+
+  if (Number.isInteger(reminderId) && reminderId > 0) {
+    payload.reminder_id = reminderId;
+  }
+
+  return payload;
+}
+
 function applySchedulePayload(payload, scheduleType) {
   if (scheduleType === "every_days") {
     payload.interval_days = numberOrNull(elements.intervalDays.value);
@@ -843,6 +1089,18 @@ function hasValidStartAtValue() {
   return !Number.isNaN(date.getTime());
 }
 
+function getStartAtValidationMessage() {
+  if (!isRepeatingEdit()) {
+    return "Укажи первое срабатывание.";
+  }
+
+  if (isYearlyDateReminder()) {
+    return "Укажи дату ежегодного уведомления и время уведомления.";
+  }
+
+  return "Укажи время уведомления.";
+}
+
 function validateTimezoneForm() {
   if (!elements.chatTimezoneName.value.trim()) {
     showStatus("Укажи таймзону чата.", "error");
@@ -874,7 +1132,7 @@ function getReminderFormErrors() {
   }
 
   if (!hasValidStartAtValue()) {
-    errors.push("Укажи первое срабатывание.");
+    errors.push(getStartAtValidationMessage());
   }
 
   if (!elements.timezoneName.value.trim()) {
@@ -967,6 +1225,10 @@ function startEdit(reminder) {
   updateConditionalFields();
   updateFormEditability();
   renderStartAtHint();
+  renderNextNotification(
+    reminder.next_run_at,
+    reminder.timezone_name || state.context?.timezone_name,
+  );
   showStatus(
     "Редактируешь напоминание.\nВнеси изменения и нажми «Сохранить изменения».",
   );
@@ -985,6 +1247,7 @@ function resetForm() {
 
   hideStatus();
   hidePreview();
+  hideNextNotification();
   clearFieldErrors();
   updateConditionalFields();
   updateFormEditability();
@@ -1001,10 +1264,16 @@ async function previewReminder() {
 
   const preview = await apiRequest("/api/tma/reminder-preview", {
     method: "POST",
-    body: JSON.stringify(buildRequestPayload()),
+    body: JSON.stringify(buildPreviewPayload()),
   });
 
   showPreview(preview);
+  renderNextNotification(
+    preview.next_run_at,
+    preview.timezone_name ||
+      elements.timezoneName.value ||
+      state.context?.timezone_name,
+  );
 }
 
 async function saveTimezone(statusMessage = "Таймзона чата обновлена.") {
@@ -1253,11 +1522,39 @@ function clearStartAtErrorAndSync() {
   syncStartAtFromParts();
 }
 
+function isReminderScheduleField(element) {
+  return [
+    elements.startDate,
+    elements.startTime,
+    elements.yearlyMonth,
+    elements.yearlyDay,
+    elements.intervalDays,
+    elements.intervalWeeks,
+    elements.dayOfWeek,
+    elements.monthDayOfWeek,
+    elements.monthWeekNumber,
+    elements.monthDay,
+  ].includes(element);
+}
+
+function handleReminderFormChange(event) {
+  hidePreview();
+
+  if (isReminderScheduleField(event.target)) {
+    markNextNotificationForPreview();
+  }
+}
+
 on(elements.reloadButton, "click", () => handleAsync(loadBootstrap));
 on(elements.themeToggleButton, "click", toggleTheme);
 on(elements.startAt, "input", clearStartAtError);
 on(elements.startDate, "input", clearStartAtErrorAndSync);
 on(elements.startTime, "input", clearStartAtErrorAndSync);
+on(elements.yearlyMonth, "change", () => {
+  fillYearlyDayOptions(elements.yearlyDay.value);
+  clearStartAtErrorAndSync();
+});
+on(elements.yearlyDay, "change", clearStartAtErrorAndSync);
 on(elements.scheduleType, "change", () => {
   updateConditionalFields();
   updateFormEditability();
@@ -1268,8 +1565,8 @@ on(elements.reminderKind, "change", () => {
   updateReminderKindFields();
   hidePreview();
 });
-on(elements.form, "input", hidePreview);
-on(elements.form, "change", hidePreview);
+on(elements.form, "input", handleReminderFormChange);
+on(elements.form, "change", handleReminderFormChange);
 on(elements.previewButton, "click", () => handleAsync(previewReminder));
 on(elements.useDeviceTimezoneButton, "click", () =>
   handleAsync(useDeviceTimezone),

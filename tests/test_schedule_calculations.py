@@ -13,6 +13,7 @@ from app.schedule_calculations import (
     get_nearest_monthly_weekday_datetime,
     get_monthly_day_datetime_on_or_after,
     get_nearest_monthly_day_datetime,
+    get_yearly_datetime_on_or_after,
 )
 
 
@@ -229,3 +230,34 @@ def test_get_nearest_monthly_day_datetime_current_month() -> None:
     )
 
     assert result == datetime(2026, 6, 11, 12, 12)
+
+
+def test_get_yearly_datetime_on_or_after_uses_selected_date_in_lower_bound_year() -> (
+    None
+):
+    result = get_yearly_datetime_on_or_after(
+        selected_start_at=datetime(2000, 11, 12, 9, 30),
+        lower_bound=datetime(2026, 6, 29, 10, 0),
+    )
+
+    assert result == datetime(2026, 11, 12, 9, 30)
+
+
+def test_get_yearly_datetime_on_or_after_moves_to_next_year_when_time_has_passed() -> (
+    None
+):
+    result = get_yearly_datetime_on_or_after(
+        selected_start_at=datetime(2000, 6, 29, 9, 30),
+        lower_bound=datetime(2026, 6, 29, 10, 0),
+    )
+
+    assert result == datetime(2027, 6, 29, 9, 30)
+
+
+def test_get_yearly_datetime_on_or_after_skips_non_leap_years() -> None:
+    result = get_yearly_datetime_on_or_after(
+        selected_start_at=datetime(2024, 2, 29, 9, 30),
+        lower_bound=datetime(2025, 3, 1, 10, 0),
+    )
+
+    assert result == datetime(2028, 2, 29, 9, 30)

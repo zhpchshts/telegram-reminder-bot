@@ -74,6 +74,32 @@ def get_first_weekday_datetime_on_or_after_date(
     )
 
 
+def get_yearly_datetime_on_or_after(
+    *,
+    selected_start_at: datetime,
+    lower_bound: datetime,
+) -> datetime:
+    for year in range(lower_bound.year, lower_bound.year + 9):
+        try:
+            candidate = datetime(
+                year,
+                selected_start_at.month,
+                selected_start_at.day,
+                selected_start_at.hour,
+                selected_start_at.minute,
+                selected_start_at.second,
+                selected_start_at.microsecond,
+                tzinfo=lower_bound.tzinfo,
+            )
+        except ValueError:
+            continue
+
+        if candidate >= lower_bound:
+            return candidate
+
+    raise RuntimeError("Could not find yearly date occurrence.")
+
+
 def get_month_day_range_for_week_number(month_week_number: int) -> str:
     start_day = (month_week_number - 1) * 7 + 1
     end_day = min(month_week_number * 7, 31)

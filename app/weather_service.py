@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+from app.database import (
+    get_cached_weather_location,
+    save_cached_weather_location,
+)
 
 
 GEOCODING_API_URL = "https://geocoding-api.open-meteo.com/v1/search"
@@ -14,6 +21,11 @@ FORECAST_API_URL = "https://api.open-meteo.com/v1/forecast"
 
 MAX_WEATHER_LOCATIONS = 5
 OPEN_METEO_ATTRIBUTION = "Источник: Open-Meteo"
+WEATHER_REQUEST_TIMEOUT_SECONDS = 4
+WEATHER_REQUEST_ATTEMPTS = 3
+WEATHER_REQUEST_RETRY_DELAYS_SECONDS = (1, 2)
+
+LOGGER = logging.getLogger(__name__)
 
 WEATHER_CODE_DESCRIPTIONS = {
     0: "ясно",
@@ -82,6 +94,10 @@ class WeatherServiceError(Exception):
     """Raised when weather data cannot be loaded or parsed."""
 
 
+class RetryableWeatherRequestError(Exception):
+    """Raised when a weather request can be retried."""
+
+
 def parse_weather_locations(raw_locations: str) -> list[str]:
     locations = [
         location.strip()
@@ -135,6 +151,12 @@ def build_weather_report(raw_locations: str) -> str:
 
 
 def find_location(location_name: str) -> dict[str, Any]:
+    location_key = normalize_location_key(location_name)
+    cached_location = get_cached_weather_location(location_key)
+
+    if cached_location is not None:
+        return cached_location
+
     payload = fetch_json(
         GEOCODING_API_URL,
         {
@@ -143,23 +165,30 @@ def find_location(location_name: str) -> dict[str, Any]:
             "language": "ru",
             "format": "json",
         },
+        stage="geocoding",
+        location_name=location_name,
     )
-
     results = payload.get("results")
+
     if not isinstance(results, list) or not results:
         raise WeatherServiceError("Не нашёл населённый пункт.")
 
     location = results[0]
+
     if not isinstance(location, dict):
         raise WeatherServiceError("Не смог прочитать данные населённого пункта.")
 
     if location.get("latitude") is None or location.get("longitude") is None:
         raise WeatherServiceError("Не нашёл координаты населённого пункта.")
 
+    save_cached_weather_location(location_key, location)
+
     return location
 
 
 def fetch_forecast(location: dict[str, Any]) -> dict[str, Any]:
+    location_name = str(location.get("name") or "Населённый пункт")
+
     return fetch_json(
         FORECAST_API_URL,
         {
@@ -178,6 +207,8 @@ def fetch_forecast(location: dict[str, Any]) -> dict[str, Any]:
             "forecast_days": 1,
             "timezone": "auto",
         },
+        stage="forecast",
+        location_name=location_name,
     )
 
 
@@ -185,9 +216,59 @@ def fetch_json(
     base_url: str,
     params: dict[str, object],
     *,
-    timeout_seconds: int = 10,
+    stage: str = "request",
+    location_name: str = "unknown",
+    timeout_seconds: float = WEATHER_REQUEST_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     url = build_url(base_url, params)
+
+    for attempt in range(1, WEATHER_REQUEST_ATTEMPTS + 1):
+        started_at = time.monotonic()
+
+        try:
+            raw_body = fetch_response_body(url, timeout_seconds)
+        except (OSError, RetryableWeatherRequestError) as error:
+            elapsed_seconds = time.monotonic() - started_at
+            retrying = attempt < WEATHER_REQUEST_ATTEMPTS
+
+            log_weather_request_failure(
+                stage=stage,
+                location_name=location_name,
+                attempt=attempt,
+                elapsed_seconds=elapsed_seconds,
+                retrying=retrying,
+                error=error,
+            )
+
+            if not retrying:
+                if is_timeout_error(error):
+                    raise WeatherServiceError(
+                        "Погодный сервис не ответил вовремя."
+                    ) from error
+
+                raise WeatherServiceError(
+                    "Погодный сервис временно недоступен."
+                ) from error
+
+            time.sleep(WEATHER_REQUEST_RETRY_DELAYS_SECONDS[attempt - 1])
+            continue
+
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except json.JSONDecodeError as error:
+            raise WeatherServiceError(
+                "Погодный сервис вернул некорректный ответ."
+            ) from error
+
+        if not isinstance(payload, dict):
+            raise WeatherServiceError("Погодный сервис вернул некорректный ответ.")
+
+        return payload
+
+    raise RuntimeError("Weather request retry loop ended unexpectedly.")
+
+
+def fetch_response_body(url: str, timeout_seconds: float) -> bytes:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "telegram-reminder-bot"},
@@ -195,26 +276,67 @@ def fetch_json(
 
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            if response.status != 200:
+            status_code = response.status
+
+            if status_code != 200:
+                if status_code is not None and 500 <= status_code < 600:
+                    raise RetryableWeatherRequestError(f"HTTP status {status_code}")
+
                 raise WeatherServiceError("Погодный сервис временно недоступен.")
 
-            raw_body = response.read()
-    except TimeoutError as error:
-        raise WeatherServiceError("Погодный сервис не ответил вовремя.") from error
-    except urllib.error.URLError as error:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        if 500 <= error.code < 600:
+            raise RetryableWeatherRequestError(f"HTTP status {error.code}") from error
+
         raise WeatherServiceError("Погодный сервис временно недоступен.") from error
 
-    try:
-        payload = json.loads(raw_body.decode("utf-8"))
-    except json.JSONDecodeError as error:
-        raise WeatherServiceError(
-            "Погодный сервис вернул некорректный ответ."
-        ) from error
 
-    if not isinstance(payload, dict):
-        raise WeatherServiceError("Погодный сервис вернул некорректный ответ.")
+def normalize_location_key(location_name: str) -> str:
+    return " ".join(location_name.casefold().split())
 
-    return payload
+
+def is_timeout_error(error: Exception) -> bool:
+    if isinstance(error, TimeoutError):
+        return True
+
+    return isinstance(error, urllib.error.URLError) and isinstance(
+        error.reason, TimeoutError
+    )
+
+
+def log_weather_request_failure(
+    *,
+    stage: str,
+    location_name: str,
+    attempt: int,
+    elapsed_seconds: float,
+    retrying: bool,
+    error: Exception,
+) -> None:
+    LOGGER.warning(
+        (
+            "Weather request failed: stage=%s location=%r attempt=%s/%s "
+            "duration_seconds=%.2f retrying=%s error=%s"
+        ),
+        stage,
+        location_name,
+        attempt,
+        WEATHER_REQUEST_ATTEMPTS,
+        elapsed_seconds,
+        retrying,
+        format_weather_request_error(error),
+    )
+
+
+def format_weather_request_error(error: Exception) -> str:
+    if isinstance(error, RetryableWeatherRequestError):
+        return str(error)
+
+    if isinstance(error, urllib.error.URLError):
+        return f"{type(error.reason).__name__}: {error.reason}"
+
+    return type(error).__name__
 
 
 def build_url(base_url: str, params: dict[str, object]) -> str:

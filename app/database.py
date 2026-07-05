@@ -45,7 +45,19 @@ def init_db() -> None:
             )
             """
         )
-
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS weather_location_cache (
+                location_key TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                admin1 TEXT,
+                country TEXT,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         existing_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(reminders)").fetchall()
@@ -281,6 +293,59 @@ def set_chat_timezone(chat_id: int, timezone: str) -> None:
                 chat_id,
                 timezone,
                 now,
+                now,
+            ),
+        )
+
+
+def get_cached_weather_location(location_key: str) -> dict[str, Any] | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT name, admin1, country, latitude, longitude
+            FROM weather_location_cache
+            WHERE location_key = ?
+            """,
+            (location_key,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def save_cached_weather_location(
+    location_key: str,
+    location: dict[str, Any],
+) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO weather_location_cache (
+                location_key,
+                name,
+                admin1,
+                country,
+                latitude,
+                longitude,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(location_key) DO UPDATE SET
+                name = excluded.name,
+                admin1 = excluded.admin1,
+                country = excluded.country,
+                latitude = excluded.latitude,
+                longitude = excluded.longitude,
+                updated_at = excluded.updated_at
+            """,
+            (
+                location_key,
+                str(location.get("name") or "Населённый пункт"),
+                location.get("admin1"),
+                location.get("country"),
+                float(location["latitude"]),
+                float(location["longitude"]),
                 now,
             ),
         )

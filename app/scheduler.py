@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -115,7 +116,14 @@ async def send_reminder_message(
     reminder_text: str,
     reminder_kind: str,
 ) -> None:
-    message = build_reminder_message(reminder_text, reminder_kind)
+    if reminder_kind == REMINDER_KIND_WEATHER:
+        message = await asyncio.to_thread(
+            build_reminder_message,
+            reminder_text,
+            reminder_kind,
+        )
+    else:
+        message = build_reminder_message(reminder_text, reminder_kind)
 
     if reminder_kind == REMINDER_KIND_WEATHER:
         await bot.send_message(

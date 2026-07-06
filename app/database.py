@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.config import DB_PATH
@@ -58,6 +58,33 @@ def init_db() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS weather_report_cache (
+                reminder_id INTEGER NOT NULL,
+                scheduled_for_utc TEXT NOT NULL,
+                reminder_text TEXT NOT NULL,
+                report_html TEXT NOT NULL,
+                prepared_at_utc TEXT NOT NULL,
+                PRIMARY KEY (reminder_id, scheduled_for_utc)
+            )
+            """
+        )
+        weather_report_cache_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(weather_report_cache)"
+            ).fetchall()
+        }
+
+        if "reminder_text" not in weather_report_cache_columns:
+            connection.execute(
+                """
+                ALTER TABLE weather_report_cache
+                ADD COLUMN reminder_text TEXT NOT NULL DEFAULT ''
+                """
+            )
+            connection.execute("DELETE FROM weather_report_cache")
         existing_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(reminders)").fetchall()
@@ -349,3 +376,125 @@ def save_cached_weather_location(
                 now,
             ),
         )
+
+
+def get_prepared_weather_report(
+    reminder_id: int,
+    reminder_text: str,
+    earliest_scheduled_for: datetime,
+    latest_scheduled_for: datetime,
+) -> dict[str, str] | None:
+    earliest_scheduled_for_utc = format_utc_datetime(earliest_scheduled_for)
+    latest_scheduled_for_utc = format_utc_datetime(latest_scheduled_for)
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT scheduled_for_utc, report_html
+            FROM weather_report_cache
+            WHERE reminder_id = ?
+              AND reminder_text = ?
+              AND scheduled_for_utc >= ?
+              AND scheduled_for_utc <= ?
+            ORDER BY scheduled_for_utc DESC
+            LIMIT 1
+            """,
+            (
+                reminder_id,
+                reminder_text,
+                earliest_scheduled_for_utc,
+                latest_scheduled_for_utc,
+            ),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "scheduled_for_utc": str(row["scheduled_for_utc"]),
+        "report_html": str(row["report_html"]),
+    }
+
+
+def save_prepared_weather_report(
+    reminder_id: int,
+    scheduled_for: datetime,
+    reminder_text: str,
+    report_html: str,
+) -> None:
+    scheduled_for_utc = format_utc_datetime(scheduled_for)
+    prepared_at_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO weather_report_cache (
+                reminder_id,
+                scheduled_for_utc,
+                reminder_text,
+                report_html,
+                prepared_at_utc
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(reminder_id, scheduled_for_utc) DO UPDATE SET
+                reminder_text = excluded.reminder_text,
+                report_html = excluded.report_html,
+                prepared_at_utc = excluded.prepared_at_utc
+            """,
+            (
+                reminder_id,
+                scheduled_for_utc,
+                reminder_text,
+                report_html,
+                prepared_at_utc,
+            ),
+        )
+
+
+def delete_prepared_weather_report(
+    reminder_id: int,
+    scheduled_for_utc: str,
+) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            DELETE FROM weather_report_cache
+            WHERE reminder_id = ?
+              AND scheduled_for_utc = ?
+            """,
+            (
+                reminder_id,
+                scheduled_for_utc,
+            ),
+        )
+
+
+def delete_prepared_weather_reports_for_reminder(reminder_id: int) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            DELETE FROM weather_report_cache
+            WHERE reminder_id = ?
+            """,
+            (reminder_id,),
+        )
+
+
+def delete_expired_prepared_weather_reports(now: datetime) -> None:
+    now_utc = format_utc_datetime(now)
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            DELETE FROM weather_report_cache
+            WHERE scheduled_for_utc < ?
+            """,
+            (now_utc,),
+        )
+
+
+def format_utc_datetime(value: datetime) -> str:
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        raise ValueError("Datetime must include a timezone.")
+
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds")

@@ -1,6 +1,7 @@
 import asyncio
+import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -18,9 +19,13 @@ from app.constants import (
 )
 from app.database import (
     count_active_chats,
+    delete_expired_prepared_weather_reports,
+    delete_prepared_weather_report,
     get_all_active_reminders,
+    get_prepared_weather_report,
     mark_reminder_as_missed,
     mark_reminder_as_sent,
+    save_prepared_weather_report,
 )
 from app.formatting import format_datetime_ru
 from app.reminder_mapping import build_reminder_read_data
@@ -28,6 +33,11 @@ from app.schedule_calculations import get_month_day_range_for_week_number
 from app.weather_service import WeatherServiceError, build_weather_report
 
 scheduler = AsyncIOScheduler()
+LOGGER = logging.getLogger(__name__)
+
+WEATHER_PREFETCH_WINDOW = timedelta(minutes=5)
+WEATHER_REPORT_CACHE_RETENTION = timedelta(minutes=10)
+WEATHER_REPORT_CACHE_LOOKUP_GRACE = timedelta(minutes=1)
 
 
 def ensure_timezone_aware(
@@ -79,6 +89,19 @@ def schedule_healthcheck(
     )
 
 
+def schedule_weather_report_prefetch() -> None:
+    scheduler.add_job(
+        prefetch_weather_reports,
+        trigger="interval",
+        minutes=1,
+        id="weather-report-prefetch",
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+
+
 def get_next_run_at(reminder_id: int) -> datetime | None:
     job = scheduler.get_job(str(reminder_id))
     if not job or not job.next_run_time:
@@ -110,28 +133,112 @@ def build_reminder_message(reminder_text: str, reminder_kind: str) -> str:
         return f"Не смог получить прогноз погоды.\n{error}"
 
 
+async def prefetch_weather_reports() -> None:
+    now = datetime.now(timezone.utc)
+
+    await asyncio.to_thread(
+        delete_expired_prepared_weather_reports,
+        now - WEATHER_REPORT_CACHE_RETENTION,
+    )
+
+    for reminder in get_all_active_reminders():
+        reminder_data = build_reminder_read_data(reminder)
+
+        if reminder_data.reminder_kind != REMINDER_KIND_WEATHER:
+            continue
+
+        next_run_at = get_next_run_at(reminder_data.id)
+
+        if next_run_at is None:
+            continue
+
+        scheduled_for = next_run_at.astimezone(timezone.utc)
+
+        if not now <= scheduled_for <= now + WEATHER_PREFETCH_WINDOW:
+            continue
+
+        prepared_report = await asyncio.to_thread(
+            get_prepared_weather_report,
+            reminder_data.id,
+            reminder_data.reminder_text,
+            scheduled_for - timedelta(seconds=1),
+            scheduled_for + timedelta(seconds=1),
+        )
+
+        if prepared_report is not None:
+            continue
+
+        try:
+            report_html = await asyncio.to_thread(
+                build_weather_report,
+                reminder_data.reminder_text,
+                raise_on_error=True,
+                request_attempts=1,
+            )
+        except (ValueError, WeatherServiceError) as error:
+            LOGGER.warning(
+                (
+                    "Weather report prefetch failed: reminder_id=%s "
+                    "scheduled_for=%s error=%s"
+                ),
+                reminder_data.id,
+                scheduled_for.isoformat(timespec="seconds"),
+                error,
+            )
+            continue
+
+        await asyncio.to_thread(
+            save_prepared_weather_report,
+            reminder_data.id,
+            scheduled_for,
+            reminder_data.reminder_text,
+            report_html,
+        )
+
+
 async def send_reminder_message(
     bot: Bot,
     chat_id: int,
     reminder_text: str,
     reminder_kind: str,
+    reminder_id: int,
 ) -> None:
     if reminder_kind == REMINDER_KIND_WEATHER:
-        message = await asyncio.to_thread(
-            build_reminder_message,
-            reminder_text,
-            reminder_kind,
-        )
-    else:
-        message = build_reminder_message(reminder_text, reminder_kind)
+        now = datetime.now(timezone.utc)
 
-    if reminder_kind == REMINDER_KIND_WEATHER:
+        prepared_report = await asyncio.to_thread(
+            get_prepared_weather_report,
+            reminder_id,
+            reminder_text,
+            now - WEATHER_REPORT_CACHE_LOOKUP_GRACE,
+            now + WEATHER_REPORT_CACHE_LOOKUP_GRACE,
+        )
+
+        if prepared_report is None:
+            message = await asyncio.to_thread(
+                build_reminder_message,
+                reminder_text,
+                reminder_kind,
+            )
+        else:
+            message = prepared_report["report_html"]
+
         await bot.send_message(
             chat_id=chat_id,
             text=message,
             parse_mode="HTML",
         )
+
+        if prepared_report is not None:
+            await asyncio.to_thread(
+                delete_prepared_weather_report,
+                reminder_id,
+                prepared_report["scheduled_for_utc"],
+            )
+
         return
+
+    message = build_reminder_message(reminder_text, reminder_kind)
 
     await bot.send_message(
         chat_id=chat_id,
@@ -151,6 +258,7 @@ async def send_once_reminder(
         chat_id=chat_id,
         reminder_text=reminder_text,
         reminder_kind=reminder_kind,
+        reminder_id=reminder_id,
     )
     mark_reminder_as_sent(reminder_id)
 
@@ -167,6 +275,7 @@ async def send_repeating_reminder(
         chat_id=chat_id,
         reminder_text=reminder_text,
         reminder_kind=reminder_kind,
+        reminder_id=reminder_id,
     )
 
 
@@ -394,5 +503,5 @@ async def restore_active_reminders(bot: Bot) -> None:
 
         schedule_reminder_from_row(bot, reminder)
         restored_count += 1
-
+    schedule_weather_report_prefetch()
     print(f"Restored reminders: {restored_count}. Missed reminders: {missed_count}.")

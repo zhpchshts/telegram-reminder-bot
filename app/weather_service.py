@@ -127,16 +127,30 @@ def parse_weather_locations(raw_locations: str) -> list[str]:
     return unique_locations
 
 
-def build_weather_report(raw_locations: str) -> str:
+def build_weather_report(
+    raw_locations: str,
+    *,
+    raise_on_error: bool = False,
+    request_attempts: int = WEATHER_REQUEST_ATTEMPTS,
+) -> str:
     locations = parse_weather_locations(raw_locations)
-
     location_blocks = []
+
     for location_name in locations:
         try:
-            location = find_location(location_name)
-            forecast = fetch_forecast(location)
+            location = find_location(
+                location_name,
+                request_attempts=request_attempts,
+            )
+            forecast = fetch_forecast(
+                location,
+                request_attempts=request_attempts,
+            )
             location_blocks.append(format_location_forecast(location, forecast))
         except WeatherServiceError as error:
+            if raise_on_error:
+                raise
+
             location_blocks.append(
                 f"⚠️ <b>{escape_html(location_name)}</b>\n{escape_html(str(error))}"
             )
@@ -150,7 +164,11 @@ def build_weather_report(raw_locations: str) -> str:
     )
 
 
-def find_location(location_name: str) -> dict[str, Any]:
+def find_location(
+    location_name: str,
+    *,
+    request_attempts: int = WEATHER_REQUEST_ATTEMPTS,
+) -> dict[str, Any]:
     location_key = normalize_location_key(location_name)
     cached_location = get_cached_weather_location(location_key)
 
@@ -167,6 +185,7 @@ def find_location(location_name: str) -> dict[str, Any]:
         },
         stage="geocoding",
         location_name=location_name,
+        attempts=request_attempts,
     )
     results = payload.get("results")
 
@@ -186,7 +205,11 @@ def find_location(location_name: str) -> dict[str, Any]:
     return location
 
 
-def fetch_forecast(location: dict[str, Any]) -> dict[str, Any]:
+def fetch_forecast(
+    location: dict[str, Any],
+    *,
+    request_attempts: int = WEATHER_REQUEST_ATTEMPTS,
+) -> dict[str, Any]:
     location_name = str(location.get("name") or "Населённый пункт")
 
     return fetch_json(
@@ -209,6 +232,7 @@ def fetch_forecast(location: dict[str, Any]) -> dict[str, Any]:
         },
         stage="forecast",
         location_name=location_name,
+        attempts=request_attempts,
     )
 
 
@@ -219,22 +243,25 @@ def fetch_json(
     stage: str = "request",
     location_name: str = "unknown",
     timeout_seconds: float = WEATHER_REQUEST_TIMEOUT_SECONDS,
+    attempts: int = WEATHER_REQUEST_ATTEMPTS,
 ) -> dict[str, Any]:
     url = build_url(base_url, params)
-
-    for attempt in range(1, WEATHER_REQUEST_ATTEMPTS + 1):
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1.")
+    for attempt in range(1, attempts + 1):
         started_at = time.monotonic()
 
         try:
             raw_body = fetch_response_body(url, timeout_seconds)
         except (OSError, RetryableWeatherRequestError) as error:
             elapsed_seconds = time.monotonic() - started_at
-            retrying = attempt < WEATHER_REQUEST_ATTEMPTS
+            retrying = attempt < attempts
 
             log_weather_request_failure(
                 stage=stage,
                 location_name=location_name,
                 attempt=attempt,
+                attempts=attempts,
                 elapsed_seconds=elapsed_seconds,
                 retrying=retrying,
                 error=error,
@@ -310,6 +337,7 @@ def log_weather_request_failure(
     stage: str,
     location_name: str,
     attempt: int,
+    attempts: int,
     elapsed_seconds: float,
     retrying: bool,
     error: Exception,
@@ -322,7 +350,7 @@ def log_weather_request_failure(
         stage,
         location_name,
         attempt,
-        WEATHER_REQUEST_ATTEMPTS,
+        attempts,
         elapsed_seconds,
         retrying,
         format_weather_request_error(error),

@@ -1,4 +1,5 @@
-from datetime import datetime
+import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from app import database
 
@@ -321,3 +322,204 @@ def test_create_monthly_day_reminder_stores_month_day(monkeypatch, tmp_path) -> 
     assert reminder is not None
     assert reminder["schedule_type"] == "monthly_day"
     assert reminder["month_day"] == 11
+
+
+def test_prepared_weather_report_can_be_saved_read_and_deleted(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    scheduled_for = datetime(
+        2026,
+        7,
+        7,
+        4,
+        30,
+        tzinfo=timezone.utc,
+    )
+
+    database.save_prepared_weather_report(
+        reminder_id=12,
+        scheduled_for=scheduled_for,
+        reminder_text="Екатеринбург; Хургада",
+        report_html="<b>Подготовленный прогноз</b>",
+    )
+
+    prepared_report = database.get_prepared_weather_report(
+        reminder_id=12,
+        reminder_text="Екатеринбург; Хургада",
+        earliest_scheduled_for=scheduled_for - timedelta(seconds=1),
+        latest_scheduled_for=scheduled_for + timedelta(seconds=1),
+    )
+
+    assert prepared_report == {
+        "scheduled_for_utc": "2026-07-07T04:30:00+00:00",
+        "report_html": "<b>Подготовленный прогноз</b>",
+    }
+
+    database.delete_prepared_weather_report(
+        reminder_id=12,
+        scheduled_for_utc="2026-07-07T04:30:00+00:00",
+    )
+
+    assert (
+        database.get_prepared_weather_report(
+            reminder_id=12,
+            reminder_text="Екатеринбург; Хургада",
+            earliest_scheduled_for=scheduled_for - timedelta(seconds=1),
+            latest_scheduled_for=scheduled_for + timedelta(seconds=1),
+        )
+        is None
+    )
+
+
+def test_prepared_weather_report_requires_matching_reminder_text(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    scheduled_for = datetime(
+        2026,
+        7,
+        7,
+        4,
+        30,
+        tzinfo=timezone.utc,
+    )
+
+    database.save_prepared_weather_report(
+        reminder_id=12,
+        scheduled_for=scheduled_for,
+        reminder_text="Екатеринбург",
+        report_html="<b>Старый прогноз</b>",
+    )
+
+    prepared_report = database.get_prepared_weather_report(
+        reminder_id=12,
+        reminder_text="Екатеринбург; Хургада",
+        earliest_scheduled_for=scheduled_for - timedelta(seconds=1),
+        latest_scheduled_for=scheduled_for + timedelta(seconds=1),
+    )
+
+    assert prepared_report is None
+
+
+def test_delete_expired_prepared_weather_reports_removes_only_old_entries(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    expired_scheduled_for = datetime(
+        2026,
+        7,
+        7,
+        4,
+        20,
+        tzinfo=timezone.utc,
+    )
+    active_scheduled_for = datetime(
+        2026,
+        7,
+        7,
+        4,
+        30,
+        tzinfo=timezone.utc,
+    )
+
+    database.save_prepared_weather_report(
+        reminder_id=1,
+        scheduled_for=expired_scheduled_for,
+        reminder_text="Екатеринбург",
+        report_html="<b>Старый прогноз</b>",
+    )
+    database.save_prepared_weather_report(
+        reminder_id=2,
+        scheduled_for=active_scheduled_for,
+        reminder_text="Хургада",
+        report_html="<b>Актуальный прогноз</b>",
+    )
+
+    database.delete_expired_prepared_weather_reports(
+        datetime(
+            2026,
+            7,
+            7,
+            4,
+            25,
+            tzinfo=timezone.utc,
+        )
+    )
+
+    assert (
+        database.get_prepared_weather_report(
+            reminder_id=1,
+            reminder_text="Екатеринбург",
+            earliest_scheduled_for=expired_scheduled_for - timedelta(seconds=1),
+            latest_scheduled_for=expired_scheduled_for + timedelta(seconds=1),
+        )
+        is None
+    )
+    assert database.get_prepared_weather_report(
+        reminder_id=2,
+        reminder_text="Хургада",
+        earliest_scheduled_for=active_scheduled_for - timedelta(seconds=1),
+        latest_scheduled_for=active_scheduled_for + timedelta(seconds=1),
+    ) == {
+        "scheduled_for_utc": "2026-07-07T04:30:00+00:00",
+        "report_html": "<b>Актуальный прогноз</b>",
+    }
+
+
+def test_init_db_migrates_existing_weather_report_cache(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    test_db_path = tmp_path / "test_reminders.db"
+    monkeypatch.setattr(database, "DB_PATH", test_db_path)
+
+    with sqlite3.connect(test_db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE weather_report_cache (
+                reminder_id INTEGER NOT NULL,
+                scheduled_for_utc TEXT NOT NULL,
+                report_html TEXT NOT NULL,
+                prepared_at_utc TEXT NOT NULL,
+                PRIMARY KEY (reminder_id, scheduled_for_utc)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO weather_report_cache (
+                reminder_id,
+                scheduled_for_utc,
+                report_html,
+                prepared_at_utc
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                12,
+                "2026-07-07T04:30:00+00:00",
+                "<b>Старый прогноз</b>",
+                "2026-07-07T04:25:00+00:00",
+            ),
+        )
+
+    database.init_db()
+
+    with database.get_connection() as connection:
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(weather_report_cache)"
+            ).fetchall()
+        }
+        rows = connection.execute("SELECT * FROM weather_report_cache").fetchall()
+
+    assert "reminder_text" in columns
+    assert rows == []

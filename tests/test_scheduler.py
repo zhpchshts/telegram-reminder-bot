@@ -535,17 +535,19 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
     def fake_build_weather_report(
         raw_locations: str,
         *,
+        target_time_utc: datetime,
         raise_on_error: bool,
         request_attempts: int,
     ) -> str:
         build_calls.append(
             {
                 "raw_locations": raw_locations,
+                "target_time_utc": target_time_utc,
                 "raise_on_error": raise_on_error,
                 "request_attempts": request_attempts,
             }
         )
-        return "<b>Подготовленный прогноз</b>"
+        return "Подготовленный прогноз"
 
     def fake_save_prepared_weather_report(
         reminder_id: int,
@@ -578,6 +580,7 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
     assert build_calls == [
         {
             "raw_locations": "Екатеринбург; Хургада",
+            "target_time_utc": scheduled_for,
             "raise_on_error": True,
             "request_attempts": 1,
         }
@@ -587,7 +590,7 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
             "reminder_id": 12,
             "scheduled_for": scheduled_for,
             "reminder_text": "Екатеринбург; Хургада",
-            "report_html": "<b>Подготовленный прогноз</b>",
+            "report_html": "Подготовленный прогноз",
         }
     ]
 

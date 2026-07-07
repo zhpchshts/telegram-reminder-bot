@@ -172,6 +172,7 @@ async def prefetch_weather_reports() -> None:
             report_html = await asyncio.to_thread(
                 build_weather_report,
                 reminder_data.reminder_text,
+                target_time_utc=scheduled_for,
                 raise_on_error=True,
                 request_attempts=1,
             )

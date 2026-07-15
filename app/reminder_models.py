@@ -10,6 +10,7 @@ class ReminderCreateData:
     start_at: datetime
     timezone_name: str
     reminder_kind: str = REMINDER_KIND_TEXT
+    delete_after_two_days: bool = False
     interval_days: int | None = None
     interval_weeks: int | None = None
     day_of_week: str | None = None
@@ -26,6 +27,7 @@ class ReminderReadData:
     start_at: datetime
     timezone_name: str
     reminder_kind: str = REMINDER_KIND_TEXT
+    delete_after_two_days: bool = False
     interval_days: int | None = None
     interval_weeks: int | None = None
     day_of_week: str | None = None

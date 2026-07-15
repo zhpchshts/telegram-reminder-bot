@@ -1,7 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from app.formatting import format_period_line
 from app.constants import REMINDER_KIND_TEXT
@@ -14,6 +14,7 @@ class ReminderResponse(BaseModel):
     chat_id: int
     reminder_text: str
     reminder_kind: str = REMINDER_KIND_TEXT
+    delete_after_two_days: bool = False
     schedule_type: str
     start_at: datetime
     next_run_at: datetime | None = None
@@ -30,6 +31,7 @@ class ReminderResponse(BaseModel):
 class ReminderCreateRequest(BaseModel):
     reminder_text: str
     reminder_kind: str = REMINDER_KIND_TEXT
+    delete_after_two_days: StrictBool = False
     schedule_type: str
     start_at: datetime
     timezone_name: str
@@ -47,6 +49,7 @@ class ReminderPreviewRequest(ReminderCreateRequest):
 class ReminderPreviewResponse(BaseModel):
     reminder_text: str
     reminder_kind: str = REMINDER_KIND_TEXT
+    delete_after_two_days: bool = False
     schedule_type: str
     start_at: datetime
     timezone_name: str
@@ -127,6 +130,7 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
         "chat_id": reminder.chat_id,
         "reminder_text": reminder.reminder_text,
         "reminder_kind": reminder.reminder_kind,
+        "delete_after_two_days": reminder.delete_after_two_days,
         "schedule_type": reminder.schedule_type,
         "start_at": reminder.start_at,
         "timezone_name": reminder.timezone_name,
@@ -171,6 +175,7 @@ def build_reminder_create_data(
     return ReminderCreateData(
         reminder_text=request.reminder_text,
         reminder_kind=request.reminder_kind,
+        delete_after_two_days=request.delete_after_two_days,
         schedule_type=request.schedule_type,
         start_at=schedule_start_at,
         timezone_name=request.timezone_name,
@@ -215,6 +220,7 @@ def build_reminder_preview_response(
     response_data = {
         "reminder_text": data.reminder_text,
         "reminder_kind": data.reminder_kind,
+        "delete_after_two_days": data.delete_after_two_days,
         "schedule_type": data.schedule_type,
         "start_at": data.start_at,
         "timezone_name": data.timezone_name,
@@ -253,6 +259,7 @@ def build_created_reminder_response(
         "chat_id": chat_id,
         "reminder_text": data.reminder_text,
         "reminder_kind": data.reminder_kind,
+        "delete_after_two_days": data.delete_after_two_days,
         "schedule_type": data.schedule_type,
         "start_at": data.start_at,
         "timezone_name": data.timezone_name,

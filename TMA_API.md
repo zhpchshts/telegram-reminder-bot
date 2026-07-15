@@ -100,6 +100,7 @@ GET /api/tma/bootstrap
   "id": 42,
   "chat_id": -1001234567890,
   "reminder_text": "Заказать воду",
+  "delete_after_two_days": true,
   "schedule_type": "every_days",
   "start_at": "2099-06-10T12:12:00+05:00",
   "timezone_name": "Asia/Yekaterinburg",
@@ -135,6 +136,7 @@ POST /api/tma/reminder-preview
 ```json
 {
   "reminder_text": "Заказать воду",
+  "delete_after_two_days": true,
   "schedule_type": "every_days",
   "start_at": "2099-06-10T12:12:00",
   "timezone_name": "Asia/Yekaterinburg",
@@ -145,6 +147,13 @@ POST /api/tma/reminder-preview
   "month_day": null
 }
 ```
+
+`delete_after_two_days` — строго булева настройка автоудаления сообщения,
+отправленного ботом. По умолчанию `false`. Если в момент успешной отправки
+значение равно `true`, сообщение ставится в постоянную очередь удаления на
+47 часов 45 минут после фактического времени отправки. Последующее изменение
+настройки или удаление напоминания не отменяет уже поставленные в очередь
+сообщения.
 
 Если `start_at` приходит без offset, backend интерпретирует его в `timezone_name` и возвращает нормализованное значение с timezone offset.
 
@@ -209,6 +218,7 @@ Response:
 ```json
 {
   "reminder_text": "Заказать воду",
+  "delete_after_two_days": true,
   "schedule_type": "every_days",
   "start_at": "2099-06-10T12:12:00+05:00",
   "timezone_name": "Asia/Yekaterinburg",

@@ -22,6 +22,7 @@ def test_build_reminder_read_data_maps_row_to_read_model() -> None:
         "month_week_number": None,
         "month_day": None,
         "timezone": "Asia/Yekaterinburg",
+        "delete_after_two_days": 1,
     }
 
     assert build_reminder_read_data(reminder) == ReminderReadData(
@@ -32,6 +33,7 @@ def test_build_reminder_read_data_maps_row_to_read_model() -> None:
         schedule_type="every_days",
         start_at=start_at,
         timezone_name="Asia/Yekaterinburg",
+        delete_after_two_days=True,
         interval_days=3,
     )
 
@@ -54,6 +56,7 @@ def test_build_reminder_read_data_uses_default_timezone_when_row_timezone_is_non
         "month_week_number": None,
         "month_day": None,
         "timezone": None,
+        "delete_after_two_days": None,
     }
 
     assert build_reminder_read_data(reminder) == ReminderReadData(

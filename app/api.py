@@ -181,6 +181,7 @@ def build_repeating_reminder_update_request(
     return ReminderCreateRequest(
         reminder_text=request.reminder_text,
         reminder_kind=request.reminder_kind,
+        delete_after_two_days=request.delete_after_two_days,
         schedule_type=request.schedule_type,
         start_at=schedule_start_at,
         timezone_name=request.timezone_name,

@@ -1,9 +1,18 @@
 import asyncio
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+)
+from aiogram.methods import DeleteMessage
 
+from app import database as database_module
 from app import scheduler as scheduler_module
 from app.constants import REMINDER_KIND_TEXT, REMINDER_KIND_WEATHER
 from app.scheduler import (
@@ -49,13 +58,16 @@ class FakeSchedulerWithJob:
 class FakeBot:
     def __init__(self) -> None:
         self.messages = []
+        self.deleted_messages = []
+        self.sent_at = datetime(2026, 7, 7, 4, 30, tzinfo=timezone.utc)
+        self.next_message_id = 1
 
     async def send_message(
         self,
         chat_id: int,
         text: str,
         parse_mode: str | None = None,
-    ) -> None:
+    ):
         self.messages.append(
             {
                 "chat_id": chat_id,
@@ -63,6 +75,21 @@ class FakeBot:
                 "parse_mode": parse_mode,
             }
         )
+        message = SimpleNamespace(
+            message_id=self.next_message_id,
+            date=self.sent_at,
+        )
+        self.next_message_id += 1
+        return message
+
+    async def delete_message(self, chat_id: int, message_id: int) -> bool:
+        self.deleted_messages.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+            }
+        )
+        return True
 
 
 def test_schedule_once_reminder_adds_date_job(monkeypatch) -> None:
@@ -88,7 +115,9 @@ def test_schedule_once_reminder_adds_date_job(monkeypatch) -> None:
     assert job["run_date"] == start_at
     assert job["id"] == "1"
     assert job["replace_existing"] is True
-    assert job["args"][1:] == [100, "Тест once", REMINDER_KIND_TEXT, 1]
+    assert job["args"][1:] == [100, "Тест once", REMINDER_KIND_TEXT, 1, False]
+    assert job["max_instances"] == 1
+    assert job["coalesce"] is True
 
 
 def test_schedule_every_days_reminder_adds_interval_job(monkeypatch) -> None:
@@ -241,8 +270,15 @@ def test_send_once_reminder_sends_message_and_marks_sent(monkeypatch) -> None:
     assert marked_ids == [1]
 
 
-def test_send_repeating_reminder_sends_message() -> None:
+def test_send_repeating_reminder_sends_message_and_stays_active(monkeypatch) -> None:
     bot = FakeBot()
+    monkeypatch.setattr(
+        scheduler_module,
+        "mark_reminder_as_sent",
+        lambda reminder_id: (_ for _ in ()).throw(
+            AssertionError("Repeating reminder must stay active.")
+        ),
+    )
 
     asyncio.run(
         send_repeating_reminder(
@@ -705,3 +741,468 @@ def test_send_repeating_weather_reminder_uses_prepared_report_and_deletes_it(
             "scheduled_for_utc": "2026-07-07T04:30:00+00:00",
         }
     ]
+
+
+def test_successful_send_with_auto_delete_enqueues_message(monkeypatch) -> None:
+    bot = FakeBot()
+    queued_messages = []
+
+    def fake_enqueue_reminder_message_deletion(**kwargs) -> bool:
+        queued_messages.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "enqueue_reminder_message_deletion",
+        fake_enqueue_reminder_message_deletion,
+    )
+
+    asyncio.run(
+        send_repeating_reminder(
+            bot=bot,
+            chat_id=100,
+            reminder_text="Тест repeating",
+            reminder_kind=REMINDER_KIND_TEXT,
+            reminder_id=2,
+            delete_after_two_days=True,
+        )
+    )
+
+    assert len(bot.messages) == 1
+    assert queued_messages == [
+        {
+            "reminder_id": 2,
+            "chat_id": 100,
+            "message_id": 1,
+            "sent_at": bot.sent_at,
+            "delete_at": bot.sent_at + timedelta(hours=47, minutes=45),
+        }
+    ]
+
+
+def test_successful_send_without_auto_delete_does_not_enqueue(monkeypatch) -> None:
+    bot = FakeBot()
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "enqueue_reminder_message_deletion",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("Disabled auto-delete must not enqueue a message.")
+        ),
+    )
+
+    asyncio.run(
+        send_repeating_reminder(
+            bot=bot,
+            chat_id=100,
+            reminder_text="Тест repeating",
+            reminder_kind=REMINDER_KIND_TEXT,
+            reminder_id=2,
+            delete_after_two_days=False,
+        )
+    )
+
+    assert len(bot.messages) == 1
+
+
+def test_send_error_does_not_enqueue_message(monkeypatch) -> None:
+    class FailingBot(FakeBot):
+        async def send_message(self, **kwargs):
+            raise RuntimeError("Telegram send failed")
+
+    queued_messages = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "enqueue_reminder_message_deletion",
+        lambda **kwargs: queued_messages.append(kwargs),
+    )
+
+    with pytest.raises(RuntimeError, match="Telegram send failed"):
+        asyncio.run(
+            send_repeating_reminder(
+                bot=FailingBot(),
+                chat_id=100,
+                reminder_text="Тест repeating",
+                reminder_kind=REMINDER_KIND_TEXT,
+                reminder_id=2,
+                delete_after_two_days=True,
+            )
+        )
+
+    assert queued_messages == []
+
+
+def test_queue_write_error_does_not_resend_or_block_once_status(
+    monkeypatch,
+) -> None:
+    bot = FakeBot()
+    enqueue_attempts = []
+    marked_ids = []
+
+    def fail_enqueue(**kwargs) -> bool:
+        enqueue_attempts.append(kwargs)
+        raise sqlite3.OperationalError("database is locked")
+
+    async def skip_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "enqueue_reminder_message_deletion",
+        fail_enqueue,
+    )
+    monkeypatch.setattr(scheduler_module.asyncio, "sleep", skip_sleep)
+    monkeypatch.setattr(
+        scheduler_module,
+        "mark_reminder_as_sent",
+        lambda reminder_id: marked_ids.append(reminder_id),
+    )
+
+    asyncio.run(
+        send_once_reminder(
+            bot=bot,
+            chat_id=100,
+            reminder_text="Тест once",
+            reminder_kind=REMINDER_KIND_TEXT,
+            reminder_id=1,
+            delete_after_two_days=True,
+        )
+    )
+
+    assert len(bot.messages) == 1
+    assert len(enqueue_attempts) == scheduler_module.MESSAGE_DELETION_ENQUEUE_ATTEMPTS
+    assert marked_ids == [1]
+
+
+def test_weather_error_message_is_enqueued_when_telegram_accepts_it(
+    monkeypatch,
+) -> None:
+    bot = FakeBot()
+    queued_messages = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_prepared_weather_report",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_weather_report",
+        lambda raw_locations: (_ for _ in ()).throw(
+            scheduler_module.WeatherServiceError("Сервис временно недоступен.")
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "enqueue_reminder_message_deletion",
+        lambda **kwargs: queued_messages.append(kwargs) or True,
+    )
+
+    asyncio.run(
+        send_repeating_reminder(
+            bot=bot,
+            chat_id=100,
+            reminder_text="Екатеринбург",
+            reminder_kind=REMINDER_KIND_WEATHER,
+            reminder_id=12,
+            delete_after_two_days=True,
+        )
+    )
+
+    assert "Не смог получить прогноз погоды" in bot.messages[0]["text"]
+    assert queued_messages[0]["message_id"] == 1
+
+
+def build_message_deletion_row(
+    *,
+    queue_id: int = 1,
+    message_id: int = 501,
+    sent_at: datetime,
+    delete_at: datetime | None = None,
+    delete_attempts: int = 0,
+) -> dict[str, object]:
+    actual_delete_at = delete_at or (sent_at + scheduler_module.MESSAGE_DELETION_DELAY)
+    return {
+        "id": queue_id,
+        "reminder_id": 12,
+        "chat_id": 100,
+        "message_id": message_id,
+        "sent_at_utc": sent_at.isoformat(timespec="seconds"),
+        "delete_at_utc": actual_delete_at.isoformat(timespec="seconds"),
+        "delete_attempts": delete_attempts,
+        "next_attempt_at_utc": actual_delete_at.isoformat(timespec="seconds"),
+        "last_error": None,
+    }
+
+
+def test_message_is_not_deleted_before_delete_at(monkeypatch) -> None:
+    bot = FakeBot()
+    now = datetime.now(timezone.utc)
+    row = build_message_deletion_row(sent_at=now - timedelta(hours=1))
+    rescheduled = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "reschedule_reminder_message_deletion",
+        lambda **kwargs: rescheduled.append(kwargs),
+    )
+
+    asyncio.run(scheduler_module.process_reminder_message_deletion(bot, row))
+
+    assert bot.deleted_messages == []
+    assert rescheduled[0]["next_attempt_at"] == scheduler_module.parse_utc_datetime(
+        row["delete_at_utc"]
+    )
+
+
+def test_message_is_deleted_at_delete_at(monkeypatch) -> None:
+    bot = FakeBot()
+    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    row = build_message_deletion_row(sent_at=sent_at)
+    removed_ids = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_reminder_message_deletion",
+        lambda queue_id: removed_ids.append(queue_id),
+    )
+
+    asyncio.run(scheduler_module.process_reminder_message_deletion(bot, row))
+
+    assert bot.deleted_messages == [{"chat_id": 100, "message_id": 501}]
+    assert removed_ids == [1]
+
+
+def test_message_not_found_is_idempotent_success(monkeypatch) -> None:
+    class MissingMessageBot(FakeBot):
+        async def delete_message(self, chat_id: int, message_id: int) -> bool:
+            raise TelegramBadRequest(
+                method=DeleteMessage(chat_id=chat_id, message_id=message_id),
+                message="message to delete not found",
+            )
+
+    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    row = build_message_deletion_row(sent_at=sent_at)
+    removed_ids = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_reminder_message_deletion",
+        lambda queue_id: removed_ids.append(queue_id),
+    )
+
+    asyncio.run(
+        scheduler_module.process_reminder_message_deletion(
+            MissingMessageBot(),
+            row,
+        )
+    )
+
+    assert removed_ids == [1]
+
+
+def test_temporary_delete_error_is_rescheduled(monkeypatch) -> None:
+    class NetworkFailureBot(FakeBot):
+        async def delete_message(self, chat_id: int, message_id: int) -> bool:
+            raise TelegramNetworkError(
+                method=DeleteMessage(chat_id=chat_id, message_id=message_id),
+                message="network unavailable",
+            )
+
+    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    row = build_message_deletion_row(sent_at=sent_at)
+    rescheduled = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "reschedule_reminder_message_deletion",
+        lambda **kwargs: rescheduled.append(kwargs),
+    )
+
+    asyncio.run(
+        scheduler_module.process_reminder_message_deletion(
+            NetworkFailureBot(),
+            row,
+        )
+    )
+
+    assert rescheduled[0]["delete_attempts"] == 1
+    assert "network unavailable" in rescheduled[0]["last_error"]
+    assert (
+        timedelta(seconds=50)
+        <= (rescheduled[0]["next_attempt_at"] - datetime.now(timezone.utc))
+        <= timedelta(seconds=60)
+    )
+
+
+def test_retry_after_is_respected(monkeypatch) -> None:
+    class RetryAfterBot(FakeBot):
+        async def delete_message(self, chat_id: int, message_id: int) -> bool:
+            raise TelegramRetryAfter(
+                method=DeleteMessage(chat_id=chat_id, message_id=message_id),
+                message="Too Many Requests",
+                retry_after=120,
+            )
+
+    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    row = build_message_deletion_row(sent_at=sent_at)
+    rescheduled = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "reschedule_reminder_message_deletion",
+        lambda **kwargs: rescheduled.append(kwargs),
+    )
+
+    asyncio.run(
+        scheduler_module.process_reminder_message_deletion(RetryAfterBot(), row)
+    )
+
+    assert (
+        timedelta(seconds=110)
+        <= (rescheduled[0]["next_attempt_at"] - datetime.now(timezone.utc))
+        <= timedelta(seconds=120)
+    )
+
+
+def test_terminal_delete_error_removes_queue_item(monkeypatch) -> None:
+    class ForbiddenBot(FakeBot):
+        async def delete_message(self, chat_id: int, message_id: int) -> bool:
+            raise TelegramForbiddenError(
+                method=DeleteMessage(chat_id=chat_id, message_id=message_id),
+                message="bot was blocked",
+            )
+
+    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    row = build_message_deletion_row(sent_at=sent_at)
+    removed_ids = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_reminder_message_deletion",
+        lambda queue_id: removed_ids.append(queue_id),
+    )
+
+    asyncio.run(scheduler_module.process_reminder_message_deletion(ForbiddenBot(), row))
+
+    assert removed_ids == [1]
+
+
+def test_expired_message_is_removed_without_telegram_call(monkeypatch) -> None:
+    bot = FakeBot()
+    sent_at = datetime.now(timezone.utc) - timedelta(hours=48, seconds=1)
+    row = build_message_deletion_row(sent_at=sent_at)
+    removed_ids = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_reminder_message_deletion",
+        lambda queue_id: removed_ids.append(queue_id),
+    )
+
+    asyncio.run(scheduler_module.process_reminder_message_deletion(bot, row))
+
+    assert bot.deleted_messages == []
+    assert removed_ids == [1]
+
+
+def test_cleanup_error_for_one_message_does_not_block_next(monkeypatch) -> None:
+    class PartiallyFailingBot(FakeBot):
+        async def delete_message(self, chat_id: int, message_id: int) -> bool:
+            if message_id == 501:
+                raise TelegramForbiddenError(
+                    method=DeleteMessage(chat_id=chat_id, message_id=message_id),
+                    message="bot was blocked",
+                )
+            return await super().delete_message(chat_id, message_id)
+
+    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    rows = [
+        build_message_deletion_row(
+            queue_id=1,
+            message_id=501,
+            sent_at=sent_at,
+        ),
+        build_message_deletion_row(
+            queue_id=2,
+            message_id=502,
+            sent_at=sent_at,
+        ),
+    ]
+    removed_ids = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_due_reminder_message_deletions",
+        lambda *args, **kwargs: rows,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_reminder_message_deletion",
+        lambda queue_id: removed_ids.append(queue_id),
+    )
+
+    bot = PartiallyFailingBot()
+    asyncio.run(scheduler_module.cleanup_reminder_message_deletion_queue(bot))
+
+    assert removed_ids == [1, 2]
+    assert bot.deleted_messages == [{"chat_id": 100, "message_id": 502}]
+
+
+def test_schedule_reminder_message_deletion_cleanup_adds_minutely_job(
+    monkeypatch,
+) -> None:
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+    bot = FakeBot()
+
+    scheduler_module.schedule_reminder_message_deletion_cleanup(bot)
+
+    assert len(fake_scheduler.jobs) == 1
+    job = fake_scheduler.jobs[0]
+    assert job["func"] == scheduler_module.cleanup_reminder_message_deletion_queue
+    assert job["trigger"] == "interval"
+    assert job["minutes"] == 1
+    assert job["args"] == [bot]
+    assert job["id"] == "reminder-message-deletion-cleanup"
+    assert job["max_instances"] == 1
+    assert job["coalesce"] is True
+    assert "next_run_time" in job
+
+
+def test_cleanup_with_empty_persistent_queue_does_nothing(monkeypatch) -> None:
+    bot = FakeBot()
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_due_reminder_message_deletions",
+        lambda *args, **kwargs: [],
+    )
+
+    asyncio.run(scheduler_module.cleanup_reminder_message_deletion_queue(bot))
+
+    assert bot.deleted_messages == []
+
+
+def test_persistent_queue_is_processed_after_restart_and_only_once(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    test_db_path = tmp_path / "test_reminders.db"
+    monkeypatch.setattr(database_module, "DB_PATH", test_db_path)
+    database_module.init_db()
+
+    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    database_module.enqueue_reminder_message_deletion(
+        reminder_id=12,
+        chat_id=100,
+        message_id=501,
+        sent_at=sent_at,
+        delete_at=sent_at + scheduler_module.MESSAGE_DELETION_DELAY,
+    )
+
+    # A second initialization represents a process restart over the same SQLite file.
+    database_module.init_db()
+    bot = FakeBot()
+
+    asyncio.run(scheduler_module.cleanup_reminder_message_deletion_queue(bot))
+    asyncio.run(scheduler_module.cleanup_reminder_message_deletion_queue(bot))
+
+    assert bot.deleted_messages == [{"chat_id": 100, "message_id": 501}]
+    assert (
+        database_module.get_due_reminder_message_deletions(
+            datetime.now(timezone.utc),
+            limit=10,
+        )
+        == []
+    )

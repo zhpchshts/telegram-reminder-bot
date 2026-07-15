@@ -1,5 +1,8 @@
 from datetime import UTC, datetime
 
+import pytest
+from pydantic import ValidationError
+
 from app.api_models import (
     ChatTimezoneResponse,
     ChatTimezoneUpdateRequest,
@@ -33,6 +36,7 @@ def test_build_reminder_response() -> None:
             id=42,
             chat_id=100,
             reminder_text="Проверить релиз",
+            delete_after_two_days=True,
             schedule_type="every_days",
             start_at=start_at,
             timezone_name="Asia/Yekaterinburg",
@@ -44,6 +48,7 @@ def test_build_reminder_response() -> None:
         id=42,
         chat_id=100,
         reminder_text="Проверить релиз",
+        delete_after_two_days=True,
         schedule_type="every_days",
         start_at=start_at,
         timezone_name="Asia/Yekaterinburg",
@@ -76,6 +81,7 @@ def test_build_reminder_create_data() -> None:
     result = build_reminder_create_data(
         ReminderCreateRequest(
             reminder_text="Проверить релиз",
+            delete_after_two_days=True,
             schedule_type="every_days",
             start_at=datetime(2099, 6, 10, 12, 12),
             timezone_name="Asia/Yekaterinburg",
@@ -85,11 +91,37 @@ def test_build_reminder_create_data() -> None:
 
     assert result == ReminderCreateData(
         reminder_text="Проверить релиз",
+        delete_after_two_days=True,
         schedule_type="every_days",
         start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
         timezone_name="Asia/Yekaterinburg",
         interval_days=3,
     )
+
+
+def test_reminder_create_request_defaults_auto_delete_to_false() -> None:
+    request = ReminderCreateRequest(
+        reminder_text="Проверить релиз",
+        schedule_type="once",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+    )
+
+    assert request.delete_after_two_days is False
+
+
+@pytest.mark.parametrize("invalid_value", [0, 1, "true", "false"])
+def test_reminder_create_request_requires_strict_boolean(
+    invalid_value: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        ReminderCreateRequest(
+            reminder_text="Проверить релиз",
+            delete_after_two_days=invalid_value,
+            schedule_type="once",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+        )
 
 
 def test_build_created_reminder_response() -> None:

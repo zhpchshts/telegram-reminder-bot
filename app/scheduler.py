@@ -6,6 +6,17 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramNotFound,
+    TelegramRetryAfter,
+    TelegramServerError,
+    TelegramUnauthorizedError,
+)
+from aiogram.types import Message
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -19,12 +30,16 @@ from app.constants import (
 )
 from app.database import (
     count_active_chats,
+    delete_reminder_message_deletion,
     delete_expired_prepared_weather_reports,
     delete_prepared_weather_report,
+    enqueue_reminder_message_deletion,
     get_all_active_reminders,
+    get_due_reminder_message_deletions,
     get_prepared_weather_report,
     mark_reminder_as_missed,
     mark_reminder_as_sent,
+    reschedule_reminder_message_deletion,
     save_prepared_weather_report,
 )
 from app.formatting import format_datetime_ru
@@ -38,6 +53,13 @@ LOGGER = logging.getLogger(__name__)
 WEATHER_PREFETCH_WINDOW = timedelta(minutes=5)
 WEATHER_REPORT_CACHE_RETENTION = timedelta(minutes=10)
 WEATHER_REPORT_CACHE_LOOKUP_GRACE = timedelta(minutes=1)
+MESSAGE_DELETION_DELAY = timedelta(hours=47, minutes=45)
+MESSAGE_DELETION_MAX_AGE = timedelta(hours=48)
+MESSAGE_DELETION_RETRY_DELAY = timedelta(minutes=1)
+MESSAGE_DELETION_BATCH_SIZE = 100
+MESSAGE_DELETION_ENQUEUE_ATTEMPTS = 3
+MESSAGE_DELETION_ENQUEUE_RETRY_DELAY_SECONDS = 0.05
+MESSAGE_DELETION_ERROR_MAX_LENGTH = 1000
 
 
 def ensure_timezone_aware(
@@ -203,7 +225,7 @@ async def send_reminder_message(
     reminder_text: str,
     reminder_kind: str,
     reminder_id: int,
-) -> None:
+) -> Message:
     if reminder_kind == REMINDER_KIND_WEATHER:
         now = datetime.now(timezone.utc)
 
@@ -224,7 +246,7 @@ async def send_reminder_message(
         else:
             message = prepared_report["report_html"]
 
-        await bot.send_message(
+        sent_message = await bot.send_message(
             chat_id=chat_id,
             text=message,
             parse_mode="HTML",
@@ -237,14 +259,74 @@ async def send_reminder_message(
                 prepared_report["scheduled_for_utc"],
             )
 
-        return
+        return sent_message
 
     message = build_reminder_message(reminder_text, reminder_kind)
 
-    await bot.send_message(
+    return await bot.send_message(
         chat_id=chat_id,
         text=message,
     )
+
+
+def get_message_sent_at_utc(message: Message) -> datetime:
+    sent_at = message.date
+    if sent_at.tzinfo is None or sent_at.tzinfo.utcoffset(sent_at) is None:
+        sent_at = sent_at.replace(tzinfo=timezone.utc)
+
+    return sent_at.astimezone(timezone.utc)
+
+
+async def enqueue_sent_reminder_message_for_deletion(
+    *,
+    reminder_id: int,
+    chat_id: int,
+    message: Message,
+    delete_after_two_days: bool,
+) -> None:
+    if not delete_after_two_days:
+        return
+
+    sent_at = get_message_sent_at_utc(message)
+    delete_at = sent_at + MESSAGE_DELETION_DELAY
+
+    for attempt in range(1, MESSAGE_DELETION_ENQUEUE_ATTEMPTS + 1):
+        try:
+            await asyncio.to_thread(
+                enqueue_reminder_message_deletion,
+                reminder_id=reminder_id,
+                chat_id=chat_id,
+                message_id=message.message_id,
+                sent_at=sent_at,
+                delete_at=delete_at,
+            )
+            return
+        except sqlite3.Error:
+            if attempt == MESSAGE_DELETION_ENQUEUE_ATTEMPTS:
+                LOGGER.exception(
+                    (
+                        "Reminder message deletion enqueue failed permanently: "
+                        "reminder_id=%s chat_id=%s message_id=%s attempts=%s"
+                    ),
+                    reminder_id,
+                    chat_id,
+                    message.message_id,
+                    attempt,
+                )
+                return
+
+            LOGGER.warning(
+                (
+                    "Reminder message deletion enqueue failed, retrying: "
+                    "reminder_id=%s chat_id=%s message_id=%s attempt=%s"
+                ),
+                reminder_id,
+                chat_id,
+                message.message_id,
+                attempt,
+                exc_info=True,
+            )
+            await asyncio.sleep(MESSAGE_DELETION_ENQUEUE_RETRY_DELAY_SECONDS * attempt)
 
 
 async def send_once_reminder(
@@ -253,13 +335,20 @@ async def send_once_reminder(
     reminder_text: str,
     reminder_kind: str,
     reminder_id: int,
+    delete_after_two_days: bool = False,
 ) -> None:
-    await send_reminder_message(
+    sent_message = await send_reminder_message(
         bot=bot,
         chat_id=chat_id,
         reminder_text=reminder_text,
         reminder_kind=reminder_kind,
         reminder_id=reminder_id,
+    )
+    await enqueue_sent_reminder_message_for_deletion(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+        message=sent_message,
+        delete_after_two_days=delete_after_two_days,
     )
     mark_reminder_as_sent(reminder_id)
 
@@ -270,13 +359,269 @@ async def send_repeating_reminder(
     reminder_text: str,
     reminder_kind: str,
     reminder_id: int,
+    delete_after_two_days: bool = False,
 ) -> None:
-    await send_reminder_message(
+    sent_message = await send_reminder_message(
         bot=bot,
         chat_id=chat_id,
         reminder_text=reminder_text,
         reminder_kind=reminder_kind,
         reminder_id=reminder_id,
+    )
+    await enqueue_sent_reminder_message_for_deletion(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+        message=sent_message,
+        delete_after_two_days=delete_after_two_days,
+    )
+
+
+def parse_utc_datetime(value: object) -> datetime:
+    parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.astimezone(timezone.utc)
+
+
+def is_message_not_found_error(error: TelegramAPIError) -> bool:
+    if isinstance(error, TelegramNotFound):
+        return True
+
+    return isinstance(error, TelegramBadRequest) and (
+        "message to delete not found" in error.message.casefold()
+    )
+
+
+async def remove_reminder_message_deletion(queue_id: int) -> None:
+    try:
+        await asyncio.to_thread(delete_reminder_message_deletion, queue_id)
+    except sqlite3.Error:
+        LOGGER.exception(
+            "Could not remove reminder message deletion queue item: queue_id=%s",
+            queue_id,
+        )
+
+
+async def retry_reminder_message_deletion(
+    row: sqlite3.Row,
+    *,
+    now: datetime,
+    expires_at: datetime,
+    error: Exception,
+    retry_after_seconds: int | None = None,
+) -> None:
+    retry_delay = (
+        timedelta(seconds=max(retry_after_seconds, 1))
+        if retry_after_seconds is not None
+        else MESSAGE_DELETION_RETRY_DELAY
+    )
+    next_attempt_at = now + retry_delay
+    queue_id = int(row["id"])
+
+    if next_attempt_at >= expires_at:
+        LOGGER.warning(
+            (
+                "Reminder message deletion retry window exhausted: "
+                "queue_id=%s reminder_id=%s chat_id=%s message_id=%s error=%s"
+            ),
+            queue_id,
+            row["reminder_id"],
+            row["chat_id"],
+            row["message_id"],
+            error,
+        )
+        await remove_reminder_message_deletion(queue_id)
+        return
+
+    try:
+        await asyncio.to_thread(
+            reschedule_reminder_message_deletion,
+            queue_id=queue_id,
+            delete_attempts=int(row["delete_attempts"]) + 1,
+            next_attempt_at=next_attempt_at,
+            last_error=str(error)[:MESSAGE_DELETION_ERROR_MAX_LENGTH],
+        )
+    except sqlite3.Error:
+        LOGGER.exception(
+            (
+                "Could not reschedule reminder message deletion: "
+                "queue_id=%s reminder_id=%s chat_id=%s message_id=%s"
+            ),
+            queue_id,
+            row["reminder_id"],
+            row["chat_id"],
+            row["message_id"],
+        )
+
+
+async def process_reminder_message_deletion(bot: Bot, row: sqlite3.Row) -> None:
+    queue_id = int(row["id"])
+
+    try:
+        sent_at = parse_utc_datetime(row["sent_at_utc"])
+        delete_at = parse_utc_datetime(row["delete_at_utc"])
+    except (TypeError, ValueError):
+        LOGGER.warning(
+            "Dropping reminder message deletion with invalid timestamps: queue_id=%s",
+            queue_id,
+            exc_info=True,
+        )
+        await remove_reminder_message_deletion(queue_id)
+        return
+
+    now = datetime.now(timezone.utc)
+    expires_at = sent_at + MESSAGE_DELETION_MAX_AGE
+
+    if now < delete_at:
+        try:
+            await asyncio.to_thread(
+                reschedule_reminder_message_deletion,
+                queue_id=queue_id,
+                delete_attempts=int(row["delete_attempts"]),
+                next_attempt_at=delete_at,
+                last_error=str(row["last_error"] or ""),
+            )
+        except sqlite3.Error:
+            LOGGER.exception(
+                "Could not restore reminder message deletion time: queue_id=%s",
+                queue_id,
+            )
+        return
+
+    if now >= expires_at:
+        LOGGER.warning(
+            (
+                "Reminder message deletion expired before Telegram deadline: "
+                "queue_id=%s reminder_id=%s chat_id=%s message_id=%s"
+            ),
+            queue_id,
+            row["reminder_id"],
+            row["chat_id"],
+            row["message_id"],
+        )
+        await remove_reminder_message_deletion(queue_id)
+        return
+
+    try:
+        await bot.delete_message(
+            chat_id=int(row["chat_id"]),
+            message_id=int(row["message_id"]),
+        )
+    except TelegramRetryAfter as error:
+        await retry_reminder_message_deletion(
+            row,
+            now=now,
+            expires_at=expires_at,
+            error=error,
+            retry_after_seconds=error.retry_after,
+        )
+    except (TelegramNetworkError, TelegramServerError) as error:
+        await retry_reminder_message_deletion(
+            row,
+            now=now,
+            expires_at=expires_at,
+            error=error,
+        )
+    except TelegramAPIError as error:
+        if is_message_not_found_error(error):
+            LOGGER.info(
+                (
+                    "Reminder message was already deleted: "
+                    "queue_id=%s chat_id=%s message_id=%s"
+                ),
+                queue_id,
+                row["chat_id"],
+                row["message_id"],
+            )
+        elif isinstance(
+            error,
+            (
+                TelegramBadRequest,
+                TelegramForbiddenError,
+                TelegramUnauthorizedError,
+            ),
+        ):
+            LOGGER.warning(
+                (
+                    "Terminal Telegram error deleting reminder message: "
+                    "queue_id=%s reminder_id=%s chat_id=%s message_id=%s error=%s"
+                ),
+                queue_id,
+                row["reminder_id"],
+                row["chat_id"],
+                row["message_id"],
+                error,
+            )
+        else:
+            LOGGER.warning(
+                (
+                    "Unhandled Telegram API error deleting reminder message: "
+                    "queue_id=%s reminder_id=%s chat_id=%s message_id=%s error=%s"
+                ),
+                queue_id,
+                row["reminder_id"],
+                row["chat_id"],
+                row["message_id"],
+                error,
+            )
+
+        await remove_reminder_message_deletion(queue_id)
+    except Exception as error:
+        LOGGER.exception(
+            (
+                "Unexpected error deleting reminder message: "
+                "queue_id=%s reminder_id=%s chat_id=%s message_id=%s"
+            ),
+            queue_id,
+            row["reminder_id"],
+            row["chat_id"],
+            row["message_id"],
+        )
+        await retry_reminder_message_deletion(
+            row,
+            now=now,
+            expires_at=expires_at,
+            error=error,
+        )
+    else:
+        await remove_reminder_message_deletion(queue_id)
+
+
+async def cleanup_reminder_message_deletion_queue(bot: Bot) -> None:
+    now = datetime.now(timezone.utc)
+
+    try:
+        rows = await asyncio.to_thread(
+            get_due_reminder_message_deletions,
+            now,
+            limit=MESSAGE_DELETION_BATCH_SIZE,
+        )
+    except sqlite3.Error:
+        LOGGER.exception("Could not load due reminder message deletions.")
+        return
+
+    for row in rows:
+        try:
+            await process_reminder_message_deletion(bot, row)
+        except Exception:
+            LOGGER.exception(
+                "Reminder message deletion item failed unexpectedly: queue_id=%s",
+                row["id"],
+            )
+
+
+def schedule_reminder_message_deletion_cleanup(bot: Bot) -> None:
+    scheduler.add_job(
+        cleanup_reminder_message_deletion_queue,
+        trigger="interval",
+        minutes=1,
+        args=[bot],
+        id="reminder-message-deletion-cleanup",
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
     )
 
 
@@ -431,6 +776,7 @@ def schedule_reminder(
     chat_id: int,
     reminder_text: str,
     reminder_kind: str = REMINDER_KIND_TEXT,
+    delete_after_two_days: bool = False,
     schedule_type: str,
     start_at: datetime,
     interval_days: int | None = None,
@@ -441,9 +787,18 @@ def schedule_reminder(
     timezone_name: str | None = None,
 ) -> None:
     job_kwargs: dict[str, Any] = {
-        "args": [bot, chat_id, reminder_text, reminder_kind, reminder_id],
+        "args": [
+            bot,
+            chat_id,
+            reminder_text,
+            reminder_kind,
+            reminder_id,
+            delete_after_two_days,
+        ],
         "id": str(reminder_id),
         "replace_existing": True,
+        "max_instances": 1,
+        "coalesce": True,
     }
     trigger_kwargs = build_reminder_trigger_kwargs(
         schedule_type=schedule_type,
@@ -474,6 +829,7 @@ def schedule_reminder_from_row(bot: Bot, reminder: sqlite3.Row) -> None:
         chat_id=reminder_data.chat_id,
         reminder_text=reminder_data.reminder_text,
         reminder_kind=reminder_data.reminder_kind,
+        delete_after_two_days=reminder_data.delete_after_two_days,
         schedule_type=reminder_data.schedule_type,
         start_at=reminder_data.start_at,
         interval_days=reminder_data.interval_days,
@@ -505,4 +861,5 @@ async def restore_active_reminders(bot: Bot) -> None:
         schedule_reminder_from_row(bot, reminder)
         restored_count += 1
     schedule_weather_report_prefetch()
+    schedule_reminder_message_deletion_cleanup(bot)
     print(f"Restored reminders: {restored_count}. Missed reminders: {missed_count}.")

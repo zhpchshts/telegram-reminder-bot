@@ -31,6 +31,40 @@ def test_create_reminder_in_db_returns_id(monkeypatch, tmp_path) -> None:
     assert reminder_id == 1
 
 
+def test_reminder_auto_delete_setting_is_stored_and_updated(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+
+    reminder_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Тестовое напоминание",
+        schedule_type="every_days",
+        start_at=datetime(2026, 6, 8, 12, 12),
+        interval_days=1,
+        delete_after_two_days=True,
+    )
+
+    reminder = database.get_active_reminder_from_db(reminder_id)
+    assert reminder is not None
+    assert reminder["delete_after_two_days"] == 1
+
+    assert database.update_reminder_in_db(
+        reminder_id=reminder_id,
+        chat_id=100,
+        reminder_text="Обновлённое напоминание",
+        schedule_type="every_days",
+        start_at=datetime(2026, 6, 9, 12, 12),
+        interval_days=1,
+        delete_after_two_days=False,
+    )
+
+    updated_reminder = database.get_active_reminder_from_db(reminder_id)
+    assert updated_reminder is not None
+    assert updated_reminder["delete_after_two_days"] == 0
+
+
 def test_get_active_reminder_from_db(monkeypatch, tmp_path) -> None:
     use_test_db(monkeypatch, tmp_path)
 
@@ -523,3 +557,188 @@ def test_init_db_migrates_existing_weather_report_cache(
 
     assert "reminder_text" in columns
     assert rows == []
+
+
+def test_reminder_message_deletion_queue_is_persistent_and_independent(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    reminder_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Ежедневное напоминание",
+        schedule_type="every_days",
+        start_at=datetime(2026, 7, 7, 9, 0),
+        interval_days=1,
+        delete_after_two_days=True,
+    )
+    sent_at = datetime(2026, 7, 7, 4, 0, tzinfo=timezone.utc)
+    delete_at = sent_at + timedelta(hours=47, minutes=45)
+
+    assert database.enqueue_reminder_message_deletion(
+        reminder_id=reminder_id,
+        chat_id=100,
+        message_id=501,
+        sent_at=sent_at,
+        delete_at=delete_at,
+    )
+    assert not database.enqueue_reminder_message_deletion(
+        reminder_id=reminder_id,
+        chat_id=100,
+        message_id=501,
+        sent_at=sent_at,
+        delete_at=delete_at,
+    )
+
+    assert database.update_reminder_in_db(
+        reminder_id=reminder_id,
+        chat_id=100,
+        reminder_text="Ежедневное напоминание",
+        schedule_type="every_days",
+        start_at=datetime(2026, 7, 7, 9, 0),
+        interval_days=1,
+        delete_after_two_days=False,
+    )
+
+    database.mark_reminder_as_deleted(reminder_id)
+
+    with database.get_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM reminder_message_deletion_queue"
+        ).fetchall()
+
+    assert len(rows) == 1
+    assert rows[0]["reminder_id"] == reminder_id
+    assert rows[0]["message_id"] == 501
+    assert rows[0]["delete_at_utc"] == "2026-07-09T03:45:00+00:00"
+    assert rows[0]["next_attempt_at_utc"] == "2026-07-09T03:45:00+00:00"
+
+
+def test_due_reminder_message_deletions_can_be_rescheduled_and_deleted(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    sent_at = datetime(2026, 7, 7, 4, 0, tzinfo=timezone.utc)
+    delete_at = sent_at + timedelta(hours=47, minutes=45)
+    database.enqueue_reminder_message_deletion(
+        reminder_id=12,
+        chat_id=100,
+        message_id=501,
+        sent_at=sent_at,
+        delete_at=delete_at,
+    )
+
+    due_rows = database.get_due_reminder_message_deletions(
+        delete_at,
+        limit=10,
+    )
+    assert len(due_rows) == 1
+
+    next_attempt_at = delete_at + timedelta(minutes=1)
+    database.reschedule_reminder_message_deletion(
+        queue_id=due_rows[0]["id"],
+        delete_attempts=1,
+        next_attempt_at=next_attempt_at,
+        last_error="temporary error",
+    )
+
+    assert database.get_due_reminder_message_deletions(delete_at, limit=10) == []
+    retried_rows = database.get_due_reminder_message_deletions(
+        next_attempt_at,
+        limit=10,
+    )
+    assert len(retried_rows) == 1
+    assert retried_rows[0]["delete_attempts"] == 1
+    assert retried_rows[0]["last_error"] == "temporary error"
+
+    database.delete_reminder_message_deletion(retried_rows[0]["id"])
+    assert (
+        database.get_due_reminder_message_deletions(
+            next_attempt_at,
+            limit=10,
+        )
+        == []
+    )
+
+
+def test_init_db_migrates_existing_reminders_and_creates_deletion_queue(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    test_db_path = tmp_path / "test_reminders.db"
+    monkeypatch.setattr(database, "DB_PATH", test_db_path)
+
+    with sqlite3.connect(test_db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                schedule_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                start_at TEXT NOT NULL,
+                interval_days INTEGER,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO reminders (
+                chat_id,
+                text,
+                schedule_type,
+                status,
+                start_at,
+                interval_days,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                100,
+                "Существующее напоминание",
+                "every_days",
+                "active",
+                "2026-07-07T09:00:00",
+                1,
+                "2026-07-01T12:00:00",
+            ),
+        )
+
+    database.init_db()
+    database.init_db()
+
+    with database.get_connection() as connection:
+        reminder = connection.execute("SELECT * FROM reminders WHERE id = 1").fetchone()
+        queue_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(reminder_message_deletion_queue)"
+            ).fetchall()
+        }
+        queue_indexes = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA index_list(reminder_message_deletion_queue)"
+            ).fetchall()
+        }
+
+    assert reminder is not None
+    assert reminder["text"] == "Существующее напоминание"
+    assert reminder["delete_after_two_days"] == 0
+    assert {
+        "id",
+        "reminder_id",
+        "chat_id",
+        "message_id",
+        "sent_at_utc",
+        "delete_at_utc",
+        "delete_attempts",
+        "next_attempt_at_utc",
+        "last_error",
+    } <= queue_columns
+    assert "idx_reminder_message_deletion_queue_next_attempt" in queue_indexes
+    assert "idx_reminder_message_deletion_queue_delete_at" in queue_indexes

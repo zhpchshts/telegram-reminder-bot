@@ -82,7 +82,8 @@ REMINDER_COLUMNS = """
     day_of_week,
     month_week_number,
     month_day,
-    timezone
+    timezone,
+    delete_after_two_days
 """
 
 SCHEMA_MIGRATIONS = {
@@ -92,6 +93,7 @@ SCHEMA_MIGRATIONS = {
     "month_week_number": "month_week_number INTEGER",
     "month_day": "month_day INTEGER",
     "timezone": "timezone TEXT",
+    "delete_after_two_days": ("delete_after_two_days INTEGER NOT NULL DEFAULT 0"),
 }
 
 WEEKDAY_HELP = "MON, TUE, WED, THU, FRI, SAT, SUN"

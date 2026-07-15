@@ -30,6 +30,7 @@ def init_db() -> None:
                 month_week_number INTEGER,
                 month_day INTEGER,
                 timezone TEXT,
+                delete_after_two_days INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )
             """
@@ -68,6 +69,36 @@ def init_db() -> None:
                 prepared_at_utc TEXT NOT NULL,
                 PRIMARY KEY (reminder_id, scheduled_for_utc)
             )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminder_message_deletion_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reminder_id INTEGER,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                sent_at_utc TEXT NOT NULL,
+                delete_at_utc TEXT NOT NULL,
+                delete_attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at_utc TEXT NOT NULL,
+                last_error TEXT,
+                UNIQUE(chat_id, message_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_reminder_message_deletion_queue_next_attempt
+            ON reminder_message_deletion_queue(next_attempt_at_utc, id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_reminder_message_deletion_queue_delete_at
+            ON reminder_message_deletion_queue(delete_at_utc, id)
             """
         )
         weather_report_cache_columns = {
@@ -110,6 +141,7 @@ def create_reminder_in_db(
     month_week_number: int | None = None,
     month_day: int | None = None,
     timezone: str | None = None,
+    delete_after_two_days: bool = False,
 ) -> int:
     now = datetime.now().isoformat(timespec="seconds")
 
@@ -129,9 +161,10 @@ def create_reminder_in_db(
                 month_week_number,
                 month_day,
                 timezone,
+                delete_after_two_days,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -146,6 +179,7 @@ def create_reminder_in_db(
                 month_week_number,
                 month_day,
                 timezone,
+                int(delete_after_two_days),
                 now,
             ),
         )
@@ -167,6 +201,7 @@ def update_reminder_in_db(
     month_week_number: int | None = None,
     month_day: int | None = None,
     timezone: str | None = None,
+    delete_after_two_days: bool = False,
 ) -> bool:
     with get_connection() as connection:
         cursor = connection.execute(
@@ -182,7 +217,8 @@ def update_reminder_in_db(
                 day_of_week = ?,
                 month_week_number = ?,
                 month_day = ?,
-                timezone = ?
+                timezone = ?,
+                delete_after_two_days = ?
             WHERE id = ? AND chat_id = ? AND status = 'active'
             """,
             (
@@ -196,6 +232,7 @@ def update_reminder_in_db(
                 month_week_number,
                 month_day,
                 timezone,
+                int(delete_after_two_days),
                 reminder_id,
                 chat_id,
             ),
@@ -498,3 +535,110 @@ def format_utc_datetime(value: datetime) -> str:
         raise ValueError("Datetime must include a timezone.")
 
     return value.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def enqueue_reminder_message_deletion(
+    *,
+    reminder_id: int | None,
+    chat_id: int,
+    message_id: int,
+    sent_at: datetime,
+    delete_at: datetime,
+) -> bool:
+    sent_at_utc = format_utc_datetime(sent_at)
+    delete_at_utc = format_utc_datetime(delete_at)
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO reminder_message_deletion_queue (
+                reminder_id,
+                chat_id,
+                message_id,
+                sent_at_utc,
+                delete_at_utc,
+                delete_attempts,
+                next_attempt_at_utc,
+                last_error
+            )
+            VALUES (?, ?, ?, ?, ?, 0, ?, NULL)
+            """,
+            (
+                reminder_id,
+                chat_id,
+                message_id,
+                sent_at_utc,
+                delete_at_utc,
+                delete_at_utc,
+            ),
+        )
+
+    return cursor.rowcount > 0
+
+
+def get_due_reminder_message_deletions(
+    now: datetime,
+    *,
+    limit: int,
+) -> list[sqlite3.Row]:
+    now_utc = format_utc_datetime(now)
+
+    with get_connection() as connection:
+        return connection.execute(
+            """
+            SELECT
+                id,
+                reminder_id,
+                chat_id,
+                message_id,
+                sent_at_utc,
+                delete_at_utc,
+                delete_attempts,
+                next_attempt_at_utc,
+                last_error
+            FROM reminder_message_deletion_queue
+            WHERE next_attempt_at_utc <= ?
+            ORDER BY next_attempt_at_utc ASC, id ASC
+            LIMIT ?
+            """,
+            (now_utc, limit),
+        ).fetchall()
+
+
+def delete_reminder_message_deletion(queue_id: int) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            DELETE FROM reminder_message_deletion_queue
+            WHERE id = ?
+            """,
+            (queue_id,),
+        )
+
+
+def reschedule_reminder_message_deletion(
+    *,
+    queue_id: int,
+    delete_attempts: int,
+    next_attempt_at: datetime,
+    last_error: str,
+) -> None:
+    next_attempt_at_utc = format_utc_datetime(next_attempt_at)
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE reminder_message_deletion_queue
+            SET
+                delete_attempts = ?,
+                next_attempt_at_utc = ?,
+                last_error = ?
+            WHERE id = ?
+            """,
+            (
+                delete_attempts,
+                next_attempt_at_utc,
+                last_error,
+                queue_id,
+            ),
+        )

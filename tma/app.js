@@ -204,6 +204,7 @@ const elements = {
   monthDayOfWeek: byId("month-day-of-week"),
   monthWeekNumber: byId("month-week-number"),
   monthDay: byId("month-day"),
+  deleteAfterTwoDays: byId("delete-after-two-days"),
   intervalDaysField: byId("interval-days-field"),
   weeklyFields: byId("weekly-fields"),
   monthlyWeekdayFields: byId("monthly-weekday-fields"),
@@ -578,6 +579,9 @@ function showPreview(preview) {
   const notificationLabel = isRecurringEdit
     ? "Следующее уведомление"
     : "Первое срабатывание";
+  const autoDeleteChip = preview.delete_after_two_days
+    ? '<span class="preview-chip">Автоудаление: через 2 суток</span>'
+    : "";
 
   elements.preview.innerHTML = `
     <div class="preview-label">Предпросмотр</div>
@@ -587,6 +591,7 @@ function showPreview(preview) {
         getReminderKindLabel(reminderKind),
       )}</span>
       <span class="preview-chip">${escapeHtml(period)}</span>
+      ${autoDeleteChip}
       <span class="preview-next">${notificationLabel}: ${escapeHtml(
         formatDateTimeWithConditionalTimezone(
           notificationAt,
@@ -940,6 +945,16 @@ function createReminderCard(reminder) {
     meta.append(createTextElement("span", "reminder-chip", "Погода"));
   }
 
+  if (reminder.delete_after_two_days) {
+    meta.append(
+      createTextElement(
+        "span",
+        "reminder-chip",
+        "Автоудаление: через 2 суток",
+      ),
+    );
+  }
+
   meta.append(period, nextRun);
   content.append(title, meta);
 
@@ -1017,6 +1032,7 @@ function buildRequestPayload() {
     schedule_type: scheduleType,
     start_at: elements.startAt.value,
     timezone_name: elements.timezoneName.value.trim(),
+    delete_after_two_days: Boolean(elements.deleteAfterTwoDays?.checked),
     interval_days: null,
     interval_weeks: null,
     day_of_week: null,
@@ -1217,6 +1233,11 @@ function startEdit(reminder) {
   elements.monthDayOfWeek.value = reminder.day_of_week || "";
   elements.monthWeekNumber.value = reminder.month_week_number || "";
   elements.monthDay.value = reminder.month_day || "";
+  if (elements.deleteAfterTwoDays) {
+    elements.deleteAfterTwoDays.checked = Boolean(
+      reminder.delete_after_two_days,
+    );
+  }
   elements.saveButton.textContent = "Сохранить изменения";
   elements.cancelEditButton.hidden = false;
 
@@ -1240,6 +1261,9 @@ function resetForm() {
   elements.reminderId.value = "";
   elements.formTitle.textContent = "Создать напоминание";
   updateReminderKindFields();
+  if (elements.deleteAfterTwoDays) {
+    elements.deleteAfterTwoDays.checked = false;
+  }
   elements.timezoneName.value = state.context?.timezone_name || "";
   setDefaultStartAt();
   elements.saveButton.textContent = "Сохранить";

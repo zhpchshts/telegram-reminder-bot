@@ -1,0 +1,14 @@
+default_permissions = "project-edit-without-env"
+
+[permissions.project-edit-without-env]
+description = "Allow workspace edits while denying access to environment files."
+extends = ":workspace"
+
+[permissions.project-edit-without-env.filesystem]
+glob_scan_max_depth = 64
+
+[permissions.project-edit-without-env.filesystem.":workspace_roots"]
+".env" = "deny"
+".env.*" = "deny"
+"**/.env" = "deny"
+"**/.env.*" = "deny"

@@ -366,32 +366,96 @@ h3 {
 }
 
 .auto-delete-field {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
   align-items: center;
   padding: 4px 2px;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
 }
 
-.auto-delete-copy {
-  display: grid;
+.auto-delete-heading {
+  display: flex;
   min-width: 0;
-  gap: 4px;
+  gap: 7px;
+  align-items: center;
 }
 
 .auto-delete-title {
   color: var(--text);
   font-size: 14px;
   font-weight: 640;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.auto-delete-help {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.auto-delete-help-button {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: help;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.auto-delete-help-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent), transparent 76%);
+}
+
+.auto-delete-tooltip {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(320px, calc(100vw - 48px));
+  padding: 9px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  visibility: hidden;
+  background: var(--surface-strong);
+  color: var(--text);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text), transparent 86%);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease,
+    visibility 0.14s ease;
+}
+
+.auto-delete-help:hover .auto-delete-tooltip,
+.auto-delete-help:focus-within .auto-delete-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .auto-delete-switch {
   position: relative;
+  display: block;
   width: 46px;
   height: 28px;
   flex: 0 0 auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .auto-delete-switch input[type="checkbox"] {

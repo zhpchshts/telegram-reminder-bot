@@ -22,7 +22,7 @@
         document.documentElement.dataset.theme = "light";
       }
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20260716-02" />
+    <link rel="stylesheet" href="./styles.css?v=20260716-03" />
   </head>
   <body>
     <main class="app">
@@ -298,14 +298,30 @@
             </div>
           </div>
 
-          <label class="auto-delete-field" for="delete-after-two-days">
-            <span class="auto-delete-copy">
-              <span class="auto-delete-title">Удалять через 2 суток</span>
-              <span class="field-hint">
-                Бот автоматически удалит отправленное сообщение примерно через два дня.
+          <div class="auto-delete-field">
+            <span class="auto-delete-heading">
+              <label class="auto-delete-title" for="delete-after-two-days">
+                Удалять сообщение через 2 дня
+              </label>
+              <span class="auto-delete-help">
+                <button
+                  class="auto-delete-help-button"
+                  type="button"
+                  aria-label="Подробнее об автоматическом удалении"
+                  aria-describedby="auto-delete-tooltip"
+                >
+                  ?
+                </button>
+                <span
+                  id="auto-delete-tooltip"
+                  class="auto-delete-tooltip"
+                  role="tooltip"
+                >
+                  Бот автоматически удалит отправленное сообщение примерно через два дня.
+                </span>
               </span>
             </span>
-            <span class="auto-delete-switch">
+            <label class="auto-delete-switch" for="delete-after-two-days">
               <input
                 id="delete-after-two-days"
                 name="delete_after_two_days"
@@ -313,8 +329,8 @@
                 role="switch"
               />
               <span class="auto-delete-switch-track" aria-hidden="true"></span>
-            </span>
-          </label>
+            </label>
+          </div>
 
           <section id="preview" class="preview" hidden></section>
 

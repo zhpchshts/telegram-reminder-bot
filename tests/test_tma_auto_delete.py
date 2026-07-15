@@ -16,7 +16,10 @@ def test_auto_delete_checkbox_is_available_for_every_reminder() -> None:
     assert 'type="checkbox"' in html
     assert 'role="switch"' in html
     assert 'class="auto-delete-switch-track"' in html
-    assert "Удалять через 2 суток" in html
+    assert "Удалять сообщение через 2 дня" in html
+    assert 'class="auto-delete-tooltip"' in html
+    assert 'role="tooltip"' in html
+    assert 'aria-describedby="auto-delete-tooltip"' in html
     assert (
         "Бот автоматически удалит отправленное сообщение примерно через два дня."
         in html
@@ -31,13 +34,15 @@ def test_auto_delete_switch_has_isolated_checkbox_styles() -> None:
     html = read_tma_asset("index.html")
     styles = read_tma_asset("styles.css")
 
-    assert "styles.css?v=20260716-02" in html
+    assert "styles.css?v=20260716-03" in html
     assert '.auto-delete-switch input[type="checkbox"]' in styles
     assert "appearance: none;" in styles
     assert ".auto-delete-switch input:checked + .auto-delete-switch-track" in styles
     assert (
         ".auto-delete-switch input:focus-visible + .auto-delete-switch-track" in styles
     )
+    assert ".auto-delete-help:hover .auto-delete-tooltip" in styles
+    assert ".auto-delete-help:focus-within .auto-delete-tooltip" in styles
 
 
 def test_tma_request_edit_reset_and_card_support_auto_delete() -> None:

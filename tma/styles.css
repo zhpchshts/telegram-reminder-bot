@@ -367,29 +367,94 @@ h3 {
 
 .auto-delete-field {
   display: grid;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-muted);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 4px 2px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.checkbox-field {
-  display: flex;
-  gap: 10px;
-  align-items: center;
+.auto-delete-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.auto-delete-title {
   color: var(--text);
   font-size: 14px;
   font-weight: 640;
-  cursor: pointer;
 }
 
-.checkbox-field input[type="checkbox"] {
-  width: 20px;
-  min-height: 20px;
+.auto-delete-switch {
+  position: relative;
+  width: 46px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
+.auto-delete-switch input[type="checkbox"] {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   margin: 0;
   padding: 0;
-  accent-color: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.auto-delete-switch-track {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.auto-delete-switch-track::after {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--text), transparent 76%);
+  content: "";
+  transition: transform 0.16s ease;
+}
+
+.auto-delete-switch input:checked + .auto-delete-switch-track {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.auto-delete-switch input:checked + .auto-delete-switch-track::after {
+  transform: translateX(18px);
+}
+
+.auto-delete-switch input:focus-visible + .auto-delete-switch-track {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent), transparent 76%);
+}
+
+.auto-delete-switch input:disabled + .auto-delete-switch-track {
+  cursor: not-allowed;
+  opacity: 0.56;
 }
 
 input,

@@ -14,6 +14,8 @@ def test_auto_delete_checkbox_is_available_for_every_reminder() -> None:
     assert 'id="delete-after-two-days"' in html
     assert 'name="delete_after_two_days"' in html
     assert 'type="checkbox"' in html
+    assert 'role="switch"' in html
+    assert 'class="auto-delete-switch-track"' in html
     assert "Удалять через 2 суток" in html
     assert (
         "Бот автоматически удалит отправленное сообщение примерно через два дня."
@@ -23,6 +25,22 @@ def test_auto_delete_checkbox_is_available_for_every_reminder() -> None:
     checkbox_position = html.index('id="delete-after-two-days"')
     form_end_position = html.index("</form>", checkbox_position)
     assert checkbox_position < form_end_position
+
+
+def test_auto_delete_switch_has_isolated_checkbox_styles() -> None:
+    html = read_tma_asset("index.html")
+    styles = read_tma_asset("styles.css")
+
+    assert 'styles.css?v=20260716-02' in html
+    assert '.auto-delete-switch input[type="checkbox"]' in styles
+    assert "appearance: none;" in styles
+    assert (
+        ".auto-delete-switch input:checked + .auto-delete-switch-track" in styles
+    )
+    assert (
+        ".auto-delete-switch input:focus-visible + .auto-delete-switch-track"
+        in styles
+    )
 
 
 def test_tma_request_edit_reset_and_card_support_auto_delete() -> None:

@@ -22,7 +22,7 @@
         document.documentElement.dataset.theme = "light";
       }
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20260716-01" />
+    <link rel="stylesheet" href="./styles.css?v=20260716-02" />
   </head>
   <body>
     <main class="app">
@@ -298,19 +298,23 @@
             </div>
           </div>
 
-          <div class="auto-delete-field">
-            <label class="checkbox-field" for="delete-after-two-days">
+          <label class="auto-delete-field" for="delete-after-two-days">
+            <span class="auto-delete-copy">
+              <span class="auto-delete-title">Удалять через 2 суток</span>
+              <span class="field-hint">
+                Бот автоматически удалит отправленное сообщение примерно через два дня.
+              </span>
+            </span>
+            <span class="auto-delete-switch">
               <input
                 id="delete-after-two-days"
                 name="delete_after_two_days"
                 type="checkbox"
+                role="switch"
               />
-              <span>Удалять через 2 суток</span>
-            </label>
-            <span class="field-hint">
-              Бот автоматически удалит отправленное сообщение примерно через два дня.
+              <span class="auto-delete-switch-track" aria-hidden="true"></span>
             </span>
-          </div>
+          </label>
 
           <section id="preview" class="preview" hidden></section>
 

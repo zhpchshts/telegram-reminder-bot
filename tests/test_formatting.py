@@ -7,6 +7,8 @@ from app.formatting import (
 )
 from app.reminder_models import ReminderReadData
 
+TEST_DELIVERY_TRACKING_STARTED_AT = datetime.fromisoformat("2026-07-01T00:00:00+00:00")
+
 
 def test_format_datetime_ru() -> None:
     result = format_datetime_ru(datetime(2026, 6, 8, 12, 12))
@@ -75,6 +77,7 @@ def test_format_reminder_read_data_for_list_every_days() -> None:
         schedule_type="every_days",
         start_at=datetime(2026, 6, 8, 12, 12),
         timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
         interval_days=3,
     )
 
@@ -101,6 +104,7 @@ def test_format_reminder_read_data_for_list_yearly_date() -> None:
         schedule_type="yearly_date",
         start_at=datetime(2026, 8, 14, 9, 0),
         timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
     )
 
     result = format_reminder_read_data_for_list(

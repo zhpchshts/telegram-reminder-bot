@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+
 from app.constants import REMINDER_KIND_TEXT
 
 
@@ -26,6 +27,8 @@ class ReminderReadData:
     schedule_type: str
     start_at: datetime
     timezone_name: str
+    delivery_tracking_started_at_utc: datetime
+    last_handled_scheduled_for_utc: datetime | None = None
     reminder_kind: str = REMINDER_KIND_TEXT
     delete_after_two_days: bool = False
     interval_days: int | None = None

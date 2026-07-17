@@ -21,6 +21,7 @@ from app.tma_auth import calculate_init_data_hash
 from app.tma_launch import create_tma_launch_token
 
 BOT_TOKEN = "123456789:test-token"
+TEST_DELIVERY_TRACKING_STARTED_AT = datetime.fromisoformat("2026-07-01T00:00:00+00:00")
 
 
 def build_launch_token_for_chat(chat_id: int) -> str:
@@ -422,6 +423,7 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
                 schedule_type="every_days",
                 start_at=datetime(2099, 6, 10, 12, 12),
                 timezone_name="Asia/Yekaterinburg",
+                delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
                 interval_days=3,
             )
         ]
@@ -549,6 +551,7 @@ def test_get_chat_reminders_endpoint_accepts_valid_tma_init_data(
                 schedule_type="every_days",
                 start_at=datetime(2099, 6, 10, 12, 12),
                 timezone_name="Asia/Yekaterinburg",
+                delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
                 interval_days=3,
             )
         ]
@@ -636,6 +639,7 @@ def test_get_chat_reminders_endpoint_returns_json(
                 schedule_type="every_days",
                 start_at=datetime(2099, 6, 10, 12, 12),
                 timezone_name="Asia/Yekaterinburg",
+                delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
                 interval_days=3,
             )
         ]
@@ -873,6 +877,7 @@ def test_get_tma_reminders_endpoint_accepts_valid_tma_init_data(
                 schedule_type="every_days",
                 start_at=datetime(2099, 6, 10, 12, 12),
                 timezone_name="Asia/Yekaterinburg",
+                delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
                 interval_days=3,
             )
         ]
@@ -997,6 +1002,7 @@ def test_update_tma_reminder_endpoint_preserves_auto_delete_setting(
         schedule_type="every_days",
         start_at=datetime(2099, 6, 10, 12, 12),
         timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
         interval_days=3,
     )
     captured_data = []
@@ -1018,6 +1024,7 @@ def test_update_tma_reminder_endpoint_preserves_auto_delete_setting(
             schedule_type=data.schedule_type,
             start_at=data.start_at,
             timezone_name=data.timezone_name,
+            delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
             interval_days=data.interval_days,
         )
 

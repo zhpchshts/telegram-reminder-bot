@@ -5,6 +5,8 @@ from typing import Any
 from app.config import DB_PATH
 from app.constants import REMINDER_COLUMNS, REMINDER_KIND_TEXT, SCHEMA_MIGRATIONS
 
+UTC = timezone.utc
+
 
 def get_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DB_PATH)
@@ -31,6 +33,8 @@ def init_db() -> None:
                 month_day INTEGER,
                 timezone TEXT,
                 delete_after_two_days INTEGER NOT NULL DEFAULT 0,
+                delivery_tracking_started_at_utc TEXT,
+                last_handled_scheduled_for_utc TEXT,
                 created_at TEXT NOT NULL
             )
             """
@@ -127,6 +131,16 @@ def init_db() -> None:
                     f"ALTER TABLE reminders ADD COLUMN {column_definition}"
                 )
 
+        migration_now_utc = format_utc_datetime(datetime.now(timezone.utc))
+        connection.execute(
+            """
+            UPDATE reminders
+            SET delivery_tracking_started_at_utc = ?
+            WHERE delivery_tracking_started_at_utc IS NULL
+            """,
+            (migration_now_utc,),
+        )
+
 
 def create_reminder_in_db(
     *,
@@ -144,6 +158,7 @@ def create_reminder_in_db(
     delete_after_two_days: bool = False,
 ) -> int:
     now = datetime.now().isoformat(timespec="seconds")
+    delivery_tracking_started_at_utc = format_utc_datetime(datetime.now(UTC))
 
     with get_connection() as connection:
         cursor = connection.execute(
@@ -162,9 +177,11 @@ def create_reminder_in_db(
                 month_day,
                 timezone,
                 delete_after_two_days,
+                delivery_tracking_started_at_utc,
+                last_handled_scheduled_for_utc,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
             """,
             (
                 chat_id,
@@ -180,6 +197,7 @@ def create_reminder_in_db(
                 month_day,
                 timezone,
                 int(delete_after_two_days),
+                delivery_tracking_started_at_utc,
                 now,
             ),
         )
@@ -203,6 +221,8 @@ def update_reminder_in_db(
     timezone: str | None = None,
     delete_after_two_days: bool = False,
 ) -> bool:
+    delivery_tracking_started_at_utc = format_utc_datetime(datetime.now(UTC))
+
     with get_connection() as connection:
         cursor = connection.execute(
             """
@@ -218,7 +238,9 @@ def update_reminder_in_db(
                 month_week_number = ?,
                 month_day = ?,
                 timezone = ?,
-                delete_after_two_days = ?
+                delete_after_two_days = ?,
+                delivery_tracking_started_at_utc = ?,
+                last_handled_scheduled_for_utc = NULL
             WHERE id = ? AND chat_id = ? AND status = 'active'
             """,
             (
@@ -233,6 +255,7 @@ def update_reminder_in_db(
                 month_day,
                 timezone,
                 int(delete_after_two_days),
+                delivery_tracking_started_at_utc,
                 reminder_id,
                 chat_id,
             ),
@@ -317,6 +340,79 @@ def mark_reminder_as_deleted(reminder_id: int) -> None:
 
 def mark_reminder_as_missed(reminder_id: int) -> None:
     set_reminder_status(reminder_id, "missed")
+
+
+def mark_reminder_occurrence_handled(
+    reminder_id: int,
+    scheduled_for_utc: datetime,
+    *,
+    final_status: str | None = None,
+) -> bool:
+    if final_status not in {None, "sent", "missed"}:
+        raise ValueError("final_status must be 'sent', 'missed', or None.")
+
+    scheduled_for = format_utc_datetime(scheduled_for_utc)
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE reminders
+            SET
+                last_handled_scheduled_for_utc = ?,
+                status = COALESCE(?, status)
+            WHERE id = ?
+              AND status = 'active'
+              AND (
+                  last_handled_scheduled_for_utc IS NULL
+                  OR last_handled_scheduled_for_utc < ?
+              )
+            """,
+            (
+                scheduled_for,
+                final_status,
+                reminder_id,
+                scheduled_for,
+            ),
+        )
+
+    return cursor.rowcount > 0
+
+
+def get_reminder_occurrence_handling_state(
+    reminder_id: int,
+    scheduled_for_utc: datetime,
+) -> str:
+    scheduled_for = scheduled_for_utc.astimezone(timezone.utc)
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT status, last_handled_scheduled_for_utc
+            FROM reminders
+            WHERE id = ?
+            """,
+            (reminder_id,),
+        ).fetchone()
+
+    if row is None:
+        return "missing"
+
+    last_handled_raw = row["last_handled_scheduled_for_utc"]
+    if last_handled_raw is not None:
+        last_handled = datetime.fromisoformat(str(last_handled_raw))
+        if (
+            last_handled.tzinfo is None
+            or last_handled.tzinfo.utcoffset(last_handled) is None
+        ):
+            last_handled = last_handled.replace(tzinfo=timezone.utc)
+
+        if last_handled.astimezone(timezone.utc) >= scheduled_for:
+            return "already_handled"
+
+    if row["status"] != "active":
+        return "inactive"
+
+    return "unhandled"
 
 
 def get_chat_timezone(chat_id: int) -> str | None:

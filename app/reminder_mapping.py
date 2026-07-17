@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.config import APP_TIMEZONE_NAME
@@ -48,6 +48,21 @@ def get_optional_row_value(reminder: Any, key: str) -> object:
         return None
 
 
+def parse_utc_datetime(value: object) -> datetime:
+    parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.astimezone(timezone.utc)
+
+
+def parse_optional_utc_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+
+    return parse_utc_datetime(value)
+
+
 def build_reminder_read_data(reminder: Any) -> ReminderReadData:
     return ReminderReadData(
         id=int(reminder["id"]),
@@ -56,6 +71,12 @@ def build_reminder_read_data(reminder: Any) -> ReminderReadData:
         schedule_type=str(reminder["schedule_type"]),
         start_at=datetime.fromisoformat(str(reminder["start_at"])),
         timezone_name=get_timezone_name_from_row(reminder["timezone"]),
+        delivery_tracking_started_at_utc=parse_utc_datetime(
+            reminder["delivery_tracking_started_at_utc"]
+        ),
+        last_handled_scheduled_for_utc=parse_optional_utc_datetime(
+            reminder["last_handled_scheduled_for_utc"]
+        ),
         reminder_kind=get_reminder_kind_from_row(reminder["reminder_kind"]),
         delete_after_two_days=get_bool_from_row(
             get_optional_row_value(reminder, "delete_after_two_days")

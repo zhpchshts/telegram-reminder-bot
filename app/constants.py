@@ -83,7 +83,9 @@ REMINDER_COLUMNS = """
     month_week_number,
     month_day,
     timezone,
-    delete_after_two_days
+    delete_after_two_days,
+    delivery_tracking_started_at_utc,
+    last_handled_scheduled_for_utc
 """
 
 SCHEMA_MIGRATIONS = {
@@ -94,6 +96,8 @@ SCHEMA_MIGRATIONS = {
     "month_day": "month_day INTEGER",
     "timezone": "timezone TEXT",
     "delete_after_two_days": ("delete_after_two_days INTEGER NOT NULL DEFAULT 0"),
+    "delivery_tracking_started_at_utc": "delivery_tracking_started_at_utc TEXT",
+    "last_handled_scheduled_for_utc": "last_handled_scheduled_for_utc TEXT",
 }
 
 WEEKDAY_HELP = "MON, TUE, WED, THU, FRI, SAT, SUN"

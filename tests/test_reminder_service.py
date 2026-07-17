@@ -1,5 +1,5 @@
 from zoneinfo import ZoneInfoNotFoundError
-from datetime import datetime
+from datetime import datetime, timezone
 import pytest
 
 from app import reminder_service as reminder_service_module
@@ -14,6 +14,8 @@ from app.reminder_service import (
     validate_reminder_create_data,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
+
+TEST_DELIVERY_TRACKING_STARTED_AT = datetime.fromisoformat("2026-07-01T00:00:00+00:00")
 
 
 class FakeScheduler:
@@ -160,6 +162,7 @@ def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
             schedule_type="once",
             start_at=datetime(2099, 6, 10, 12, 12),
             timezone_name="Asia/Yekaterinburg",
+            delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
         ),
         ReminderReadData(
             id=2,
@@ -168,6 +171,7 @@ def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
             schedule_type="every_days",
             start_at=datetime(2099, 6, 11, 12, 12),
             timezone_name="Europe/Moscow",
+            delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
             interval_days=3,
         ),
     ]
@@ -507,6 +511,8 @@ def test_list_active_reminders_for_chat_returns_read_models(
             "month_week_number": None,
             "month_day": None,
             "timezone": "Asia/Yekaterinburg",
+            "delivery_tracking_started_at_utc": "2026-07-01T05:00:00+00:00",
+            "last_handled_scheduled_for_utc": None,
         }
     ]
 
@@ -532,6 +538,10 @@ def test_list_active_reminders_for_chat_returns_read_models(
             schedule_type="every_days",
             start_at=start_at,
             timezone_name="Asia/Yekaterinburg",
+            delivery_tracking_started_at_utc=datetime(
+                2026, 7, 1, 5, 0, tzinfo=timezone.utc
+            ),
+            last_handled_scheduled_for_utc=None,
             interval_days=3,
         )
     ]

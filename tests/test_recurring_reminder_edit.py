@@ -17,6 +17,7 @@ from app.reminder_models import ReminderReadData
 
 TIMEZONE_NAME = "Asia/Yekaterinburg"
 TIMEZONE = ZoneInfo(TIMEZONE_NAME)
+TEST_DELIVERY_TRACKING_STARTED_AT = datetime.fromisoformat("2026-07-01T00:00:00+00:00")
 
 
 def build_current_reminder(
@@ -36,6 +37,7 @@ def build_current_reminder(
         schedule_type=schedule_type,
         start_at=start_at,
         timezone_name=TIMEZONE_NAME,
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
         interval_days=interval_days,
         interval_weeks=interval_weeks,
         day_of_week=day_of_week,

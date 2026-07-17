@@ -27,6 +27,8 @@ from app.api_models import (
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
+TEST_DELIVERY_TRACKING_STARTED_AT = datetime(2026, 7, 1, tzinfo=UTC)
+
 
 def test_build_reminder_response() -> None:
     start_at = datetime(2099, 6, 10, 12, 12)
@@ -40,6 +42,7 @@ def test_build_reminder_response() -> None:
             schedule_type="every_days",
             start_at=start_at,
             timezone_name="Asia/Yekaterinburg",
+            delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
             interval_days=3,
         )
     )
@@ -294,6 +297,7 @@ def test_build_tma_bootstrap_response() -> None:
                 schedule_type="every_days",
                 start_at=start_at,
                 timezone_name="Asia/Yekaterinburg",
+                delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
                 interval_days=3,
             )
         ],

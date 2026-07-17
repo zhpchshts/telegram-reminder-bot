@@ -44,6 +44,8 @@ from app.api_models import (
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
+TEST_DELIVERY_TRACKING_STARTED_AT = datetime.fromisoformat("2026-07-01T00:00:00+00:00")
+
 BOT = object()
 
 
@@ -191,6 +193,7 @@ def test_get_tma_bootstrap_returns_response(
                 schedule_type="every_days",
                 start_at=start_at,
                 timezone_name="Asia/Yekaterinburg",
+                delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
                 interval_days=3,
             )
         ]
@@ -270,6 +273,7 @@ def test_get_tma_reminders_returns_response_models(
                 schedule_type="every_days",
                 start_at=start_at,
                 timezone_name="Asia/Yekaterinburg",
+                delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
                 interval_days=3,
             )
         ]
@@ -553,6 +557,7 @@ def test_update_tma_reminder_returns_response(
         schedule_type="every_days",
         start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
         timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
         interval_days=3,
     )
 
@@ -589,6 +594,7 @@ def test_update_tma_reminder_returns_response(
             schedule_type=data.schedule_type,
             start_at=data.start_at,
             timezone_name=data.timezone_name,
+            delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
             interval_days=data.interval_days,
             interval_weeks=data.interval_weeks,
             day_of_week=data.day_of_week,
@@ -765,6 +771,7 @@ def test_get_chat_reminders_returns_response_models(
             schedule_type="every_days",
             start_at=start_at,
             timezone_name="Asia/Yekaterinburg",
+            delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
             interval_days=3,
         )
     ]
@@ -874,6 +881,7 @@ def test_update_chat_reminder_returns_response(
         schedule_type="every_days",
         start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
         timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
         interval_days=3,
     )
 
@@ -910,6 +918,7 @@ def test_update_chat_reminder_returns_response(
             schedule_type=data.schedule_type,
             start_at=data.start_at,
             timezone_name=data.timezone_name,
+            delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
             interval_days=data.interval_days,
             interval_weeks=data.interval_weeks,
             day_of_week=data.day_of_week,
@@ -1233,6 +1242,7 @@ def test_update_tma_repeating_reminder_allows_past_unchanged_start_at(
         schedule_type="every_days",
         start_at=past_start_at,
         timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
         interval_days=3,
     )
     captured_data: list[ReminderCreateData] = []
@@ -1263,6 +1273,7 @@ def test_update_tma_repeating_reminder_allows_past_unchanged_start_at(
             schedule_type=data.schedule_type,
             start_at=data.start_at,
             timezone_name=data.timezone_name,
+            delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
             interval_days=data.interval_days,
         )
 
@@ -1314,6 +1325,7 @@ def test_update_tma_once_reminder_rejects_past_start_at(
         schedule_type="once",
         start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
         timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
     )
 
     monkeypatch.setattr(
@@ -1379,6 +1391,7 @@ def test_validate_reminder_update_data_rejects_changed_kind_or_schedule_type(
         schedule_type="every_days",
         start_at=datetime.fromisoformat("2099-06-10T12:12:00+05:00"),
         timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
         interval_days=3,
     )
 

@@ -17,6 +17,15 @@ def test_init_db_creates_database_file(monkeypatch, tmp_path) -> None:
 
     assert test_db_path.exists()
 
+    with database.get_connection() as connection:
+        reminder_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(reminders)").fetchall()
+        }
+
+    assert "delivery_tracking_started_at_utc" in reminder_columns
+    assert "last_handled_scheduled_for_utc" in reminder_columns
+
 
 def test_create_reminder_in_db_returns_id(monkeypatch, tmp_path) -> None:
     use_test_db(monkeypatch, tmp_path)
@@ -29,6 +38,139 @@ def test_create_reminder_in_db_returns_id(monkeypatch, tmp_path) -> None:
     )
 
     assert reminder_id == 1
+
+    reminder = database.get_active_reminder_from_db(reminder_id)
+    assert reminder is not None
+    tracking_started_at = datetime.fromisoformat(
+        reminder["delivery_tracking_started_at_utc"]
+    )
+    assert tracking_started_at.tzinfo == timezone.utc
+    assert reminder["last_handled_scheduled_for_utc"] is None
+
+
+def test_update_reminder_resets_delivery_tracking_state(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    reminder_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="До изменения",
+        schedule_type="every_days",
+        start_at=datetime(2026, 7, 1, 10, 0),
+        interval_days=1,
+    )
+
+    with database.get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE reminders
+            SET
+                delivery_tracking_started_at_utc = ?,
+                last_handled_scheduled_for_utc = ?
+            WHERE id = ?
+            """,
+            (
+                "2020-01-01T00:00:00+00:00",
+                "2026-07-02T05:00:00+00:00",
+                reminder_id,
+            ),
+        )
+
+    assert database.update_reminder_in_db(
+        reminder_id=reminder_id,
+        chat_id=100,
+        reminder_text="После изменения",
+        schedule_type="every_days",
+        start_at=datetime(2026, 7, 3, 10, 0),
+        interval_days=1,
+    )
+
+    reminder = database.get_active_reminder_from_db(reminder_id)
+    assert reminder is not None
+    assert datetime.fromisoformat(
+        reminder["delivery_tracking_started_at_utc"]
+    ) > datetime(2020, 1, 1, tzinfo=timezone.utc)
+    assert reminder["last_handled_scheduled_for_utc"] is None
+
+
+def test_mark_reminder_occurrence_handled_is_monotonic_and_atomic(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    repeating_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Регулярное",
+        schedule_type="every_days",
+        start_at=datetime(2026, 7, 1, 10, 0),
+        interval_days=1,
+    )
+    once_sent_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Одноразовое",
+        schedule_type="once",
+        start_at=datetime(2026, 7, 1, 11, 0),
+    )
+    once_missed_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Старая погода",
+        schedule_type="once",
+        start_at=datetime(2026, 7, 1, 12, 0),
+    )
+    newer = datetime(2026, 7, 3, 5, 0, tzinfo=timezone.utc)
+    older = datetime(2026, 7, 2, 5, 0, tzinfo=timezone.utc)
+
+    assert database.mark_reminder_occurrence_handled(repeating_id, newer)
+    assert not database.mark_reminder_occurrence_handled(repeating_id, older)
+    assert database.mark_reminder_occurrence_handled(
+        once_sent_id,
+        newer,
+        final_status="sent",
+    )
+    assert database.mark_reminder_occurrence_handled(
+        once_missed_id,
+        newer,
+        final_status="missed",
+    )
+
+    with database.get_connection() as connection:
+        rows = {
+            row["id"]: row
+            for row in connection.execute(
+                "SELECT * FROM reminders ORDER BY id"
+            ).fetchall()
+        }
+
+    assert rows[repeating_id]["last_handled_scheduled_for_utc"] == (
+        "2026-07-03T05:00:00+00:00"
+    )
+    assert rows[repeating_id]["status"] == "active"
+    assert rows[once_sent_id]["status"] == "sent"
+    assert rows[once_sent_id]["last_handled_scheduled_for_utc"] == (
+        "2026-07-03T05:00:00+00:00"
+    )
+    assert rows[once_missed_id]["status"] == "missed"
+
+    assert (
+        database.get_reminder_occurrence_handling_state(repeating_id, older)
+        == "already_handled"
+    )
+    assert (
+        database.get_reminder_occurrence_handling_state(
+            repeating_id,
+            newer + timedelta(days=1),
+        )
+        == "unhandled"
+    )
+    assert database.get_reminder_occurrence_handling_state(999_999, newer) == "missing"
+    assert (
+        database.get_reminder_occurrence_handling_state(
+            once_sent_id,
+            newer + timedelta(days=1),
+        )
+        == "inactive"
+    )
 
 
 def test_reminder_auto_delete_setting_is_stored_and_updated(
@@ -729,6 +871,12 @@ def test_init_db_migrates_existing_reminders_and_creates_deletion_queue(
     assert reminder is not None
     assert reminder["text"] == "Существующее напоминание"
     assert reminder["delete_after_two_days"] == 0
+    assert reminder["delivery_tracking_started_at_utc"] is not None
+    assert (
+        datetime.fromisoformat(reminder["delivery_tracking_started_at_utc"]).tzinfo
+        == timezone.utc
+    )
+    assert reminder["last_handled_scheduled_for_utc"] is None
     assert {
         "id",
         "reminder_id",

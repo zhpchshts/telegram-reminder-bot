@@ -866,6 +866,8 @@ def build_create_reminder_request(
     reminder_text: str = "Проверить релиз",
     reminder_kind: str = REMINDER_KIND_TEXT,
     delete_after_two_days: bool = False,
+    requires_completion: bool = False,
+    repeat_interval_minutes: int | None = None,
     schedule_type: str = "every_days",
     start_at: str = "2099-06-10T12:12:00",
     timezone_name: str = "Asia/Yekaterinburg",
@@ -875,6 +877,8 @@ def build_create_reminder_request(
         "reminder_text": reminder_text,
         "reminder_kind": reminder_kind,
         "delete_after_two_days": delete_after_two_days,
+        "requires_completion": requires_completion,
+        "repeat_interval_minutes": repeat_interval_minutes,
         "schedule_type": schedule_type,
         "start_at": start_at,
         "timezone_name": timezone_name,
@@ -978,7 +982,11 @@ def test_create_tma_reminder_endpoint_accepts_valid_tma_init_data(
         headers={
             TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
         },
-        json=build_create_reminder_request(delete_after_two_days=True),
+        json=build_create_reminder_request(
+            delete_after_two_days=True,
+            requires_completion=True,
+            repeat_interval_minutes=60,
+        ),
     )
 
     assert response.status_code == 201
@@ -990,6 +998,8 @@ def test_create_tma_reminder_endpoint_accepts_valid_tma_init_data(
     assert data.reminder_text == "Проверить релиз"
     assert data.reminder_kind == REMINDER_KIND_TEXT
     assert data.delete_after_two_days is True
+    assert data.requires_completion is True
+    assert data.repeat_interval_minutes == 60
     assert data.schedule_type == "every_days"
     assert data.timezone_name == "Asia/Yekaterinburg"
     assert data.interval_days == 3
@@ -1001,6 +1011,8 @@ def test_create_tma_reminder_endpoint_accepts_valid_tma_init_data(
     assert response_json["reminder_text"] == "Проверить релиз"
     assert response_json["reminder_kind"] == REMINDER_KIND_TEXT
     assert response_json["delete_after_two_days"] is True
+    assert response_json["requires_completion"] is True
+    assert response_json["repeat_interval_minutes"] == 60
     assert response_json["schedule_type"] == "every_days"
     assert response_json["start_at"].startswith("2099-06-10T12:12:00")
     assert response_json["timezone_name"] == "Asia/Yekaterinburg"

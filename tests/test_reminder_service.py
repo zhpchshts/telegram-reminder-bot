@@ -634,18 +634,6 @@ def test_list_active_reminders_for_chat_returns_read_models(
         (
             ReminderCreateData(
                 reminder_text="Проверить релиз",
-                delete_after_two_days=True,
-                requires_completion=True,
-                repeat_interval_minutes=60,
-                schedule_type="once",
-                start_at=datetime(2099, 6, 10, 12, 12),
-                timezone_name="Asia/Yekaterinburg",
-            ),
-            "Completion and automatic deletion cannot be enabled together.",
-        ),
-        (
-            ReminderCreateData(
-                reminder_text="Проверить релиз",
                 requires_completion=True,
                 repeat_interval_minutes=45,
                 schedule_type="once",
@@ -679,6 +667,20 @@ def test_completion_text_at_backend_limit_is_valid() -> None:
     validate_reminder_create_data(
         ReminderCreateData(
             reminder_text="x" * 3900,
+            requires_completion=True,
+            repeat_interval_minutes=60,
+            schedule_type="once",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+        )
+    )
+
+
+def test_completion_and_auto_delete_are_valid_together() -> None:
+    validate_reminder_create_data(
+        ReminderCreateData(
+            reminder_text="Проверить релиз",
+            delete_after_two_days=True,
             requires_completion=True,
             repeat_interval_minutes=60,
             schedule_type="once",

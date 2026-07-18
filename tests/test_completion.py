@@ -1,26 +1,32 @@
 import asyncio
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.methods import SendMessage
+import pytest
 
 from app import completion_service as completion_service_module
 from app import database as database_module
 from app.completion_service import (
     deliver_completion_occurrence,
+    publish_completion_occurrence,
     process_completion_callback,
     process_due_completion_occurrences,
     repeat_active_occurrence,
 )
 from app.database import (
     activate_claimed_completion_occurrence,
+    checkpoint_completion_message,
     claim_completion_occurrence_delivery,
+    claim_completion_publication,
     complete_completion_occurrence,
     create_reminder_in_db,
     delete_active_reminder_for_chat_in_db,
     get_active_reminder_from_db,
     get_due_completion_occurrences,
+    finalize_completion_publication,
     reschedule_completion_occurrence_after_error,
     update_reminder_in_db,
 )
@@ -61,7 +67,7 @@ class FakeBot:
         return True
 
 
-def prepare_database(monkeypatch, tmp_path) -> int:
+def prepare_database(monkeypatch, tmp_path, *, delete_after_two_days=False) -> int:
     monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "completion.db")
     database_module.init_db()
     return create_reminder_in_db(
@@ -71,6 +77,7 @@ def prepare_database(monkeypatch, tmp_path) -> int:
         start_at=datetime(2026, 7, 18, 12, 0),
         interval_days=1,
         timezone="UTC",
+        delete_after_two_days=delete_after_two_days,
         requires_completion=True,
         repeat_interval_minutes=60,
     )
@@ -941,6 +948,13 @@ def test_callback_marks_current_message_and_removes_keyboard(
             "Проверить релиз",
         )
     )
+    with database_module.get_connection() as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM reminder_message_deletion_queue"
+            ).fetchone()[0]
+            == 0
+        )
 
     result = asyncio.run(
         process_completion_callback(
@@ -961,6 +975,585 @@ def test_callback_marks_current_message_and_removes_keyboard(
             "SELECT status FROM reminder_completion_occurrences"
         ).fetchone()[0]
     assert status == "completed"
+
+
+def test_completion_with_auto_delete_sends_final_and_queues_both_messages(
+    monkeypatch, tmp_path
+) -> None:
+    reminder_id = prepare_database(
+        monkeypatch,
+        tmp_path,
+        delete_after_two_days=True,
+    )
+    reminder = build_reminder_read_data(get_active_reminder_from_db(reminder_id))
+    bot = FakeBot()
+    asyncio.run(
+        deliver_completion_occurrence(
+            bot,
+            reminder,
+            datetime(2026, 7, 18, 8, 0, tzinfo=UTC),
+            "Проверить релиз",
+        )
+    )
+    with database_module.get_connection() as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM reminder_message_deletion_queue"
+            ).fetchone()[0]
+            == 0
+        )
+
+    result = asyncio.run(
+        process_completion_callback(
+            bot,
+            occurrence_id=1,
+            chat_id=100,
+            callback_message_id=10,
+            callback_message_sent_at=bot.sent_at,
+            user_id=200,
+            display_name="Участник",
+        )
+    )
+
+    assert result == "Отмечено как выполненное."
+    assert len(bot.sent) == 2
+    assert bot.sent[1] == {
+        "chat_id": 100,
+        "text": "Проверить релиз\n\n✅ Выполнено",
+    }
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT * FROM reminder_completion_occurrences"
+        ).fetchone()
+        queued = connection.execute(
+            """
+            SELECT message_id, sent_at_utc, delete_at_utc
+            FROM reminder_message_deletion_queue
+            ORDER BY message_id
+            """
+        ).fetchall()
+    assert occurrence["status"] == "completed"
+    assert occurrence["completion_delivery_status"] == "sent"
+    assert occurrence["completion_message_id"] == 11
+    assert [row["message_id"] for row in queued] == [10, 11]
+    assert queued[0]["sent_at_utc"] == bot.sent_at.isoformat(timespec="seconds")
+    assert datetime.fromisoformat(queued[0]["delete_at_utc"]) < datetime.fromisoformat(
+        queued[1]["delete_at_utc"]
+    )
+    assert datetime.fromisoformat(queued[1]["delete_at_utc"]) == (
+        bot.sent_at + timedelta(hours=47, minutes=45)
+    )
+
+
+def test_auto_delete_completion_is_awaiting_while_completing(
+    monkeypatch, tmp_path
+) -> None:
+    reminder_id = prepare_database(
+        monkeypatch,
+        tmp_path,
+        delete_after_two_days=True,
+    )
+    claim = claim_occurrence(reminder_id)
+    activate_claimed_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="claim-1",
+        message_id=50,
+        sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+    )
+
+    result = complete_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        chat_id=100,
+        callback_message_id=50,
+        callback_message_sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+        user_id=200,
+        display_name="Участник",
+        completed_at=datetime(2026, 7, 18, 9, 1, tzinfo=UTC),
+    )
+
+    assert result["outcome"] == "completing"
+    reminder = build_reminder_read_data(get_active_reminder_from_db(reminder_id))
+    assert reminder.awaiting_completion is True
+
+
+def test_terminal_final_send_and_fallback_failure_are_logically_completed(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "terminal-final.db")
+    database_module.init_db()
+    reminder_id = create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Закрыть задачу",
+        schedule_type="once",
+        start_at=datetime(2026, 7, 18, 12, 0),
+        timezone="UTC",
+        delete_after_two_days=True,
+        requires_completion=True,
+        repeat_interval_minutes=60,
+    )
+    reminder = build_reminder_read_data(get_active_reminder_from_db(reminder_id))
+
+    class TerminalFinalBot(FakeBot):
+        async def send_message(self, **kwargs):
+            if self.sent:
+                raise TelegramForbiddenError(
+                    method=SendMessage(chat_id=100, text=kwargs["text"]),
+                    message="Forbidden",
+                )
+            return await super().send_message(**kwargs)
+
+        async def edit_message_text(self, **kwargs):
+            raise TelegramForbiddenError(
+                method=SendMessage(chat_id=100, text=kwargs["text"]),
+                message="Forbidden",
+            )
+
+        async def edit_message_reply_markup(self, **kwargs):
+            raise TelegramForbiddenError(
+                method=SendMessage(chat_id=100, text="fallback"),
+                message="Forbidden",
+            )
+
+    bot = TerminalFinalBot()
+    asyncio.run(
+        deliver_completion_occurrence(
+            bot,
+            reminder,
+            datetime(2026, 7, 18, 8, 0, tzinfo=UTC),
+            "Закрыть задачу",
+        )
+    )
+    asyncio.run(
+        process_completion_callback(
+            bot,
+            occurrence_id=1,
+            chat_id=100,
+            callback_message_id=10,
+            callback_message_sent_at=bot.sent_at,
+            user_id=200,
+            display_name="Участник",
+        )
+    )
+
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT * FROM reminder_completion_occurrences"
+        ).fetchone()
+        parent_status = connection.execute(
+            "SELECT status FROM reminders WHERE id = ?",
+            (reminder_id,),
+        ).fetchone()[0]
+    assert occurrence["status"] == "completed"
+    assert occurrence["completion_delivery_status"] == "failed"
+    assert occurrence["completion_claim_token"] is None
+    assert occurrence["completion_next_attempt_at_utc"] is None
+    assert occurrence["next_repeat_at_utc"] is None
+    assert parent_status == "sent"
+    assert (
+        get_due_completion_occurrences(
+            now=datetime.now(UTC) + timedelta(days=1),
+            stale_before=datetime.now(UTC),
+            limit=10,
+        )
+        == []
+    )
+
+
+def test_checkpoint_recovery_finalizes_without_resending(monkeypatch, tmp_path) -> None:
+    reminder_id = prepare_database(
+        monkeypatch,
+        tmp_path,
+        delete_after_two_days=True,
+    )
+    claim = claim_occurrence(reminder_id)
+    activate_claimed_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="claim-1",
+        message_id=50,
+        sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+    )
+    complete_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        chat_id=100,
+        callback_message_id=50,
+        callback_message_sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+        user_id=200,
+        display_name="Участник",
+        completed_at=datetime(2026, 7, 18, 9, 1, tzinfo=UTC),
+    )
+    publication_claim = claim_completion_publication(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="publication-1",
+        now=datetime.now(UTC),
+        stale_before=datetime.now(UTC) - timedelta(minutes=2),
+    )
+    assert publication_claim["outcome"] == "claimed"
+    assert (
+        checkpoint_completion_message(
+            occurrence_id=claim["occurrence_id"],
+            claim_token="publication-1",
+            message_id=88,
+            sent_at=datetime(2026, 7, 18, 9, 2, tzinfo=UTC),
+        )
+        == "checkpointed"
+    )
+    bot = FakeBot()
+
+    asyncio.run(process_due_completion_occurrences(bot))
+
+    assert bot.sent == []
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT status, completion_message_id FROM reminder_completion_occurrences"
+        ).fetchone()
+    assert tuple(occurrence) == ("completed", 88)
+
+
+def test_finalization_queue_rolls_back_as_one_transaction(
+    monkeypatch, tmp_path
+) -> None:
+    reminder_id = prepare_database(
+        monkeypatch,
+        tmp_path,
+        delete_after_two_days=True,
+    )
+    claim = claim_occurrence(reminder_id)
+    activate_claimed_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="claim-1",
+        message_id=50,
+        sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+    )
+    complete_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        chat_id=100,
+        callback_message_id=50,
+        callback_message_sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+        user_id=200,
+        display_name="Участник",
+        completed_at=datetime(2026, 7, 18, 9, 1, tzinfo=UTC),
+    )
+    claim_completion_publication(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="publication-1",
+        now=datetime.now(UTC),
+        stale_before=datetime.now(UTC) - timedelta(minutes=2),
+    )
+    checkpoint_completion_message(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="publication-1",
+        message_id=88,
+        sent_at=datetime(2026, 7, 18, 9, 2, tzinfo=UTC),
+    )
+    original_enqueue = database_module._enqueue_reminder_message_deletion
+    calls = 0
+
+    def fail_second_enqueue(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise sqlite3.OperationalError("simulated queue failure")
+        return original_enqueue(*args, **kwargs)
+
+    monkeypatch.setattr(
+        database_module,
+        "_enqueue_reminder_message_deletion",
+        fail_second_enqueue,
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="simulated queue failure"):
+        finalize_completion_publication(
+            occurrence_id=claim["occurrence_id"],
+            claim_token="publication-1",
+            now=datetime.now(UTC),
+        )
+
+    with database_module.get_connection() as connection:
+        status = connection.execute(
+            "SELECT status FROM reminder_completion_occurrences"
+        ).fetchone()[0]
+        queue_count = connection.execute(
+            "SELECT COUNT(*) FROM reminder_message_deletion_queue"
+        ).fetchone()[0]
+    assert status == "completing"
+    assert queue_count == 0
+
+
+def test_new_planned_occurrence_can_activate_while_old_one_completes(
+    monkeypatch, tmp_path
+) -> None:
+    reminder_id = prepare_database(
+        monkeypatch,
+        tmp_path,
+        delete_after_two_days=True,
+    )
+    older = claim_occurrence(reminder_id)
+    activate_claimed_completion_occurrence(
+        occurrence_id=older["occurrence_id"],
+        claim_token="claim-1",
+        message_id=50,
+        sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+    )
+    complete_completion_occurrence(
+        occurrence_id=older["occurrence_id"],
+        chat_id=100,
+        callback_message_id=50,
+        callback_message_sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+        user_id=200,
+        display_name="Участник",
+        completed_at=datetime(2026, 7, 18, 9, 1, tzinfo=UTC),
+    )
+    newer = claim_completion_occurrence_delivery(
+        reminder_id=reminder_id,
+        expected_revision=1,
+        scheduled_for_utc=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+        rendered_text="Новое срабатывание",
+        claim_token="claim-newer",
+        now=datetime(2026, 7, 18, 10, 1, tzinfo=UTC),
+        stale_before=datetime(2026, 7, 18, 9, 59, tzinfo=UTC),
+    )
+    assert (
+        activate_claimed_completion_occurrence(
+            occurrence_id=newer["occurrence_id"],
+            claim_token="claim-newer",
+            message_id=90,
+            sent_at=datetime(2026, 7, 18, 10, 1, tzinfo=UTC),
+        )["outcome"]
+        == "activated"
+    )
+
+    bot = FakeBot()
+    asyncio.run(publish_completion_occurrence(bot, older["occurrence_id"]))
+
+    with database_module.get_connection() as connection:
+        occurrences = connection.execute(
+            """
+            SELECT scheduled_for_utc, status
+            FROM reminder_completion_occurrences
+            ORDER BY scheduled_for_utc
+            """
+        ).fetchall()
+        watermark = connection.execute(
+            "SELECT last_handled_scheduled_for_utc FROM reminders WHERE id = ?",
+            (reminder_id,),
+        ).fetchone()[0]
+    assert [tuple(row) for row in occurrences] == [
+        ("2026-07-18T08:00:00+00:00", "completed"),
+        ("2026-07-18T10:00:00+00:00", "active"),
+    ]
+    assert watermark == "2026-07-18T10:00:00+00:00"
+
+
+def test_old_callback_copy_and_current_message_are_both_queued(
+    monkeypatch, tmp_path
+) -> None:
+    reminder_id = prepare_database(
+        monkeypatch,
+        tmp_path,
+        delete_after_two_days=True,
+    )
+    claim = claim_occurrence(reminder_id)
+    activate_claimed_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="claim-1",
+        message_id=50,
+        sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+    )
+    bot = FakeBot()
+    bot.next_message_id = 60
+
+    asyncio.run(
+        process_completion_callback(
+            bot,
+            occurrence_id=claim["occurrence_id"],
+            chat_id=100,
+            callback_message_id=40,
+            callback_message_sent_at=datetime(2026, 7, 18, 8, 30, tzinfo=UTC),
+            user_id=200,
+            display_name="Участник",
+        )
+    )
+
+    with database_module.get_connection() as connection:
+        queued = connection.execute(
+            """
+            SELECT message_id, sent_at_utc
+            FROM reminder_message_deletion_queue
+            ORDER BY message_id
+            """
+        ).fetchall()
+    assert [row["message_id"] for row in queued] == [40, 50, 60]
+    assert queued[0]["sent_at_utc"] == "2026-07-18T08:30:00+00:00"
+    assert queued[1]["sent_at_utc"] == "2026-07-18T09:00:00+00:00"
+
+
+@pytest.mark.parametrize("operation", ["update", "delete"])
+def test_update_or_delete_cancels_completing_and_queues_checkpoint(
+    monkeypatch, tmp_path, operation
+) -> None:
+    reminder_id = prepare_database(
+        monkeypatch,
+        tmp_path,
+        delete_after_two_days=True,
+    )
+    claim = claim_occurrence(reminder_id)
+    activate_claimed_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="claim-1",
+        message_id=50,
+        sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+    )
+    complete_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        chat_id=100,
+        callback_message_id=50,
+        callback_message_sent_at=datetime(2026, 7, 18, 9, 0, tzinfo=UTC),
+        user_id=200,
+        display_name="Участник",
+        completed_at=datetime(2026, 7, 18, 9, 1, tzinfo=UTC),
+    )
+    claim_completion_publication(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="publication-1",
+        now=datetime.now(UTC),
+        stale_before=datetime.now(UTC) - timedelta(minutes=2),
+    )
+    checkpoint_completion_message(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="publication-1",
+        message_id=88,
+        sent_at=datetime(2026, 7, 18, 9, 2, tzinfo=UTC),
+    )
+
+    if operation == "update":
+        assert update_reminder_in_db(
+            reminder_id=reminder_id,
+            chat_id=100,
+            reminder_text="Новый текст",
+            schedule_type="every_days",
+            start_at=datetime(2026, 7, 19, 12, 0),
+            interval_days=1,
+            timezone="UTC",
+            requires_completion=True,
+            repeat_interval_minutes=30,
+        )
+    else:
+        assert delete_active_reminder_for_chat_in_db(reminder_id, 100)
+
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT status, completion_claim_token FROM reminder_completion_occurrences"
+        ).fetchone()
+        queued = connection.execute(
+            "SELECT message_id FROM reminder_message_deletion_queue"
+        ).fetchall()
+    assert tuple(occurrence) == ("cancelled", None)
+    assert [row["message_id"] for row in queued] == [88]
+
+
+def test_final_publication_retry_after_does_not_resume_repeats(
+    monkeypatch, tmp_path
+) -> None:
+    reminder_id = prepare_database(
+        monkeypatch,
+        tmp_path,
+        delete_after_two_days=True,
+    )
+    reminder = build_reminder_read_data(get_active_reminder_from_db(reminder_id))
+
+    class RetryFinalBot(FakeBot):
+        async def send_message(self, **kwargs):
+            if self.sent:
+                raise TelegramRetryAfter(
+                    method=SendMessage(chat_id=100, text=kwargs["text"]),
+                    message="Too Many Requests",
+                    retry_after=600,
+                )
+            return await super().send_message(**kwargs)
+
+    bot = RetryFinalBot()
+    asyncio.run(
+        deliver_completion_occurrence(
+            bot,
+            reminder,
+            datetime(2026, 7, 18, 8, 0, tzinfo=UTC),
+            "Проверить релиз",
+        )
+    )
+    before = datetime.now(UTC)
+    asyncio.run(
+        process_completion_callback(
+            bot,
+            occurrence_id=1,
+            chat_id=100,
+            callback_message_id=10,
+            callback_message_sent_at=bot.sent_at,
+            user_id=200,
+            display_name="Участник",
+        )
+    )
+
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT * FROM reminder_completion_occurrences"
+        ).fetchone()
+    retry_at = datetime.fromisoformat(occurrence["completion_next_attempt_at_utc"])
+    assert occurrence["status"] == "completing"
+    assert occurrence["completion_claim_token"] is None
+    assert occurrence["next_repeat_at_utc"] is None
+    assert retry_at >= before + timedelta(seconds=599)
+
+
+def test_parallel_completion_publishers_create_one_final_message(
+    monkeypatch, tmp_path
+) -> None:
+    reminder_id = prepare_database(
+        monkeypatch,
+        tmp_path,
+        delete_after_two_days=True,
+    )
+    reminder = build_reminder_read_data(get_active_reminder_from_db(reminder_id))
+
+    class SlowFinalBot(FakeBot):
+        async def send_message(self, **kwargs):
+            if self.sent:
+                await asyncio.sleep(0.05)
+            return await super().send_message(**kwargs)
+
+    bot = SlowFinalBot()
+    asyncio.run(
+        deliver_completion_occurrence(
+            bot,
+            reminder,
+            datetime(2026, 7, 18, 8, 0, tzinfo=UTC),
+            "Проверить релиз",
+        )
+    )
+    complete_completion_occurrence(
+        occurrence_id=1,
+        chat_id=100,
+        callback_message_id=10,
+        callback_message_sent_at=bot.sent_at,
+        user_id=200,
+        display_name="Участник",
+        completed_at=datetime.now(UTC),
+    )
+
+    async def publish_twice():
+        return await asyncio.gather(
+            publish_completion_occurrence(bot, 1),
+            publish_completion_occurrence(bot, 1),
+        )
+
+    outcomes = asyncio.run(publish_twice())
+
+    assert len(bot.sent) == 2
+    assert sorted(outcomes) == ["completed", "publication_in_progress"]
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT status, completion_message_id FROM reminder_completion_occurrences"
+        ).fetchone()
+    assert tuple(occurrence) == ("completed", 11)
 
 
 def test_fast_callback_marks_one_time_reminder_as_sent(monkeypatch, tmp_path) -> None:

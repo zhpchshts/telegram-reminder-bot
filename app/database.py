@@ -3,7 +3,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.config import DB_PATH
-from app.constants import REMINDER_COLUMNS, REMINDER_KIND_TEXT, SCHEMA_MIGRATIONS
+from app.constants import (
+    MESSAGE_DELETION_DELAY,
+    REMINDER_COLUMNS,
+    REMINDER_KIND_TEXT,
+    SCHEMA_MIGRATIONS,
+)
 
 UTC = timezone.utc
 
@@ -98,6 +103,16 @@ def init_db() -> None:
                 completed_at_utc TEXT,
                 completed_by_user_id INTEGER,
                 completed_by_display_name TEXT,
+                completion_claim_token TEXT,
+                completion_claimed_at_utc TEXT,
+                completion_next_attempt_at_utc TEXT,
+                completion_attempts INTEGER NOT NULL DEFAULT 0,
+                completion_last_error TEXT,
+                completion_delivery_status TEXT,
+                completion_message_id INTEGER,
+                completion_message_sent_at_utc TEXT,
+                completion_callback_message_id INTEGER,
+                completion_callback_message_sent_at_utc TEXT,
                 superseded_at_utc TEXT,
                 created_at_utc TEXT NOT NULL,
                 updated_at_utc TEXT NOT NULL,
@@ -189,6 +204,42 @@ def init_db() -> None:
                 ADD COLUMN reminder_revision INTEGER NOT NULL DEFAULT 1
                 """
             )
+
+        completion_migrations = {
+            "completion_claim_token": "completion_claim_token TEXT",
+            "completion_claimed_at_utc": "completion_claimed_at_utc TEXT",
+            "completion_next_attempt_at_utc": ("completion_next_attempt_at_utc TEXT"),
+            "completion_attempts": ("completion_attempts INTEGER NOT NULL DEFAULT 0"),
+            "completion_last_error": "completion_last_error TEXT",
+            "completion_delivery_status": "completion_delivery_status TEXT",
+            "completion_message_id": "completion_message_id INTEGER",
+            "completion_message_sent_at_utc": ("completion_message_sent_at_utc TEXT"),
+            "completion_callback_message_id": (
+                "completion_callback_message_id INTEGER"
+            ),
+            "completion_callback_message_sent_at_utc": (
+                "completion_callback_message_sent_at_utc TEXT"
+            ),
+        }
+        for column_name, column_definition in completion_migrations.items():
+            if column_name not in completion_occurrence_columns:
+                connection.execute(
+                    "ALTER TABLE reminder_completion_occurrences "
+                    f"ADD COLUMN {column_definition}"
+                )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_reminder_completion_occurrences_completion_due
+            ON reminder_completion_occurrences(
+                status,
+                completion_next_attempt_at_utc,
+                completion_claimed_at_utc,
+                id
+            )
+            """
+        )
 
         migration_now_utc = format_utc_datetime(datetime.now(timezone.utc))
         connection.execute(
@@ -337,6 +388,11 @@ def update_reminder_in_db(
         )
         if cursor.rowcount > 0:
             now_utc = format_utc_datetime(datetime.now(UTC))
+            _enqueue_cancelled_completion_checkpoints(
+                connection,
+                reminder_id=reminder_id,
+                now=datetime.fromisoformat(now_utc),
+            )
             connection.execute(
                 """
                 UPDATE reminder_completion_occurrences
@@ -345,9 +401,12 @@ def update_reminder_in_db(
                     next_repeat_at_utc = NULL,
                     delivery_claim_token = NULL,
                     delivery_claimed_at_utc = NULL,
+                    completion_claim_token = NULL,
+                    completion_claimed_at_utc = NULL,
+                    completion_next_attempt_at_utc = NULL,
                     updated_at_utc = ?
                 WHERE reminder_id = ?
-                  AND status IN ('pending', 'active')
+                  AND status IN ('pending', 'active', 'completing')
                 """,
                 (now_utc, reminder_id),
             )
@@ -724,7 +783,8 @@ def format_utc_datetime(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
-def enqueue_reminder_message_deletion(
+def _enqueue_reminder_message_deletion(
+    connection: sqlite3.Connection,
     *,
     reminder_id: int | None,
     chat_id: int,
@@ -735,32 +795,77 @@ def enqueue_reminder_message_deletion(
     sent_at_utc = format_utc_datetime(sent_at)
     delete_at_utc = format_utc_datetime(delete_at)
 
-    with get_connection() as connection:
-        cursor = connection.execute(
-            """
-            INSERT OR IGNORE INTO reminder_message_deletion_queue (
-                reminder_id,
-                chat_id,
-                message_id,
-                sent_at_utc,
-                delete_at_utc,
-                delete_attempts,
-                next_attempt_at_utc,
-                last_error
-            )
-            VALUES (?, ?, ?, ?, ?, 0, ?, NULL)
-            """,
-            (
-                reminder_id,
-                chat_id,
-                message_id,
-                sent_at_utc,
-                delete_at_utc,
-                delete_at_utc,
-            ),
+    cursor = connection.execute(
+        """
+        INSERT OR IGNORE INTO reminder_message_deletion_queue (
+            reminder_id,
+            chat_id,
+            message_id,
+            sent_at_utc,
+            delete_at_utc,
+            delete_attempts,
+            next_attempt_at_utc,
+            last_error
         )
+        VALUES (?, ?, ?, ?, ?, 0, ?, NULL)
+        """,
+        (
+            reminder_id,
+            chat_id,
+            message_id,
+            sent_at_utc,
+            delete_at_utc,
+            delete_at_utc,
+        ),
+    )
 
     return cursor.rowcount > 0
+
+
+def _enqueue_cancelled_completion_checkpoints(
+    connection: sqlite3.Connection,
+    *,
+    reminder_id: int,
+    now: datetime,
+) -> None:
+    rows = connection.execute(
+        """
+        SELECT chat_id, completion_message_id, completion_message_sent_at_utc
+        FROM reminder_completion_occurrences
+        WHERE reminder_id = ? AND status = 'completing'
+          AND completion_message_id IS NOT NULL
+          AND completion_message_sent_at_utc IS NOT NULL
+        """,
+        (reminder_id,),
+    ).fetchall()
+    for row in rows:
+        _enqueue_reminder_message_deletion(
+            connection,
+            reminder_id=reminder_id,
+            chat_id=int(row["chat_id"]),
+            message_id=int(row["completion_message_id"]),
+            sent_at=datetime.fromisoformat(str(row["completion_message_sent_at_utc"])),
+            delete_at=now,
+        )
+
+
+def enqueue_reminder_message_deletion(
+    *,
+    reminder_id: int | None,
+    chat_id: int,
+    message_id: int,
+    sent_at: datetime,
+    delete_at: datetime,
+) -> bool:
+    with get_connection() as connection:
+        return _enqueue_reminder_message_deletion(
+            connection,
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            sent_at=sent_at,
+            delete_at=delete_at,
+        )
 
 
 def get_due_reminder_message_deletions(
@@ -849,6 +954,16 @@ COMPLETION_OCCURRENCE_COLUMNS = """
     completed_at_utc,
     completed_by_user_id,
     completed_by_display_name,
+    completion_claim_token,
+    completion_claimed_at_utc,
+    completion_next_attempt_at_utc,
+    completion_attempts,
+    completion_last_error,
+    completion_delivery_status,
+    completion_message_id,
+    completion_message_sent_at_utc,
+    completion_callback_message_id,
+    completion_callback_message_sent_at_utc,
     superseded_at_utc,
     created_at_utc,
     updated_at_utc
@@ -1309,12 +1424,15 @@ def complete_completion_occurrence(
         status = str(occurrence["status"])
         if status == "completed":
             return {"outcome": "already_completed", "occurrence": occurrence}
+        if status == "completing":
+            return {"outcome": "already_completing", "occurrence": occurrence}
         if status not in {"pending", "active"}:
             return {"outcome": "inactive", "occurrence": occurrence}
 
         reminder = connection.execute(
             """
-            SELECT status, schedule_type, requires_completion, revision,
+            SELECT status, schedule_type, delete_after_two_days,
+                   requires_completion, revision,
                    last_handled_scheduled_for_utc
             FROM reminders WHERE id = ?
             """,
@@ -1377,6 +1495,74 @@ def complete_completion_occurrence(
             if occurrence["current_message_id"] is not None
             else callback_message_id
         )
+        current_message_sent_at_utc = (
+            str(occurrence["current_message_sent_at_utc"])
+            if occurrence["current_message_sent_at_utc"] is not None
+            else message_sent_at_utc
+        )
+
+        if int(reminder["delete_after_two_days"] or 0) == 1:
+            cursor = connection.execute(
+                """
+                UPDATE reminder_completion_occurrences
+                SET status = 'completing', current_message_id = ?,
+                    current_message_sent_at_utc = ?,
+                    next_repeat_at_utc = NULL,
+                    delivery_claim_token = NULL,
+                    delivery_claimed_at_utc = NULL,
+                    completed_at_utc = ?, completed_by_user_id = ?,
+                    completed_by_display_name = ?,
+                    completion_claim_token = NULL,
+                    completion_claimed_at_utc = NULL,
+                    completion_next_attempt_at_utc = NULL,
+                    completion_attempts = 0,
+                    completion_last_error = NULL,
+                    completion_delivery_status = 'pending',
+                    completion_callback_message_id = ?,
+                    completion_callback_message_sent_at_utc = ?,
+                    updated_at_utc = ?
+                WHERE id = ? AND status IN ('pending', 'active')
+                """,
+                (
+                    current_message_id,
+                    current_message_sent_at_utc,
+                    completed_at_utc,
+                    user_id,
+                    display_name,
+                    callback_message_id,
+                    message_sent_at_utc,
+                    completed_at_utc,
+                    occurrence_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return {"outcome": "inactive", "occurrence": occurrence}
+            if (
+                previous is not None
+                and previous["current_message_id"] is not None
+                and previous["current_message_sent_at_utc"] is not None
+            ):
+                _enqueue_reminder_message_deletion(
+                    connection,
+                    reminder_id=int(occurrence["reminder_id"]),
+                    chat_id=int(previous["chat_id"]),
+                    message_id=int(previous["current_message_id"]),
+                    sent_at=datetime.fromisoformat(
+                        str(previous["current_message_sent_at_utc"])
+                    ),
+                    delete_at=completed_at,
+                )
+            _advance_reminder_watermark(
+                connection,
+                reminder_id=int(occurrence["reminder_id"]),
+                scheduled_for_utc=str(occurrence["scheduled_for_utc"]),
+            )
+            return {
+                "outcome": "completing",
+                "occurrence_id": occurrence_id,
+                "chat_id": chat_id,
+            }
+
         connection.execute(
             """
             UPDATE reminder_completion_occurrences
@@ -1411,6 +1597,355 @@ def complete_completion_occurrence(
             "rendered_text": str(occurrence["rendered_text"]),
             "previous": previous,
         }
+
+
+def claim_completion_publication(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    now: datetime,
+    stale_before: datetime,
+) -> dict[str, Any]:
+    now_utc = format_utc_datetime(now)
+    stale_before_utc = format_utc_datetime(stale_before)
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        occurrence = connection.execute(
+            f"""
+            SELECT {COMPLETION_OCCURRENCE_COLUMNS}
+            FROM reminder_completion_occurrences
+            WHERE id = ?
+            """,
+            (occurrence_id,),
+        ).fetchone()
+        if occurrence is None:
+            return {"outcome": "missing"}
+        if occurrence["status"] == "completed":
+            return {"outcome": "already_completed", "occurrence": occurrence}
+        if occurrence["status"] != "completing":
+            return {"outcome": "inactive", "occurrence": occurrence}
+
+        reminder = connection.execute(
+            """
+            SELECT status, revision
+            FROM reminders
+            WHERE id = ?
+            """,
+            (occurrence["reminder_id"],),
+        ).fetchone()
+        if (
+            reminder is None
+            or reminder["status"] != "active"
+            or int(reminder["revision"]) != int(occurrence["reminder_revision"])
+        ):
+            return {"outcome": "inactive", "occurrence": occurrence}
+
+        retry_at = occurrence["completion_next_attempt_at_utc"]
+        if retry_at is not None and str(retry_at) > now_utc:
+            return {"outcome": "retry_scheduled", "occurrence": occurrence}
+        claim_is_fresh = bool(
+            occurrence["completion_claim_token"]
+            and occurrence["completion_claimed_at_utc"]
+            and str(occurrence["completion_claimed_at_utc"]) > stale_before_utc
+        )
+        if claim_is_fresh and occurrence["completion_message_id"] is None:
+            return {"outcome": "publication_in_progress", "occurrence": occurrence}
+
+        cursor = connection.execute(
+            """
+            UPDATE reminder_completion_occurrences
+            SET completion_claim_token = ?, completion_claimed_at_utc = ?,
+                completion_next_attempt_at_utc = NULL, updated_at_utc = ?
+            WHERE id = ? AND status = 'completing'
+            """,
+            (claim_token, now_utc, now_utc, occurrence_id),
+        )
+        if cursor.rowcount != 1:
+            return {"outcome": "inactive", "occurrence": occurrence}
+        claimed = connection.execute(
+            f"""
+            SELECT {COMPLETION_OCCURRENCE_COLUMNS}
+            FROM reminder_completion_occurrences
+            WHERE id = ?
+            """,
+            (occurrence_id,),
+        ).fetchone()
+        return {"outcome": "claimed", "occurrence": claimed}
+
+
+def checkpoint_completion_message(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    message_id: int,
+    sent_at: datetime,
+) -> str:
+    sent_at_utc = format_utc_datetime(sent_at)
+    now_utc = format_utc_datetime(datetime.now(UTC))
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        occurrence = connection.execute(
+            """
+            SELECT status, completion_claim_token, completion_message_id
+            FROM reminder_completion_occurrences
+            WHERE id = ?
+            """,
+            (occurrence_id,),
+        ).fetchone()
+        if occurrence is None:
+            return "missing"
+        if occurrence["completion_message_id"] is not None:
+            return (
+                "checkpointed_same"
+                if int(occurrence["completion_message_id"]) == message_id
+                else "checkpointed_other"
+            )
+        cursor = connection.execute(
+            """
+            UPDATE reminder_completion_occurrences
+            SET completion_message_id = ?,
+                completion_message_sent_at_utc = ?,
+                completion_delivery_status = 'sent', updated_at_utc = ?
+            WHERE id = ? AND status = 'completing'
+              AND completion_claim_token = ?
+              AND completion_message_id IS NULL
+            """,
+            (message_id, sent_at_utc, now_utc, occurrence_id, claim_token),
+        )
+        return "checkpointed" if cursor.rowcount == 1 else "stale"
+
+
+def reschedule_completion_publication(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    next_attempt_at: datetime,
+    last_error: str,
+) -> bool:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE reminder_completion_occurrences
+            SET completion_claim_token = NULL,
+                completion_claimed_at_utc = NULL,
+                completion_next_attempt_at_utc = ?,
+                completion_attempts = completion_attempts + 1,
+                completion_last_error = ?, updated_at_utc = ?
+            WHERE id = ? AND status = 'completing'
+              AND completion_claim_token = ?
+            """,
+            (
+                format_utc_datetime(next_attempt_at),
+                last_error[:1000],
+                format_utc_datetime(datetime.now(UTC)),
+                occurrence_id,
+                claim_token,
+            ),
+        )
+        return cursor.rowcount == 1
+
+
+def _enqueue_occurrence_source_messages(
+    connection: sqlite3.Connection,
+    occurrence: sqlite3.Row,
+    *,
+    now: datetime,
+    keep_current_until_safe_delay: bool,
+) -> None:
+    messages: dict[int, tuple[datetime, datetime]] = {}
+    current_message_id = occurrence["current_message_id"]
+    current_sent_at = occurrence["current_message_sent_at_utc"]
+    if current_message_id is not None and current_sent_at is not None:
+        sent_at = datetime.fromisoformat(str(current_sent_at))
+        delete_at = (
+            sent_at + MESSAGE_DELETION_DELAY if keep_current_until_safe_delay else now
+        )
+        messages[int(current_message_id)] = (sent_at, delete_at)
+
+    callback_message_id = occurrence["completion_callback_message_id"]
+    callback_sent_at = occurrence["completion_callback_message_sent_at_utc"]
+    if callback_message_id is not None and callback_sent_at is not None:
+        callback_id = int(callback_message_id)
+        if callback_id not in messages:
+            messages[callback_id] = (
+                datetime.fromisoformat(str(callback_sent_at)),
+                now,
+            )
+
+    for message_id, (sent_at, delete_at) in messages.items():
+        _enqueue_reminder_message_deletion(
+            connection,
+            reminder_id=int(occurrence["reminder_id"]),
+            chat_id=int(occurrence["chat_id"]),
+            message_id=message_id,
+            sent_at=sent_at,
+            delete_at=delete_at,
+        )
+
+
+def finalize_completion_publication(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    now: datetime,
+) -> bool:
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        occurrence = connection.execute(
+            f"""
+            SELECT {COMPLETION_OCCURRENCE_COLUMNS}
+            FROM reminder_completion_occurrences
+            WHERE id = ?
+            """,
+            (occurrence_id,),
+        ).fetchone()
+        if (
+            occurrence is None
+            or occurrence["status"] != "completing"
+            or occurrence["completion_claim_token"] != claim_token
+            or occurrence["completion_message_id"] is None
+            or occurrence["completion_message_sent_at_utc"] is None
+        ):
+            return False
+        reminder = connection.execute(
+            """
+            SELECT status, schedule_type, revision
+            FROM reminders WHERE id = ?
+            """,
+            (occurrence["reminder_id"],),
+        ).fetchone()
+        if (
+            reminder is None
+            or reminder["status"] != "active"
+            or int(reminder["revision"]) != int(occurrence["reminder_revision"])
+        ):
+            return False
+
+        _enqueue_occurrence_source_messages(
+            connection,
+            occurrence,
+            now=now,
+            keep_current_until_safe_delay=False,
+        )
+        final_sent_at = datetime.fromisoformat(
+            str(occurrence["completion_message_sent_at_utc"])
+        )
+        _enqueue_reminder_message_deletion(
+            connection,
+            reminder_id=int(occurrence["reminder_id"]),
+            chat_id=int(occurrence["chat_id"]),
+            message_id=int(occurrence["completion_message_id"]),
+            sent_at=final_sent_at,
+            delete_at=final_sent_at + MESSAGE_DELETION_DELAY,
+        )
+        cursor = connection.execute(
+            """
+            UPDATE reminder_completion_occurrences
+            SET status = 'completed',
+                current_message_id = completion_message_id,
+                current_message_sent_at_utc = completion_message_sent_at_utc,
+                completion_delivery_status = 'sent',
+                completion_claim_token = NULL,
+                completion_claimed_at_utc = NULL,
+                completion_next_attempt_at_utc = NULL,
+                completion_last_error = NULL,
+                next_repeat_at_utc = NULL,
+                delivery_claim_token = NULL,
+                delivery_claimed_at_utc = NULL,
+                updated_at_utc = ?
+            WHERE id = ? AND status = 'completing'
+              AND completion_claim_token = ?
+            """,
+            (format_utc_datetime(now), occurrence_id, claim_token),
+        )
+        if cursor.rowcount != 1:
+            return False
+        _advance_reminder_watermark(
+            connection,
+            reminder_id=int(occurrence["reminder_id"]),
+            scheduled_for_utc=str(occurrence["scheduled_for_utc"]),
+            mark_once_sent=reminder["schedule_type"] == "once",
+        )
+        return True
+
+
+def finalize_failed_completion_publication(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    now: datetime,
+    last_error: str,
+    fallback_succeeded: bool,
+) -> bool:
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        occurrence = connection.execute(
+            f"""
+            SELECT {COMPLETION_OCCURRENCE_COLUMNS}
+            FROM reminder_completion_occurrences
+            WHERE id = ?
+            """,
+            (occurrence_id,),
+        ).fetchone()
+        if (
+            occurrence is None
+            or occurrence["status"] != "completing"
+            or occurrence["completion_claim_token"] != claim_token
+        ):
+            return False
+        reminder = connection.execute(
+            """
+            SELECT status, schedule_type, revision
+            FROM reminders WHERE id = ?
+            """,
+            (occurrence["reminder_id"],),
+        ).fetchone()
+        if (
+            reminder is None
+            or reminder["status"] != "active"
+            or int(reminder["revision"]) != int(occurrence["reminder_revision"])
+        ):
+            return False
+
+        _enqueue_occurrence_source_messages(
+            connection,
+            occurrence,
+            now=now,
+            keep_current_until_safe_delay=fallback_succeeded,
+        )
+        cursor = connection.execute(
+            """
+            UPDATE reminder_completion_occurrences
+            SET status = 'completed',
+                completion_delivery_status = ?,
+                completion_claim_token = NULL,
+                completion_claimed_at_utc = NULL,
+                completion_next_attempt_at_utc = NULL,
+                completion_last_error = ?,
+                next_repeat_at_utc = NULL,
+                delivery_claim_token = NULL,
+                delivery_claimed_at_utc = NULL,
+                updated_at_utc = ?
+            WHERE id = ? AND status = 'completing'
+              AND completion_claim_token = ?
+            """,
+            (
+                "fallback" if fallback_succeeded else "failed",
+                last_error[:1000],
+                format_utc_datetime(now),
+                occurrence_id,
+                claim_token,
+            ),
+        )
+        if cursor.rowcount != 1:
+            return False
+        _advance_reminder_watermark(
+            connection,
+            reminder_id=int(occurrence["reminder_id"]),
+            scheduled_for_utc=str(occurrence["scheduled_for_utc"]),
+            mark_once_sent=reminder["schedule_type"] == "once",
+        )
+        return True
 
 
 def get_due_completion_occurrences(
@@ -1451,11 +1986,45 @@ def get_due_completion_occurrences(
                         AND delivery_claim_token IS NULL
                     )
                 )
+            ) OR (
+                status = 'completing'
+                AND (
+                    completion_message_id IS NOT NULL
+                    OR (
+                        completion_next_attempt_at_utc IS NOT NULL
+                        AND completion_next_attempt_at_utc <= ?
+                    )
+                    OR (
+                        completion_next_attempt_at_utc IS NULL
+                        AND completion_claim_token IS NULL
+                    )
+                    OR (
+                        completion_next_attempt_at_utc IS NULL
+                        AND completion_claim_token IS NOT NULL
+                        AND (
+                            completion_claimed_at_utc IS NULL
+                            OR completion_claimed_at_utc <= ?
+                        )
+                    )
+                )
             )
-            ORDER BY COALESCE(next_repeat_at_utc, delivery_claimed_at_utc, created_at_utc), id
+            ORDER BY COALESCE(
+                completion_next_attempt_at_utc,
+                next_repeat_at_utc,
+                completion_claimed_at_utc,
+                delivery_claimed_at_utc,
+                created_at_utc
+            ), id
             LIMIT ?
             """,
-            (now_utc, now_utc, stale_before_utc, limit),
+            (
+                now_utc,
+                now_utc,
+                stale_before_utc,
+                now_utc,
+                stale_before_utc,
+                limit,
+            ),
         ).fetchall()
 
 
@@ -1634,13 +2203,22 @@ def delete_active_reminder_for_chat_in_db(reminder_id: int, chat_id: int) -> boo
         )
         if cursor.rowcount != 1:
             return False
+        _enqueue_cancelled_completion_checkpoints(
+            connection,
+            reminder_id=reminder_id,
+            now=datetime.fromisoformat(now_utc),
+        )
         connection.execute(
             """
             UPDATE reminder_completion_occurrences
             SET status = 'cancelled', next_repeat_at_utc = NULL,
                 delivery_claim_token = NULL, delivery_claimed_at_utc = NULL,
+                completion_claim_token = NULL,
+                completion_claimed_at_utc = NULL,
+                completion_next_attempt_at_utc = NULL,
                 updated_at_utc = ?
-            WHERE reminder_id = ? AND status IN ('pending', 'active')
+            WHERE reminder_id = ?
+              AND status IN ('pending', 'active', 'completing')
             """,
             (now_utc, reminder_id),
         )

@@ -18,13 +18,18 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.constants import COMPLETION_MESSAGE_SUFFIX, TELEGRAM_MESSAGE_MAX_LENGTH
 from app.database import (
     activate_claimed_completion_occurrence,
+    checkpoint_completion_message,
     claim_completion_occurrence_delivery,
+    claim_completion_publication,
     complete_completion_occurrence,
     fail_completion_occurrence,
+    finalize_completion_publication,
+    finalize_failed_completion_publication,
     get_due_completion_occurrences,
     get_repeatable_completion_occurrence,
     get_reminder_from_db,
     replace_active_completion_message,
+    reschedule_completion_publication,
     reschedule_completion_occurrence_after_error,
 )
 from app.reminder_mapping import build_reminder_read_data, parse_utc_datetime
@@ -36,6 +41,7 @@ COMPLETION_CALLBACK_PREFIX = "completion_done:"
 COMPLETION_DELIVERY_CLAIM_TIMEOUT = timedelta(minutes=2)
 COMPLETION_WORKER_BATCH_SIZE = 100
 COMPLETION_RETRY_DELAY = timedelta(minutes=1)
+COMPLETION_PUBLICATION_MAX_ATTEMPTS = 10
 
 
 def build_completion_callback_data(occurrence_id: int) -> str:
@@ -418,6 +424,175 @@ async def repeat_active_occurrence(bot: Bot, occurrence) -> None:
     )
 
 
+async def finalize_terminal_completion_error(
+    bot: Bot,
+    *,
+    occurrence,
+    claim_token: str,
+    error: Exception,
+) -> None:
+    occurrence_id = int(occurrence["id"])
+    chat_id = int(occurrence["chat_id"])
+    current_message_id = (
+        int(occurrence["current_message_id"])
+        if occurrence["current_message_id"] is not None
+        else None
+    )
+    completed_text = f"{occurrence['rendered_text']}{COMPLETION_MESSAGE_SUFFIX}"
+    fallback_succeeded = False
+    if (
+        current_message_id is not None
+        and len(completed_text) <= TELEGRAM_MESSAGE_MAX_LENGTH
+    ):
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=current_message_id,
+                text=completed_text,
+                reply_markup=None,
+            )
+            fallback_succeeded = True
+        except Exception:
+            LOGGER.warning(
+                "Completion fallback edit failed: occurrence_id=%s message_id=%s",
+                occurrence_id,
+                current_message_id,
+                exc_info=True,
+            )
+    if not fallback_succeeded and current_message_id is not None:
+        try:
+            await remove_message_keyboard_best_effort(
+                bot,
+                chat_id=chat_id,
+                message_id=current_message_id,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Completion fallback keyboard removal failed: occurrence_id=%s message_id=%s",
+                occurrence_id,
+                current_message_id,
+                exc_info=True,
+            )
+
+    finalized = await asyncio.to_thread(
+        finalize_failed_completion_publication,
+        occurrence_id=occurrence_id,
+        claim_token=claim_token,
+        now=datetime.now(timezone.utc),
+        last_error=f"{type(error).__name__}: {error}",
+        fallback_succeeded=fallback_succeeded,
+    )
+    if not finalized:
+        LOGGER.info(
+            "Terminal completion finalization lost its CAS: occurrence_id=%s",
+            occurrence_id,
+        )
+
+
+async def publish_completion_occurrence(bot: Bot, occurrence_id: int) -> str:
+    now = datetime.now(timezone.utc)
+    claim_token = uuid4().hex
+    claim = await asyncio.to_thread(
+        claim_completion_publication,
+        occurrence_id=occurrence_id,
+        claim_token=claim_token,
+        now=now,
+        stale_before=now - COMPLETION_DELIVERY_CLAIM_TIMEOUT,
+    )
+    outcome = str(claim["outcome"])
+    if outcome != "claimed":
+        return outcome
+
+    occurrence = claim["occurrence"]
+    message_id = occurrence["completion_message_id"]
+    if message_id is None:
+        completed_text = f"{occurrence['rendered_text']}{COMPLETION_MESSAGE_SUFFIX}"
+        if len(completed_text) > TELEGRAM_MESSAGE_MAX_LENGTH:
+            await finalize_terminal_completion_error(
+                bot,
+                occurrence=occurrence,
+                claim_token=claim_token,
+                error=ValueError("Completed reminder exceeds Telegram limit."),
+            )
+            return "completed_with_delivery_failure"
+        try:
+            message = await bot.send_message(
+                chat_id=int(occurrence["chat_id"]),
+                text=completed_text,
+            )
+        except Exception as error:
+            attempts = int(occurrence["completion_attempts"] or 0) + 1
+            if is_terminal_send_error(error) or (
+                attempts >= COMPLETION_PUBLICATION_MAX_ATTEMPTS
+                and not isinstance(error, TelegramRetryAfter)
+            ):
+                await finalize_terminal_completion_error(
+                    bot,
+                    occurrence=occurrence,
+                    claim_token=claim_token,
+                    error=error,
+                )
+                return "completed_with_delivery_failure"
+
+            retry_at = datetime.now(timezone.utc) + get_retry_delay(error)
+            await asyncio.to_thread(
+                reschedule_completion_publication,
+                occurrence_id=occurrence_id,
+                claim_token=claim_token,
+                next_attempt_at=retry_at,
+                last_error=f"{type(error).__name__}: {error}",
+            )
+            return "publication_rescheduled"
+
+        sent_at = get_sent_at(message)
+        try:
+            checkpoint_outcome = await asyncio.to_thread(
+                checkpoint_completion_message,
+                occurrence_id=occurrence_id,
+                claim_token=claim_token,
+                message_id=message.message_id,
+                sent_at=sent_at,
+            )
+        except Exception:
+            LOGGER.exception(
+                "Completion checkpoint failed after Telegram send: occurrence_id=%s message_id=%s",
+                occurrence_id,
+                message.message_id,
+            )
+            await delete_message_best_effort(
+                bot,
+                chat_id=int(occurrence["chat_id"]),
+                message_id=message.message_id,
+                reason="completion_checkpoint_error",
+            )
+            return "sent_unrecorded"
+        if checkpoint_outcome not in {"checkpointed", "checkpointed_same"}:
+            await delete_message_best_effort(
+                bot,
+                chat_id=int(occurrence["chat_id"]),
+                message_id=message.message_id,
+                reason=f"completion_checkpoint_{checkpoint_outcome}",
+            )
+            return "sent_unrecorded"
+        message_id = message.message_id
+
+    finalized = await asyncio.to_thread(
+        finalize_completion_publication,
+        occurrence_id=occurrence_id,
+        claim_token=claim_token,
+        now=datetime.now(timezone.utc),
+    )
+    if finalized:
+        return "completed"
+
+    LOGGER.info(
+        "Completion finalization lost its CAS after checkpoint: occurrence_id=%s message_id=%s",
+        occurrence_id,
+        message_id,
+    )
+    return "sent_unrecorded"
+
+
 async def process_due_completion_occurrences(bot: Bot) -> None:
     now = datetime.now(timezone.utc)
     try:
@@ -435,6 +610,12 @@ async def process_due_completion_occurrences(bot: Bot) -> None:
         try:
             if occurrence["status"] == "active":
                 await repeat_active_occurrence(bot, occurrence)
+                continue
+            if occurrence["status"] == "completing":
+                await publish_completion_occurrence(
+                    bot,
+                    int(occurrence["id"]),
+                )
                 continue
 
             reminder_row = await asyncio.to_thread(
@@ -484,8 +665,7 @@ async def remove_message_keyboard_best_effort(
         )
 
 
-async def process_completion_callback(
-    bot: Bot,
+async def claim_completion_callback(
     *,
     occurrence_id: int,
     chat_id: int,
@@ -493,7 +673,7 @@ async def process_completion_callback(
     callback_message_sent_at: datetime | None,
     user_id: int,
     display_name: str,
-) -> str:
+) -> dict[str, object]:
     result = await asyncio.to_thread(
         complete_completion_occurrence,
         occurrence_id=occurrence_id,
@@ -505,7 +685,48 @@ async def process_completion_callback(
         completed_at=datetime.now(timezone.utc),
     )
     outcome = str(result["outcome"])
-    if outcome == "completed":
+    response_text = "Не удалось обработать кнопку."
+    action = "none"
+    if outcome == "completing":
+        response_text = "Отмечено как выполненное."
+        action = "publish"
+    elif outcome == "completed":
+        response_text = "Выполнено."
+        action = "edit"
+    elif outcome == "already_completing":
+        response_text = "Выполнение уже обрабатывается."
+    elif outcome == "already_completed":
+        response_text = "Уже отмечено выполненным."
+        action = "remove_keyboard"
+    elif outcome in {"inactive", "reminder_inactive", "obsolete"}:
+        response_text = "Это срабатывание уже неактуально."
+        action = "remove_keyboard"
+    elif outcome == "wrong_chat":
+        response_text = "Кнопка относится к другому чату."
+    elif outcome == "missing":
+        response_text = "Напоминание больше не активно."
+
+    return {
+        **result,
+        "response_text": response_text,
+        "action": action,
+        "callback_message_id": callback_message_id,
+        "chat_id": chat_id,
+        "occurrence_id": occurrence_id,
+        "user_id": user_id,
+    }
+
+
+async def finish_completion_callback(bot: Bot, result: dict[str, object]) -> None:
+    action = str(result["action"])
+    occurrence_id = int(result["occurrence_id"])
+    chat_id = int(result["chat_id"])
+    callback_message_id = int(result["callback_message_id"])
+    if action == "publish":
+        await publish_completion_occurrence(bot, occurrence_id)
+        return
+
+    if action == "edit":
         await delete_previous_occurrence_message(
             bot,
             result.get("previous"),
@@ -553,26 +774,22 @@ async def process_completion_callback(
             occurrence_id,
             chat_id,
             current_message_id,
-            user_id,
+            result["user_id"],
         )
-        return "Выполнено."
+        return
 
-    if outcome == "already_completed":
+    if action == "remove_keyboard":
         await remove_message_keyboard_best_effort(
             bot,
             chat_id=chat_id,
             message_id=callback_message_id,
         )
-        return "Уже отмечено выполненным."
-    if outcome in {"inactive", "reminder_inactive", "obsolete"}:
-        await remove_message_keyboard_best_effort(
-            bot,
-            chat_id=chat_id,
-            message_id=callback_message_id,
-        )
-        return "Это срабатывание уже неактуально."
-    if outcome == "wrong_chat":
-        return "Кнопка относится к другому чату."
-    if outcome == "missing":
-        return "Напоминание больше не активно."
-    return "Не удалось обработать кнопку."
+
+
+async def process_completion_callback(
+    bot: Bot,
+    **kwargs,
+) -> str:
+    result = await claim_completion_callback(**kwargs)
+    await finish_completion_callback(bot, result)
+    return str(result["response_text"])

@@ -44,9 +44,93 @@ def test_init_db_creates_database_file(monkeypatch, tmp_path) -> None:
         "delivery_claim_token",
         "delivery_claimed_at_utc",
         "reminder_revision",
+        "completion_claim_token",
+        "completion_next_attempt_at_utc",
+        "completion_message_id",
+        "completion_delivery_status",
     } <= completion_columns
     assert "idx_reminder_completion_occurrences_one_active" in completion_indexes
     assert "idx_reminder_completion_occurrences_due" in completion_indexes
+    assert "idx_reminder_completion_occurrences_completion_due" in completion_indexes
+
+
+def test_init_db_adds_completion_publication_fields_without_losing_occurrence(
+    monkeypatch, tmp_path
+) -> None:
+    test_db_path = tmp_path / "legacy-completion.db"
+    with sqlite3.connect(test_db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                schedule_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                start_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO reminders (
+                id, chat_id, text, schedule_type, status, start_at, created_at
+            ) VALUES (1, 100, 'Сохранить occurrence', 'once', 'active',
+                      '2026-07-18T12:00:00', '2026-07-18T10:00:00')
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE reminder_completion_occurrences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reminder_id INTEGER NOT NULL,
+                reminder_revision INTEGER NOT NULL DEFAULT 1,
+                chat_id INTEGER NOT NULL,
+                scheduled_for_utc TEXT NOT NULL,
+                status TEXT NOT NULL,
+                rendered_text TEXT NOT NULL,
+                current_message_id INTEGER,
+                current_message_sent_at_utc TEXT,
+                next_repeat_at_utc TEXT,
+                repeat_attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                delivery_claim_token TEXT,
+                delivery_claimed_at_utc TEXT,
+                completed_at_utc TEXT,
+                completed_by_user_id INTEGER,
+                completed_by_display_name TEXT,
+                superseded_at_utc TEXT,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                UNIQUE(reminder_id, reminder_revision, scheduled_for_utc)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO reminder_completion_occurrences (
+                reminder_id, reminder_revision, chat_id, scheduled_for_utc,
+                status, rendered_text, created_at_utc, updated_at_utc
+            ) VALUES (1, 1, 100, '2026-07-18T08:00:00+00:00',
+                      'pending', 'Сохранить occurrence',
+                      '2026-07-18T08:00:00+00:00',
+                      '2026-07-18T08:00:00+00:00')
+            """
+        )
+
+    monkeypatch.setattr(database, "DB_PATH", test_db_path)
+    database.init_db()
+    database.init_db()
+
+    with database.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT * FROM reminder_completion_occurrences WHERE id = 1"
+        ).fetchone()
+    assert occurrence["rendered_text"] == "Сохранить occurrence"
+    assert occurrence["status"] == "pending"
+    assert occurrence["completion_attempts"] == 0
+    assert occurrence["completion_message_id"] is None
 
 
 def test_init_db_migrates_existing_reminders_without_losing_data(

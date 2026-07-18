@@ -98,10 +98,6 @@ def validate_reminder_create_data(data: ReminderCreateData) -> None:
     if data.requires_completion:
         if data.reminder_kind != REMINDER_KIND_TEXT:
             raise ValueError("Completion is supported only for text reminders.")
-        if data.delete_after_two_days:
-            raise ValueError(
-                "Completion and automatic deletion cannot be enabled together."
-            )
         if data.repeat_interval_minutes not in VALID_COMPLETION_REPEAT_INTERVALS:
             raise ValueError("repeat_interval_minutes is invalid.")
         if len(data.reminder_text) > COMPLETION_REMINDER_TEXT_MAX_LENGTH:

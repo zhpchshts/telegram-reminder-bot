@@ -20,10 +20,7 @@ def test_auto_delete_checkbox_is_available_for_every_reminder() -> None:
     assert 'class="auto-delete-tooltip"' in html
     assert 'role="tooltip"' in html
     assert 'aria-describedby="auto-delete-tooltip"' in html
-    assert (
-        "Бот автоматически удалит отправленное сообщение примерно через два дня."
-        in html
-    )
+    assert "Сообщение будет удалено примерно через два дня." in html
 
     checkbox_position = html.index('id="delete-after-two-days"')
     form_end_position = html.index("</form>", checkbox_position)
@@ -59,4 +56,5 @@ def test_tma_request_edit_reset_and_card_support_auto_delete() -> None:
     )
     assert "elements.deleteAfterTwoDays.checked = false;" in javascript
     assert "if (reminder.delete_after_two_days)" in javascript
-    assert javascript.count("Автоудаление: через 2 суток") >= 2
+    assert "Автоудаление: через 2 суток" in javascript
+    assert "Автоудаление: после выполнения" in javascript

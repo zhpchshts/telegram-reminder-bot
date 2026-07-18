@@ -29,6 +29,7 @@ from app.completion_service import (
 )
 from app.constants import (
     APSCHEDULER_WEEKDAYS,
+    MESSAGE_DELETION_DELAY,
     REMINDER_KIND_TEXT,
     REMINDER_KIND_WEATHER,
 )
@@ -63,7 +64,6 @@ WEATHER_REPORT_CACHE_LOOKUP_GRACE = timedelta(minutes=1)
 WEATHER_CATCHUP_MAX_AGE = timedelta(hours=6)
 LATE_REMINDER_NOTICE_THRESHOLD = timedelta(minutes=5)
 REMINDER_OCCURRENCE_SEARCH_LIMIT = 100_000
-MESSAGE_DELETION_DELAY = timedelta(hours=47, minutes=45)
 MESSAGE_DELETION_MAX_AGE = timedelta(hours=48)
 MESSAGE_DELETION_RETRY_DELAY = timedelta(minutes=1)
 MESSAGE_DELETION_BATCH_SIZE = 100

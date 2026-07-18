@@ -209,6 +209,7 @@ const elements = {
   completionRepeatField: byId("completion-repeat-field"),
   completionRepeatInterval: byId("completion-repeat-interval"),
   autoDeleteField: byId("auto-delete-field"),
+  autoDeleteTooltip: byId("auto-delete-tooltip"),
   deleteAfterTwoDays: byId("delete-after-two-days"),
   intervalDaysField: byId("interval-days-field"),
   weeklyFields: byId("weekly-fields"),
@@ -585,7 +586,9 @@ function showPreview(preview) {
     ? "Следующее уведомление"
     : "Первое срабатывание";
   const autoDeleteChip = preview.delete_after_two_days
-    ? '<span class="preview-chip">Автоудаление: через 2 суток</span>'
+    ? `<span class="preview-chip">Автоудаление: ${
+        preview.requires_completion ? "после выполнения" : "через 2 суток"
+      }</span>`
     : "";
   const completionInterval = (
     state.reminderOptions?.completion_repeat_intervals || []
@@ -689,6 +692,11 @@ function updateCompletionFields() {
   }
 
   const isEnabled = Boolean(elements.requiresCompletion?.checked) && !isWeather;
+  if (elements.autoDeleteTooltip) {
+    elements.autoDeleteTooltip.textContent = isEnabled
+      ? "После выполнения сообщение будет удалено примерно через два дня."
+      : "Сообщение будет удалено примерно через два дня.";
+  }
   if (elements.completionRepeatField) {
     elements.completionRepeatField.hidden = !isEnabled;
   }
@@ -1011,7 +1019,9 @@ function createReminderCard(reminder) {
       createTextElement(
         "span",
         "reminder-chip",
-        "Автоудаление: через 2 суток",
+        reminder.requires_completion
+          ? "Автоудаление: после выполнения"
+          : "Автоудаление: через 2 суток",
       ),
     );
   }
@@ -1694,16 +1704,10 @@ on(elements.reminderKind, "change", () => {
   hidePreview();
 });
 on(elements.requiresCompletion, "change", () => {
-  if (elements.requiresCompletion.checked && elements.deleteAfterTwoDays) {
-    elements.deleteAfterTwoDays.checked = false;
-  }
   updateCompletionFields();
   hidePreview();
 });
 on(elements.deleteAfterTwoDays, "change", () => {
-  if (elements.deleteAfterTwoDays.checked && elements.requiresCompletion) {
-    elements.requiresCompletion.checked = false;
-  }
   updateCompletionFields();
   hidePreview();
 });

@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+
 MONTH_NAMES_RU = {
     1: "января",
     2: "февраля",
@@ -35,6 +38,8 @@ APSCHEDULER_WEEKDAYS = {
 
 REMINDER_KIND_TEXT = "text"
 REMINDER_KIND_WEATHER = "weather"
+
+MESSAGE_DELETION_DELAY = timedelta(hours=47, minutes=45)
 
 VALID_REMINDER_KINDS = {
     REMINDER_KIND_TEXT,
@@ -113,6 +118,7 @@ REMINDER_COLUMNS = """
           AND completion_occurrence.reminder_revision = reminders.revision
           AND (
               completion_occurrence.status = 'active'
+              OR completion_occurrence.status = 'completing'
               OR (
                   completion_occurrence.status = 'pending'
                   AND completion_occurrence.current_message_id IS NOT NULL

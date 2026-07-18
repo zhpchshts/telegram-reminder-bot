@@ -22,122 +22,105 @@
         document.documentElement.dataset.theme = "light";
       }
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20260716-03" />
+    <link rel="stylesheet" href="./styles.css?v=20260719-01" />
   </head>
   <body>
-    <main class="app">
-      <header class="hero">
-        <div class="hero-brand">
-          <div class="brand-mark" aria-hidden="true">🌸</div>
-          <div>
-            <p class="eyebrow">Незабудка</p>
-            <h1>Напоминания</h1>
-            <p id="chat-title" class="hero-subtitle">Загрузка чата...</p>
-          </div>
-        </div>
+    <main id="app" class="app" aria-busy="true">
+      <section id="loading-state" class="loading-state" aria-live="polite">
+        <div class="loading-mark" aria-hidden="true">🌸</div>
+        <p>Загружаем напоминания…</p>
+      </section>
 
-        <div class="header-actions" aria-label="Действия">
-          <button
-            id="reload-button"
-            type="button"
-            class="secondary-button header-icon-button"
-            aria-label="Обновить"
-            title="Обновить"
-          >
-            <span aria-hidden="true">↻</span>
-          </button>
-          <button
-            id="theme-toggle-button"
-            type="button"
-            class="secondary-button header-icon-button"
-            aria-pressed="false"
-            aria-label="Включить тёмную тему"
-            title="Включить тёмную тему"
-          >
-            <span aria-hidden="true">☾</span>
-          </button>
-        </div>
-      </header>
-
-      <section id="status" class="status" hidden></section>
-
-      <details class="card collapsible-card timezone-card">
-        <summary class="timezone-summary">
-          <span id="timezone-summary-text">Таймзона чата: загружается...</span>
-          <span class="timezone-summary-action">Настроить</span>
-        </summary>
-
-        <div class="collapsible-content">
-          <div id="device-timezone-block" class="timezone-suggestion" hidden>
+      <section id="list-screen" class="app-screen" hidden>
+        <header class="hero">
+          <div class="hero-brand">
+            <div class="brand-mark" aria-hidden="true">🌸</div>
             <div>
-              <p class="muted">Устройство</p>
-              <p id="device-timezone-name" class="timezone-suggestion-value"></p>
+              <p class="eyebrow">Незабудка</p>
+              <h1 id="list-screen-title" tabindex="-1">Напоминания</h1>
+              <p id="chat-title" class="hero-subtitle">Загрузка чата...</p>
             </div>
+          </div>
 
+          <div class="header-actions" aria-label="Действия">
             <button
-              id="use-device-timezone-button"
-              class="secondary-button"
+              id="reload-button"
               type="button"
+              class="secondary-button header-icon-button"
+              aria-label="Обновить напоминания"
+              title="Обновить напоминания"
             >
-              Использовать
+              <span aria-hidden="true">↻</span>
+            </button>
+            <button
+              id="settings-button"
+              type="button"
+              class="secondary-button header-icon-button"
+              aria-label="Открыть настройки"
+              title="Настройки"
+            >
+              <span aria-hidden="true">⚙</span>
             </button>
           </div>
+        </header>
 
-          <form id="timezone-form" class="form">
-            <label class="field">
-              <span>Таймзона чата</span>
-              <input
-                id="chat-timezone-name"
-                name="timezone_name"
-                type="text"
-                placeholder="Asia/Yekaterinburg"
-                autocomplete="off"
-                aria-describedby="chat-timezone-hint"
-                required
-              />
-            </label>
+        <section id="list-status" class="status" aria-live="polite" hidden></section>
 
-            <p id="chat-timezone-hint" class="muted">
-              Пример: Asia/Yekaterinburg.
-              Обычно достаточно использовать таймзону устройства.
-              Если нужна другая —
-              <a
-                href="https://timezonedb.com/time-zones"
-                target="_blank"
-                rel="noopener noreferrer"
-              >открой TimeZoneDB</a>
-              и скопируй значение из колонки Time Zone.
-            </p>
+        <button
+          id="create-reminder-button"
+          class="primary-button create-reminder-button"
+          type="button"
+        >
+          Создать напоминание
+        </button>
 
-            <div class="actions">
-              <button
-                id="timezone-save-button"
-                class="secondary-button"
-                type="submit"
-              >
-                Сохранить таймзону
-              </button>
-            </div>
-          </form>
-        </div>
-      </details>
+        <section class="card reminders-card" aria-labelledby="reminders-title">
+          <div class="card-heading">
+            <h2 id="reminders-title">Активные напоминания</h2>
+            <span id="reminders-count" class="count-badge">0 активных</span>
+          </div>
 
-      <section class="card form-card">
-        <div class="card-heading">
-          <h2 id="form-title">Создать напоминание</h2>
-        </div>
+          <div id="reminders-list" class="reminders-list">
+            <p class="muted">Загрузка...</p>
+          </div>
+        </section>
+      </section>
 
-        <form id="reminder-form" class="form">
+      <section id="form-screen" class="app-screen" hidden>
+        <header class="screen-header">
+          <button
+            id="form-back-button"
+            class="secondary-button back-button"
+            type="button"
+            aria-label="Вернуться к списку напоминаний"
+          >
+            <span aria-hidden="true">←</span>
+          </button>
+          <div>
+            <p class="eyebrow">Незабудка</p>
+            <h1 id="form-title" tabindex="-1">Создать напоминание</h1>
+          </div>
+        </header>
+
+        <section id="form-status" class="status" aria-live="polite" hidden></section>
+
+        <section class="card form-card">
+          <form id="reminder-form" class="form">
           <input id="reminder-id" type="hidden" />
           <input id="timezone-name" name="timezone_name" type="hidden" />
 
-          <label class="field">
+          <label id="reminder-kind-control" class="field">
             <span>Тип уведомления</span>
             <select id="reminder-kind" name="reminder_kind" required>
               <option value="text">Обычное напоминание</option>
               <option value="weather">Погода</option>
             </select>
           </label>
+
+          <div id="reminder-kind-static" class="field static-field" hidden>
+            <span class="static-field-label">Тип уведомления</span>
+            <span id="reminder-kind-static-value" class="static-field-value"></span>
+          </div>
 
           <label class="field field-main">
             <span id="reminder-text-label">Текст напоминания</span>
@@ -155,7 +138,7 @@
           </label>
 
           <div class="form-section">
-            <label class="field">
+            <label id="schedule-type-control" class="field">
               <span>Повтор</span>
               <select id="schedule-type" name="schedule_type" required>
                 <option value="once">Один раз</option>
@@ -166,6 +149,11 @@
                 <option value="monthly_day">День месяца</option>
               </select>
             </label>
+
+            <div id="schedule-type-static" class="field static-field" hidden>
+              <span class="static-field-label">Повтор</span>
+              <span id="schedule-type-static-value" class="static-field-value"></span>
+            </div>
 
             <div id="yearly-date-field" class="field" hidden>
               <span>Дата ежегодного уведомления</span>
@@ -379,7 +367,7 @@
               Предпросмотр
             </button>
             <button id="save-button" class="primary-button" type="submit">
-              Сохранить
+              Создать
             </button>
             <button
               id="cancel-edit-button"
@@ -390,21 +378,131 @@
               Отменить
             </button>
           </div>
-        </form>
+          </form>
+        </section>
       </section>
 
-      <section class="card reminders-card">
-        <div class="card-heading">
-          <h2>Активные напоминания</h2>
-          <span id="reminders-count" class="count-badge">0 активных</span>
-        </div>
+      <section id="settings-screen" class="app-screen" hidden>
+        <header class="screen-header">
+          <button
+            id="settings-back-button"
+            class="secondary-button back-button"
+            type="button"
+            aria-label="Вернуться к списку напоминаний"
+          >
+            <span aria-hidden="true">←</span>
+          </button>
+          <div>
+            <p class="eyebrow">Незабудка</p>
+            <h1 id="settings-screen-title" tabindex="-1">Настройки</h1>
+          </div>
+        </header>
 
-        <div id="reminders-list" class="reminders-list">
-          <p class="muted">Загрузка...</p>
+        <section
+          id="settings-status"
+          class="status"
+          aria-live="polite"
+          hidden
+        ></section>
+
+        <section class="card settings-card" aria-labelledby="timezone-title">
+          <div class="card-heading settings-heading">
+            <div>
+              <h2 id="timezone-title">Таймзона чата</h2>
+              <p id="timezone-summary-text" class="muted">Загружается...</p>
+            </div>
+          </div>
+
+          <div id="device-timezone-block" class="timezone-suggestion" hidden>
+            <div>
+              <p class="muted">Устройство</p>
+              <p id="device-timezone-name" class="timezone-suggestion-value"></p>
+            </div>
+
+            <button
+              id="use-device-timezone-button"
+              class="secondary-button"
+              type="button"
+            >
+              Использовать
+            </button>
+          </div>
+
+          <form id="timezone-form" class="form settings-form">
+            <label class="field">
+              <span>Таймзона чата</span>
+              <input
+                id="chat-timezone-name"
+                name="timezone_name"
+                type="text"
+                placeholder="Asia/Yekaterinburg"
+                autocomplete="off"
+                aria-describedby="chat-timezone-hint"
+                required
+              />
+            </label>
+
+            <p id="chat-timezone-hint" class="muted">
+              Пример: Asia/Yekaterinburg. Обычно достаточно использовать таймзону
+              устройства. Если нужна другая —
+              <a
+                href="https://timezonedb.com/time-zones"
+                target="_blank"
+                rel="noopener noreferrer"
+                >открой TimeZoneDB</a
+              >
+              и скопируй значение из колонки Time Zone.
+            </p>
+
+            <div class="actions">
+              <button
+                id="timezone-save-button"
+                class="primary-button"
+                type="submit"
+              >
+                Сохранить таймзону
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card theme-card" aria-labelledby="theme-title">
+          <div>
+            <h2 id="theme-title">Оформление</h2>
+            <p class="muted">Переключение сохраняется на этом устройстве.</p>
+          </div>
+          <button
+            id="theme-toggle-button"
+            type="button"
+            class="secondary-button theme-toggle-button"
+            aria-pressed="false"
+            aria-label="Включить тёмную тему"
+          >
+            <span aria-hidden="true">☾</span>
+            <span id="theme-toggle-label">Включить тёмную тему</span>
+          </button>
+        </section>
+      </section>
+
+      <section id="fatal-error-screen" class="app-screen fatal-error-screen" hidden>
+        <div class="fatal-error-card">
+          <div class="fatal-error-icon" aria-hidden="true">🌸</div>
+          <p class="eyebrow">Незабудка</p>
+          <h1 id="fatal-error-title" tabindex="-1">Не удалось открыть приложение</h1>
+          <p id="fatal-error-message" class="fatal-error-message">
+            Проверь подключение и попробуй ещё раз.
+          </p>
+          <button id="retry-bootstrap-button" class="primary-button" type="button">
+            Повторить
+          </button>
+          <details id="fatal-error-details-block" class="fatal-error-details" hidden>
+            <summary>Технические сведения</summary>
+            <pre id="fatal-error-details"></pre>
+          </details>
         </div>
       </section>
     </main>
 
-    <script src="./app.js?v=20260718-02"></script>
+    <script src="./app.js?v=20260719-01"></script>
   </body>
 </html>

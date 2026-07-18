@@ -90,6 +90,10 @@ body {
   background: transparent;
 }
 
+body.modal-open {
+  overflow: hidden;
+}
+
 button,
 input,
 select,
@@ -110,6 +114,68 @@ button:disabled {
   max-width: 820px;
   margin: 0 auto;
   padding: 18px 14px 28px;
+}
+
+.app-screen {
+  min-width: 0;
+}
+
+.loading-state {
+  display: grid;
+  min-height: 62vh;
+  gap: 12px;
+  place-content: center;
+  justify-items: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+.loading-state p {
+  margin: 0;
+  font-weight: 700;
+}
+
+.loading-mark,
+.fatal-error-icon {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--accent-soft);
+  font-size: 28px;
+}
+
+.screen-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 4px 2px 16px;
+  margin-bottom: 8px;
+}
+
+.screen-header h1 {
+  margin-bottom: 0;
+}
+
+.back-button {
+  display: inline-grid;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border-radius: 14px;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.create-reminder-button {
+  width: 100%;
+  min-height: 48px;
+  margin-bottom: 14px;
+  font-size: 16px;
 }
 
 .card,
@@ -194,7 +260,6 @@ h3 {
 
 .hero-subtitle,
 .muted,
-.card-heading-note,
 .field-hint,
 .modal-text {
   color: var(--muted);
@@ -233,20 +298,96 @@ h3 {
   border-radius: var(--radius-lg);
 }
 
+.settings-card {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-heading,
+.settings-heading .muted,
+.theme-card .muted {
+  margin-bottom: 0;
+}
+
+.settings-form {
+  padding-top: 2px;
+}
+
+.theme-card {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.theme-toggle-button {
+  display: inline-flex;
+  min-height: 44px;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.fatal-error-screen {
+  display: grid;
+  min-height: 72vh;
+  place-items: center;
+}
+
+.fatal-error-card {
+  display: grid;
+  width: min(100%, 520px);
+  gap: 14px;
+  justify-items: start;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.fatal-error-card h1,
+.fatal-error-message {
+  margin-bottom: 0;
+}
+
+.fatal-error-message {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.fatal-error-details {
+  width: 100%;
+  color: var(--muted);
+}
+
+.fatal-error-details summary {
+  min-height: 44px;
+  padding: 12px 0;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.fatal-error-details pre {
+  max-height: 240px;
+  padding: 12px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .card-heading {
   display: flex;
   gap: 12px;
   align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 12px;
-}
-
-.card-heading-note {
-  max-width: 220px;
-  margin: 2px 0 0;
-  font-size: 13px;
-  line-height: 1.35;
-  text-align: right;
 }
 
 .status,
@@ -293,13 +434,6 @@ h3 {
   background: transparent;
 }
 
-.section-label {
-  margin-bottom: -1px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 680;
-}
-
 .field,
 .field label {
   display: grid;
@@ -311,6 +445,28 @@ h3 {
   color: var(--text);
   font-size: 14px;
   font-weight: 640;
+}
+
+.static-field {
+  display: grid;
+  gap: 7px;
+}
+
+.static-field-label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.static-field-value {
+  min-height: 46px;
+  padding: 12px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .field-main textarea {
@@ -627,6 +783,7 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 .primary-button,
 .secondary-button,
 .danger-button {
+  min-height: 44px;
   border: 0;
   border-radius: 999px;
   padding: 11px 16px;
@@ -638,6 +795,16 @@ input[type="time"]::-webkit-calendar-picker-indicator {
     filter 0.15s ease,
     background 0.15s ease,
     box-shadow 0.15s ease;
+}
+
+.primary-button:focus-visible,
+.secondary-button:focus-visible,
+.danger-button:focus-visible,
+.reminder-content-button:focus-visible,
+.reminder-action-button:focus-visible,
+.fatal-error-details summary:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent), transparent 35%);
+  outline-offset: 2px;
 }
 
 .primary-button {
@@ -675,8 +842,8 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 
 .header-icon-button {
   display: inline-grid;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   place-items: center;
   padding: 0;
   border-radius: 14px;
@@ -688,59 +855,6 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 .header-icon-button span {
   display: block;
   transform: translateY(-1px);
-}
-
-.collapsible-card {
-  padding: 0;
-  overflow: hidden;
-}
-
-.timezone-card {
-  margin-bottom: 14px;
-}
-
-.timezone-summary {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  cursor: pointer;
-  font-weight: 700;
-  list-style: none;
-}
-
-.timezone-summary::-webkit-details-marker {
-  display: none;
-}
-
-.timezone-summary::after {
-  content: "▾";
-  flex: 0 0 auto;
-  color: var(--hint);
-  transition: transform 0.16s ease;
-}
-
-.collapsible-card[open] .timezone-summary::after {
-  transform: rotate(180deg);
-}
-
-.timezone-summary-action {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 14px;
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.collapsible-content {
-  display: grid;
-  gap: 14px;
-  padding: 0 16px 16px;
-}
-
-.collapsible-content > .muted {
-  margin-bottom: 0;
 }
 
 .timezone-suggestion {
@@ -849,13 +963,15 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 .reminder-card {
   position: relative;
   display: grid;
-  gap: 13px;
-  padding: 15px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: start;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-strong);
   box-shadow: var(--shadow-soft);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .reminder-card::before {
@@ -867,42 +983,135 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   background: var(--accent);
 }
 
-.reminder-content {
+.reminder-content-button {
   display: grid;
-  gap: 10px;
   min-width: 0;
-  padding-left: 4px;
+  gap: 7px;
+  padding: 15px 10px 15px 19px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
 }
 
-.reminder-card h3 {
+.reminder-content-button:active {
+  background: color-mix(in srgb, var(--accent-soft), transparent 55%);
+}
+
+@media (hover: hover) {
+  .reminder-content-button:hover {
+    background: color-mix(in srgb, var(--accent-soft), transparent 68%);
+  }
+}
+
+.reminder-title {
+  min-width: 0;
   font-size: 16px;
+  font-weight: 750;
   line-height: 1.32;
   overflow-wrap: anywhere;
 }
 
-.reminder-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  color: var(--muted);
-  font-size: 14px;
-}
-
 .reminder-next-run {
-  color: var(--muted);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 680;
+  line-height: 1.4;
 }
 
-.reminder-actions {
+.reminder-period,
+.reminder-auto-delete {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.reminder-special-states {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-end;
+  gap: 6px;
+  align-items: center;
 }
 
-.compact-button {
-  padding: 8px 12px;
-  font-size: 14px;
+.reminder-actions-wrapper {
+  position: relative;
+  z-index: 2;
+  padding: 8px 8px 0 0;
+}
+
+.reminder-menu-button {
+  display: inline-grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border-radius: 14px;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.reminder-action-block {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 8px;
+  z-index: 20;
+  display: grid;
+  width: max-content;
+  min-width: 148px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  box-shadow: 0 12px 30px rgb(15 23 42 / 16%);
+}
+
+.reminder-action-button {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+}
+
+.reminder-action-button:active,
+.reminder-action-button:focus-visible {
+  background: var(--surface-muted);
+}
+
+@media (hover: hover) {
+  .reminder-action-button:hover {
+    background: var(--surface-muted);
+  }
+}
+
+.reminder-action-button.danger-action {
+  color: var(--danger-strong);
+}
+
+.reminder-action-button.danger-action:active,
+.reminder-action-button.danger-action:focus-visible {
+  background: var(--danger-soft);
+}
+
+@media (hover: hover) {
+  .reminder-action-button.danger-action:hover {
+    background: var(--danger-soft);
+  }
+}
+
+.reminder-card:focus-within {
+  border-color: color-mix(in srgb, var(--accent), var(--border) 42%);
+}
+
+.reminder-card > * {
+  min-width: 0;
 }
 
 .empty-state {
@@ -970,8 +1179,7 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   gap: 8px;
 }
 
-[hidden],
-.hidden {
+[hidden] {
   display: none !important;
 }
 
@@ -1027,19 +1235,6 @@ input[type="time"]::-webkit-calendar-picker-indicator {
     justify-content: space-between;
   }
 
-  .card-heading-note {
-    max-width: none;
-    text-align: left;
-  }
-
-  .timezone-summary {
-    align-items: flex-start;
-  }
-
-  .timezone-summary-action {
-    display: none;
-  }
-
   .timezone-suggestion {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1048,17 +1243,22 @@ input[type="time"]::-webkit-calendar-picker-indicator {
     justify-self: stretch;
   }
 
+  .theme-card {
+    display: grid;
+  }
+
+  .theme-toggle-button {
+    width: 100%;
+    white-space: normal;
+  }
+
   .actions > button,
   .form-actions > button {
     flex: 1 1 auto;
   }
 
-  .reminder-actions {
-    justify-content: stretch;
-  }
-
-  .reminder-actions > button {
-    flex: 1 1 auto;
+  .fatal-error-card {
+    padding: 20px;
   }
 }
 

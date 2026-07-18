@@ -298,7 +298,47 @@
             </div>
           </div>
 
-          <div class="auto-delete-field">
+          <div id="completion-field" class="auto-delete-field">
+            <span class="auto-delete-heading">
+              <label class="auto-delete-title" for="requires-completion">
+                Повторять до выполнения
+              </label>
+              <span class="auto-delete-help">
+                <button
+                  class="auto-delete-help-button"
+                  type="button"
+                  aria-label="Подробнее о повторе до выполнения"
+                  aria-describedby="completion-tooltip"
+                >
+                  ?
+                </button>
+                <span
+                  id="completion-tooltip"
+                  class="auto-delete-tooltip"
+                  role="tooltip"
+                >
+                  Бот будет поднимать напоминание, заменяя предыдущую копию. Отметить выполнение сможет любой участник чата. Настройка несовместима с автоудалением через два дня.
+                </span>
+              </span>
+            </span>
+            <label class="auto-delete-switch" for="requires-completion">
+              <input
+                id="requires-completion"
+                name="requires_completion"
+                type="checkbox"
+                role="switch"
+              />
+              <span class="auto-delete-switch-track" aria-hidden="true"></span>
+            </label>
+          </div>
+
+          <label id="completion-repeat-field" class="field" hidden>
+            <span>Если не выполнено, повторить через</span>
+            <select id="completion-repeat-interval" name="repeat_interval_minutes"></select>
+            <span class="field-hint">Предыдущая копия удаляется только после успешной отправки новой.</span>
+          </label>
+
+          <div id="auto-delete-field" class="auto-delete-field">
             <span class="auto-delete-heading">
               <label class="auto-delete-title" for="delete-after-two-days">
                 Удалять сообщение через 2 дня
@@ -365,6 +405,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260716-01"></script>
+    <script src="./app.js?v=20260718-01"></script>
   </body>
 </html>

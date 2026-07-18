@@ -41,6 +41,7 @@ from app.config import API_ALLOWED_ORIGINS
 from app.database import count_active_chats
 from app.reminder_models import ReminderCreateData, ReminderReadData
 from app.reminder_service import (
+    ReminderSchedulingError,
     create_scheduled_reminder,
     delete_active_reminder_for_chat,
     get_active_reminder_for_chat,
@@ -182,6 +183,8 @@ def build_repeating_reminder_update_request(
         reminder_text=request.reminder_text,
         reminder_kind=request.reminder_kind,
         delete_after_two_days=request.delete_after_two_days,
+        requires_completion=request.requires_completion,
+        repeat_interval_minutes=request.repeat_interval_minutes,
         schedule_type=request.schedule_type,
         start_at=schedule_start_at,
         timezone_name=request.timezone_name,
@@ -563,7 +566,6 @@ def build_validated_reminder_create_data(
             status_code=400,
             detail=str(error),
         ) from error
-
     return data
 
 
@@ -627,6 +629,11 @@ def update_reminder_for_chat(
         raise HTTPException(
             status_code=400,
             detail=str(error),
+        ) from error
+    except ReminderSchedulingError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Reminder was updated, but rescheduling failed.",
         ) from error
 
     if reminder is None:

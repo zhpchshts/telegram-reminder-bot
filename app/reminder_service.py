@@ -1,16 +1,23 @@
+import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
 
 from app.config import APP_TIMEZONE_NAME
-from app.constants import VALID_REMINDER_KINDS, VALID_WEEKDAYS
+from app.constants import (
+    COMPLETION_REMINDER_TEXT_MAX_LENGTH,
+    REMINDER_KIND_TEXT,
+    VALID_COMPLETION_REPEAT_INTERVALS,
+    VALID_REMINDER_KINDS,
+    VALID_WEEKDAYS,
+)
 from app.database import (
     create_reminder_in_db,
+    delete_active_reminder_for_chat_in_db,
     get_active_reminder_for_chat as get_active_reminder_from_db_for_chat,
     get_active_reminders_for_chat,
     get_chat_timezone,
-    mark_reminder_as_deleted,
     set_chat_timezone,
     update_reminder_in_db,
 )
@@ -27,6 +34,13 @@ from app.scheduler import (
     scheduler,
     schedule_reminder,
 )
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+class ReminderSchedulingError(RuntimeError):
+    pass
 
 
 def get_chat_timezone_name(chat_id: int) -> str:
@@ -80,6 +94,18 @@ def validate_reminder_create_data(data: ReminderCreateData) -> None:
     validate_reminder_kind(data.reminder_kind)
     if not data.reminder_text.strip():
         raise ValueError("reminder_text is required.")
+
+    if data.requires_completion:
+        if data.reminder_kind != REMINDER_KIND_TEXT:
+            raise ValueError("Completion is supported only for text reminders.")
+        if data.delete_after_two_days:
+            raise ValueError(
+                "Completion and automatic deletion cannot be enabled together."
+            )
+        if data.repeat_interval_minutes not in VALID_COMPLETION_REPEAT_INTERVALS:
+            raise ValueError("repeat_interval_minutes is invalid.")
+        if len(data.reminder_text) > COMPLETION_REMINDER_TEXT_MAX_LENGTH:
+            raise ValueError("reminder_text is too long for a completion reminder.")
 
     if data.schedule_type == "once":
         return
@@ -145,6 +171,10 @@ def create_scheduled_reminder(
         reminder_text=data.reminder_text,
         reminder_kind=data.reminder_kind,
         delete_after_two_days=data.delete_after_two_days,
+        requires_completion=data.requires_completion,
+        repeat_interval_minutes=(
+            data.repeat_interval_minutes if data.requires_completion else None
+        ),
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         interval_days=data.interval_days,
@@ -162,6 +192,8 @@ def create_scheduled_reminder(
         reminder_text=data.reminder_text,
         reminder_kind=data.reminder_kind,
         delete_after_two_days=data.delete_after_two_days,
+        requires_completion=data.requires_completion,
+        repeat_interval_minutes=data.repeat_interval_minutes,
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         interval_days=data.interval_days,
@@ -196,6 +228,10 @@ def update_active_reminder_for_chat(
         reminder_text=data.reminder_text,
         reminder_kind=data.reminder_kind,
         delete_after_two_days=data.delete_after_two_days,
+        requires_completion=data.requires_completion,
+        repeat_interval_minutes=(
+            data.repeat_interval_minutes if data.requires_completion else None
+        ),
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         interval_days=data.interval_days,
@@ -208,22 +244,39 @@ def update_active_reminder_for_chat(
     if not is_updated:
         return None
 
-    schedule_reminder(
-        bot=bot,
-        reminder_id=reminder_id,
-        chat_id=chat_id,
-        reminder_text=data.reminder_text,
-        reminder_kind=data.reminder_kind,
-        delete_after_two_days=data.delete_after_two_days,
-        schedule_type=data.schedule_type,
-        start_at=data.start_at,
-        interval_days=data.interval_days,
-        interval_weeks=data.interval_weeks,
-        day_of_week=data.day_of_week,
-        month_week_number=data.month_week_number,
-        month_day=data.month_day,
-        timezone_name=data.timezone_name,
+    LOGGER.info(
+        "Reminder updated and live completion occurrences cancelled: reminder_id=%s chat_id=%s",
+        reminder_id,
+        chat_id,
     )
+
+    try:
+        schedule_reminder(
+            bot=bot,
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+            reminder_text=data.reminder_text,
+            reminder_kind=data.reminder_kind,
+            delete_after_two_days=data.delete_after_two_days,
+            requires_completion=data.requires_completion,
+            repeat_interval_minutes=data.repeat_interval_minutes,
+            schedule_type=data.schedule_type,
+            start_at=data.start_at,
+            interval_days=data.interval_days,
+            interval_weeks=data.interval_weeks,
+            day_of_week=data.day_of_week,
+            month_week_number=data.month_week_number,
+            month_day=data.month_day,
+            timezone_name=data.timezone_name,
+        )
+    except Exception as error:
+        LOGGER.exception(
+            "Reminder %s was updated in the database, but rescheduling failed.",
+            reminder_id,
+        )
+        raise ReminderSchedulingError(
+            "Reminder was updated in the database, but rescheduling failed."
+        ) from error
 
     updated_reminder = get_active_reminder_for_chat(
         reminder_id=reminder_id,
@@ -283,18 +336,25 @@ def build_created_reminder_text(
 
 
 def delete_active_reminder_for_chat(reminder_id: int, chat_id: int) -> bool:
-    reminder = get_active_reminder_for_chat(
-        reminder_id=reminder_id,
-        chat_id=chat_id,
-    )
-    if not reminder:
+    if not delete_active_reminder_for_chat_in_db(reminder_id, chat_id):
         return False
 
-    job = scheduler.get_job(str(reminder_id))
-    if job:
-        scheduler.remove_job(str(reminder_id))
+    LOGGER.info(
+        "Reminder deleted and live completion occurrences cancelled: reminder_id=%s chat_id=%s",
+        reminder_id,
+        chat_id,
+    )
 
-    mark_reminder_as_deleted(reminder_id)
+    try:
+        job = scheduler.get_job(str(reminder_id))
+        if job:
+            scheduler.remove_job(str(reminder_id))
+    except Exception:
+        LOGGER.exception(
+            "Reminder %s was deleted in the database, but scheduler cleanup failed.",
+            reminder_id,
+        )
+
     return True
 
 

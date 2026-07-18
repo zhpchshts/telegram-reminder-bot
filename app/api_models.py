@@ -4,7 +4,11 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, StrictBool
 
 from app.formatting import format_period_line
-from app.constants import REMINDER_KIND_TEXT
+from app.constants import (
+    COMPLETION_REMINDER_TEXT_MAX_LENGTH,
+    COMPLETION_REPEAT_INTERVAL_OPTIONS,
+    REMINDER_KIND_TEXT,
+)
 from app.reminder_models import ReminderCreateData, ReminderReadData
 from app.schedule_calculations import get_schedule_start_at_on_or_after
 
@@ -15,6 +19,9 @@ class ReminderResponse(BaseModel):
     reminder_text: str
     reminder_kind: str = REMINDER_KIND_TEXT
     delete_after_two_days: bool = False
+    requires_completion: bool = False
+    repeat_interval_minutes: int | None = None
+    awaiting_completion: bool = False
     schedule_type: str
     start_at: datetime
     next_run_at: datetime | None = None
@@ -32,6 +39,8 @@ class ReminderCreateRequest(BaseModel):
     reminder_text: str
     reminder_kind: str = REMINDER_KIND_TEXT
     delete_after_two_days: StrictBool = False
+    requires_completion: StrictBool = False
+    repeat_interval_minutes: int | None = None
     schedule_type: str
     start_at: datetime
     timezone_name: str
@@ -50,6 +59,8 @@ class ReminderPreviewResponse(BaseModel):
     reminder_text: str
     reminder_kind: str = REMINDER_KIND_TEXT
     delete_after_two_days: bool = False
+    requires_completion: bool = False
+    repeat_interval_minutes: int | None = None
     schedule_type: str
     start_at: datetime
     timezone_name: str
@@ -94,11 +105,18 @@ class WeekdayOption(BaseModel):
     label: str
 
 
+class CompletionRepeatIntervalOption(BaseModel):
+    value: int
+    label: str
+
+
 class ReminderFormOptionsResponse(BaseModel):
     schedule_types: list[ReminderScheduleTypeOption]
     weekdays: list[WeekdayOption]
     month_week_numbers: list[int]
     month_days: list[int]
+    completion_repeat_intervals: list[CompletionRepeatIntervalOption]
+    completion_reminder_text_max_length: int
 
 
 class TmaBootstrapResponse(BaseModel):
@@ -131,6 +149,9 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
         "reminder_text": reminder.reminder_text,
         "reminder_kind": reminder.reminder_kind,
         "delete_after_two_days": reminder.delete_after_two_days,
+        "requires_completion": reminder.requires_completion,
+        "repeat_interval_minutes": reminder.repeat_interval_minutes,
+        "awaiting_completion": reminder.awaiting_completion,
         "schedule_type": reminder.schedule_type,
         "start_at": reminder.start_at,
         "timezone_name": reminder.timezone_name,
@@ -176,6 +197,10 @@ def build_reminder_create_data(
         reminder_text=request.reminder_text,
         reminder_kind=request.reminder_kind,
         delete_after_two_days=request.delete_after_two_days,
+        requires_completion=request.requires_completion,
+        repeat_interval_minutes=(
+            request.repeat_interval_minutes if request.requires_completion else None
+        ),
         schedule_type=request.schedule_type,
         start_at=schedule_start_at,
         timezone_name=request.timezone_name,
@@ -221,6 +246,8 @@ def build_reminder_preview_response(
         "reminder_text": data.reminder_text,
         "reminder_kind": data.reminder_kind,
         "delete_after_two_days": data.delete_after_two_days,
+        "requires_completion": data.requires_completion,
+        "repeat_interval_minutes": data.repeat_interval_minutes,
         "schedule_type": data.schedule_type,
         "start_at": data.start_at,
         "timezone_name": data.timezone_name,
@@ -260,6 +287,9 @@ def build_created_reminder_response(
         "reminder_text": data.reminder_text,
         "reminder_kind": data.reminder_kind,
         "delete_after_two_days": data.delete_after_two_days,
+        "requires_completion": data.requires_completion,
+        "repeat_interval_minutes": data.repeat_interval_minutes,
+        "awaiting_completion": False,
         "schedule_type": data.schedule_type,
         "start_at": data.start_at,
         "timezone_name": data.timezone_name,
@@ -353,6 +383,11 @@ def build_reminder_form_options_response() -> ReminderFormOptionsResponse:
         ],
         month_week_numbers=[1, 2, 3, 4, 5],
         month_days=list(range(1, 32)),
+        completion_repeat_intervals=[
+            CompletionRepeatIntervalOption(value=value, label=label)
+            for value, label in COMPLETION_REPEAT_INTERVAL_OPTIONS
+        ],
+        completion_reminder_text_max_length=COMPLETION_REMINDER_TEXT_MAX_LENGTH,
     )
 
 

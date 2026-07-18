@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from app.api_models import (
     ChatTimezoneResponse,
     ChatTimezoneUpdateRequest,
+    CompletionRepeatIntervalOption,
     DeleteReminderResponse,
     ReminderCreateRequest,
     ReminderFormOptionsResponse,
@@ -268,6 +269,17 @@ def test_build_reminder_form_options_response() -> None:
         ],
         month_week_numbers=[1, 2, 3, 4, 5],
         month_days=list(range(1, 32)),
+        completion_repeat_intervals=[
+            CompletionRepeatIntervalOption(value=15, label="15 минут"),
+            CompletionRepeatIntervalOption(value=30, label="30 минут"),
+            CompletionRepeatIntervalOption(value=60, label="1 час"),
+            CompletionRepeatIntervalOption(value=120, label="2 часа"),
+            CompletionRepeatIntervalOption(value=240, label="4 часа"),
+            CompletionRepeatIntervalOption(value=480, label="8 часов"),
+            CompletionRepeatIntervalOption(value=720, label="12 часов"),
+            CompletionRepeatIntervalOption(value=1440, label="24 часа"),
+        ],
+        completion_reminder_text_max_length=3900,
     )
 
 

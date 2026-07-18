@@ -22,9 +22,71 @@ def test_init_db_creates_database_file(monkeypatch, tmp_path) -> None:
             row["name"]
             for row in connection.execute("PRAGMA table_info(reminders)").fetchall()
         }
+        completion_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(reminder_completion_occurrences)"
+            ).fetchall()
+        }
+        completion_indexes = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA index_list(reminder_completion_occurrences)"
+            ).fetchall()
+        }
 
     assert "delivery_tracking_started_at_utc" in reminder_columns
     assert "last_handled_scheduled_for_utc" in reminder_columns
+    assert "requires_completion" in reminder_columns
+    assert "repeat_interval_minutes" in reminder_columns
+    assert "revision" in reminder_columns
+    assert {
+        "delivery_claim_token",
+        "delivery_claimed_at_utc",
+        "reminder_revision",
+    } <= completion_columns
+    assert "idx_reminder_completion_occurrences_one_active" in completion_indexes
+    assert "idx_reminder_completion_occurrences_due" in completion_indexes
+
+
+def test_init_db_migrates_existing_reminders_without_losing_data(
+    monkeypatch, tmp_path
+) -> None:
+    test_db_path = tmp_path / "legacy-reminders.db"
+    with sqlite3.connect(test_db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                schedule_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                start_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO reminders (
+                chat_id, text, schedule_type, status, start_at, created_at
+            ) VALUES (100, 'Сохранить меня', 'once', 'active',
+                      '2026-07-18T12:00:00', '2026-07-18T10:00:00')
+            """
+        )
+
+    monkeypatch.setattr(database, "DB_PATH", test_db_path)
+    database.init_db()
+
+    with database.get_connection() as connection:
+        reminder = connection.execute(
+            """
+            SELECT text, requires_completion, repeat_interval_minutes, revision
+            FROM reminders WHERE id = 1
+            """
+        ).fetchone()
+    assert tuple(reminder) == ("Сохранить меня", 0, None, 1)
 
 
 def test_create_reminder_in_db_returns_id(monkeypatch, tmp_path) -> None:
@@ -46,6 +108,36 @@ def test_create_reminder_in_db_returns_id(monkeypatch, tmp_path) -> None:
     )
     assert tracking_started_at.tzinfo == timezone.utc
     assert reminder["last_handled_scheduled_for_utc"] is None
+    assert reminder["revision"] == 1
+
+
+def test_database_normalizes_disabled_completion_interval(
+    monkeypatch, tmp_path
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    reminder_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Тестовое напоминание",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 12),
+        requires_completion=False,
+        repeat_interval_minutes=60,
+    )
+
+    reminder = database.get_active_reminder_from_db(reminder_id)
+    assert reminder["repeat_interval_minutes"] is None
+
+    assert database.update_reminder_in_db(
+        reminder_id=reminder_id,
+        chat_id=100,
+        reminder_text="Обновлённое напоминание",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 9, 12, 12),
+        requires_completion=False,
+        repeat_interval_minutes=120,
+    )
+    reminder = database.get_active_reminder_from_db(reminder_id)
+    assert reminder["repeat_interval_minutes"] is None
 
 
 def test_update_reminder_resets_delivery_tracking_state(
@@ -92,6 +184,7 @@ def test_update_reminder_resets_delivery_tracking_state(
         reminder["delivery_tracking_started_at_utc"]
     ) > datetime(2020, 1, 1, tzinfo=timezone.utc)
     assert reminder["last_handled_scheduled_for_utc"] is None
+    assert reminder["revision"] == 2
 
 
 def test_mark_reminder_occurrence_handled_is_monotonic_and_atomic(

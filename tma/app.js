@@ -204,6 +204,11 @@ const elements = {
   monthDayOfWeek: byId("month-day-of-week"),
   monthWeekNumber: byId("month-week-number"),
   monthDay: byId("month-day"),
+  completionField: byId("completion-field"),
+  requiresCompletion: byId("requires-completion"),
+  completionRepeatField: byId("completion-repeat-field"),
+  completionRepeatInterval: byId("completion-repeat-interval"),
+  autoDeleteField: byId("auto-delete-field"),
   deleteAfterTwoDays: byId("delete-after-two-days"),
   intervalDaysField: byId("interval-days-field"),
   weeklyFields: byId("weekly-fields"),
@@ -582,6 +587,17 @@ function showPreview(preview) {
   const autoDeleteChip = preview.delete_after_two_days
     ? '<span class="preview-chip">Автоудаление: через 2 суток</span>'
     : "";
+  const completionInterval = (
+    state.reminderOptions?.completion_repeat_intervals || []
+  ).find(
+    (option) =>
+      Number(option.value) === Number(preview.repeat_interval_minutes),
+  );
+  const completionChip = preview.requires_completion
+    ? `<span class="preview-chip">До выполнения · ${escapeHtml(
+        completionInterval?.label || `${preview.repeat_interval_minutes} мин.`,
+      )}</span>`
+    : "";
 
   elements.preview.innerHTML = `
     <div class="preview-label">Предпросмотр</div>
@@ -592,6 +608,7 @@ function showPreview(preview) {
       )}</span>
       <span class="preview-chip">${escapeHtml(period)}</span>
       ${autoDeleteChip}
+      ${completionChip}
       <span class="preview-next">${notificationLabel}: ${escapeHtml(
         formatDateTimeWithConditionalTimezone(
           notificationAt,
@@ -654,6 +671,40 @@ function updateReminderKindFields() {
     elements.reminderTextHint.textContent = isWeather
       ? "Можно указать до 5 населённых пунктов через точку с запятой или с новой строки."
       : "";
+  }
+
+  updateCompletionFields();
+}
+
+function updateCompletionFields() {
+  const isWeather = getReminderKind() === REMINDER_KIND_WEATHER;
+  if (isWeather && elements.requiresCompletion) {
+    elements.requiresCompletion.checked = false;
+  }
+  if (elements.completionField) {
+    elements.completionField.hidden = isWeather;
+  }
+  if (elements.requiresCompletion) {
+    elements.requiresCompletion.disabled = isWeather;
+  }
+
+  const isEnabled = Boolean(elements.requiresCompletion?.checked) && !isWeather;
+  if (elements.completionRepeatField) {
+    elements.completionRepeatField.hidden = !isEnabled;
+  }
+  if (elements.completionRepeatInterval) {
+    elements.completionRepeatInterval.disabled = !isEnabled;
+    if (isEnabled && !elements.completionRepeatInterval.value) {
+      elements.completionRepeatInterval.value = "60";
+    }
+  }
+  if (elements.reminderText) {
+    const maxLength = state.reminderOptions?.completion_reminder_text_max_length;
+    if (isEnabled && Number.isInteger(maxLength)) {
+      elements.reminderText.maxLength = maxLength;
+    } else {
+      elements.reminderText.removeAttribute("maxlength");
+    }
   }
 }
 
@@ -826,8 +877,14 @@ function renderOptions() {
     "Не выбрано",
   );
   fillYearlyDateOptions();
+  fillSelect(
+    elements.completionRepeatInterval,
+    state.reminderOptions.completion_repeat_intervals || [],
+    "Выбери интервал",
+  );
 
   updateConditionalFields();
+  updateCompletionFields();
 }
 
 function fillNumberSelect(select, values, emptyLabel) {
@@ -934,12 +991,16 @@ function createReminderCard(reminder) {
 
   const nextRun = document.createElement("span");
   nextRun.className = "reminder-next-run";
-  const nextRunAt = reminder.next_run_at || reminder.start_at;
-  const timezoneName = reminder.timezone_name || state.context?.timezone_name;
-  nextRun.textContent = `Следующее: ${formatDateTimeWithConditionalTimezone(
-    nextRunAt,
-    timezoneName,
-  )}`;
+  if (reminder.schedule_type === "once" && reminder.awaiting_completion) {
+    nextRun.textContent = "Ожидает выполнения";
+  } else {
+    const nextRunAt = reminder.next_run_at || reminder.start_at;
+    const timezoneName = reminder.timezone_name || state.context?.timezone_name;
+    nextRun.textContent = `Следующее: ${formatDateTimeWithConditionalTimezone(
+      nextRunAt,
+      timezoneName,
+    )}`;
+  }
 
   if (reminder.reminder_kind === REMINDER_KIND_WEATHER) {
     meta.append(createTextElement("span", "reminder-chip", "Погода"));
@@ -951,6 +1012,22 @@ function createReminderCard(reminder) {
         "span",
         "reminder-chip",
         "Автоудаление: через 2 суток",
+      ),
+    );
+  }
+
+  if (reminder.requires_completion) {
+    const intervalOption = (
+      state.reminderOptions?.completion_repeat_intervals || []
+    ).find(
+      (option) =>
+        Number(option.value) === Number(reminder.repeat_interval_minutes),
+    );
+    meta.append(
+      createTextElement(
+        "span",
+        "reminder-chip",
+        `До выполнения · ${intervalOption?.label || `${reminder.repeat_interval_minutes} мин.`}`,
       ),
     );
   }
@@ -1033,6 +1110,10 @@ function buildRequestPayload() {
     start_at: elements.startAt.value,
     timezone_name: elements.timezoneName.value.trim(),
     delete_after_two_days: Boolean(elements.deleteAfterTwoDays?.checked),
+    requires_completion: Boolean(elements.requiresCompletion?.checked),
+    repeat_interval_minutes: elements.requiresCompletion?.checked
+      ? numberOrNull(elements.completionRepeatInterval?.value)
+      : null,
     interval_days: null,
     interval_weeks: null,
     day_of_week: null,
@@ -1147,6 +1228,13 @@ function getReminderFormErrors() {
     errors.push(getReminderTextRequiredMessage());
   }
 
+  if (
+    elements.requiresCompletion?.checked &&
+    !elements.completionRepeatInterval?.value
+  ) {
+    errors.push("Выбери интервал повтора до выполнения.");
+  }
+
   if (!hasValidStartAtValue()) {
     errors.push(getStartAtValidationMessage());
   }
@@ -1238,6 +1326,15 @@ function startEdit(reminder) {
       reminder.delete_after_two_days,
     );
   }
+  if (elements.requiresCompletion) {
+    elements.requiresCompletion.checked = Boolean(reminder.requires_completion);
+  }
+  if (elements.completionRepeatInterval) {
+    elements.completionRepeatInterval.value = reminder.repeat_interval_minutes
+      ? String(reminder.repeat_interval_minutes)
+      : "";
+  }
+  updateCompletionFields();
   elements.saveButton.textContent = "Сохранить изменения";
   elements.cancelEditButton.hidden = false;
 
@@ -1264,6 +1361,12 @@ function resetForm() {
   if (elements.deleteAfterTwoDays) {
     elements.deleteAfterTwoDays.checked = false;
   }
+  if (elements.requiresCompletion) {
+    elements.requiresCompletion.checked = false;
+  }
+  if (elements.completionRepeatInterval) {
+    elements.completionRepeatInterval.value = "";
+  }
   elements.timezoneName.value = state.context?.timezone_name || "";
   setDefaultStartAt();
   elements.saveButton.textContent = "Сохранить";
@@ -1274,6 +1377,7 @@ function resetForm() {
   hideNextNotification();
   clearFieldErrors();
   updateConditionalFields();
+  updateCompletionFields();
   updateFormEditability();
   renderStartAtHint();
 }
@@ -1587,6 +1691,20 @@ on(elements.scheduleType, "change", () => {
 });
 on(elements.reminderKind, "change", () => {
   updateReminderKindFields();
+  hidePreview();
+});
+on(elements.requiresCompletion, "change", () => {
+  if (elements.requiresCompletion.checked && elements.deleteAfterTwoDays) {
+    elements.deleteAfterTwoDays.checked = false;
+  }
+  updateCompletionFields();
+  hidePreview();
+});
+on(elements.deleteAfterTwoDays, "change", () => {
+  if (elements.deleteAfterTwoDays.checked && elements.requiresCompletion) {
+    elements.requiresCompletion.checked = false;
+  }
+  updateCompletionFields();
   hidePreview();
 });
 on(elements.form, "input", handleReminderFormChange);

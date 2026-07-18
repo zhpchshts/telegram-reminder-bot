@@ -23,6 +23,10 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import APP_TIMEZONE_NAME
+from app.completion_service import (
+    deliver_completion_occurrence,
+    process_due_completion_occurrences,
+)
 from app.constants import (
     APSCHEDULER_WEEKDAYS,
     REMINDER_KIND_TEXT,
@@ -411,6 +415,21 @@ async def deliver_reminder_occurrence(
     message_prefix = ""
     if occurrence_age >= LATE_REMINDER_NOTICE_THRESHOLD:
         message_prefix = build_late_reminder_notice(reminder, scheduled_for)
+
+    if reminder.requires_completion:
+        completion_outcome = await deliver_completion_occurrence(
+            bot,
+            reminder,
+            scheduled_for,
+            f"{message_prefix}{reminder.reminder_text}",
+        )
+        if completion_outcome in {
+            DELIVERY_OUTCOME_SENT,
+            "already_delivered",
+            "already_completed",
+        }:
+            return DELIVERY_OUTCOME_SENT
+        return DELIVERY_OUTCOME_SENT_UNRECORDED
 
     sent_message = await send_reminder_message(
         bot=bot,
@@ -964,6 +983,8 @@ def schedule_reminder(
     reminder_text: str,
     reminder_kind: str = REMINDER_KIND_TEXT,
     delete_after_two_days: bool = False,
+    requires_completion: bool = False,
+    repeat_interval_minutes: int | None = None,
     schedule_type: str,
     start_at: datetime,
     interval_days: int | None = None,
@@ -1027,6 +1048,8 @@ def schedule_reminder_data(
         reminder_text=reminder.reminder_text,
         reminder_kind=reminder.reminder_kind,
         delete_after_two_days=reminder.delete_after_two_days,
+        requires_completion=reminder.requires_completion,
+        repeat_interval_minutes=reminder.repeat_interval_minutes,
         schedule_type=reminder.schedule_type,
         start_at=reminder.start_at,
         interval_days=reminder.interval_days,
@@ -1036,6 +1059,20 @@ def schedule_reminder_data(
         month_day=reminder.month_day,
         timezone_name=reminder.timezone_name,
         next_run_time=next_run_time,
+    )
+
+
+def schedule_completion_occurrence_worker(bot: Bot) -> None:
+    scheduler.add_job(
+        process_due_completion_occurrences,
+        trigger="interval",
+        minutes=1,
+        args=[bot],
+        id="completion-occurrence-repeat-worker",
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
     )
 
 
@@ -1341,6 +1378,16 @@ async def restore_active_reminders(bot: Bot) -> None:
                 error=error,
             )
             continue
+
+    try:
+        schedule_completion_occurrence_worker(bot)
+    except Exception as error:
+        log_restoration_error(
+            reminder_id=None,
+            chat_id=None,
+            stage="completion_worker_scheduling",
+            error=error,
+        )
 
     LOGGER.info(
         (

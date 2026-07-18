@@ -12,6 +12,8 @@ class ReminderCreateData:
     timezone_name: str
     reminder_kind: str = REMINDER_KIND_TEXT
     delete_after_two_days: bool = False
+    requires_completion: bool = False
+    repeat_interval_minutes: int | None = None
     interval_days: int | None = None
     interval_weeks: int | None = None
     day_of_week: str | None = None
@@ -31,6 +33,10 @@ class ReminderReadData:
     last_handled_scheduled_for_utc: datetime | None = None
     reminder_kind: str = REMINDER_KIND_TEXT
     delete_after_two_days: bool = False
+    requires_completion: bool = False
+    repeat_interval_minutes: int | None = None
+    awaiting_completion: bool = False
+    revision: int = 1
     interval_days: int | None = None
     interval_weeks: int | None = None
     day_of_week: str | None = None

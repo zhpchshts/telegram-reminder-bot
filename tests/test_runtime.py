@@ -48,7 +48,10 @@ def test_create_bot_runtime_builds_polling_and_api_context(
     )
 
     assert runtime.bot.token == "test-token"
-    assert runtime.dispatcher.routers == [runtime_module.router]
+    assert runtime.dispatcher.routers == [
+        runtime_module.completion_router,
+        runtime_module.router,
+    ]
     assert runtime.api_app is fastapi_app
     assert fastapi_app.state.bot is runtime.bot
     assert fastapi_app.state.scheduler is runtime_module.scheduler

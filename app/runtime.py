@@ -14,6 +14,7 @@ from app.config import (
     HEALTHCHECK_CHAT_ID,
     HEALTHCHECK_INTERVAL_MINUTES,
 )
+from app.completion_handlers import router as completion_router
 from app.database import init_db
 from app.handlers import router
 from app.scheduler import restore_active_reminders, schedule_healthcheck, scheduler
@@ -38,6 +39,7 @@ def create_bot_runtime(
 ) -> BotRuntime:
     bot = Bot(token=bot_token)
     dispatcher = Dispatcher()
+    dispatcher.include_router(completion_router)
     dispatcher.include_router(router)
 
     bind_api_runtime(fastapi_app, bot=bot)

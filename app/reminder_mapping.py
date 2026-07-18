@@ -81,6 +81,16 @@ def build_reminder_read_data(reminder: Any) -> ReminderReadData:
         delete_after_two_days=get_bool_from_row(
             get_optional_row_value(reminder, "delete_after_two_days")
         ),
+        requires_completion=get_bool_from_row(
+            get_optional_row_value(reminder, "requires_completion")
+        ),
+        repeat_interval_minutes=get_optional_int(
+            get_optional_row_value(reminder, "repeat_interval_minutes")
+        ),
+        awaiting_completion=get_bool_from_row(
+            get_optional_row_value(reminder, "awaiting_completion")
+        ),
+        revision=(get_optional_int(get_optional_row_value(reminder, "revision")) or 1),
         interval_days=get_optional_int(reminder["interval_days"]),
         interval_weeks=get_optional_int(reminder["interval_weeks"]),
         day_of_week=get_optional_str(reminder["day_of_week"]),

@@ -3,14 +3,16 @@ from datetime import datetime, timezone
 import pytest
 
 from app import reminder_service as reminder_service_module
-from app.constants import REMINDER_KIND_TEXT
+from app.constants import REMINDER_KIND_TEXT, REMINDER_KIND_WEATHER
 from app.reminder_service import (
+    ReminderSchedulingError,
     build_active_reminders_list_text_for_chat,
     build_created_reminder_text,
     create_scheduled_reminder,
     delete_active_reminder_for_chat,
     list_active_reminders_for_chat,
     set_chat_timezone_for_chat,
+    update_active_reminder_for_chat,
     validate_reminder_create_data,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
@@ -38,25 +40,19 @@ def patch_reminder_lookup(
     reminder: object | None,
     deleted_ids: list[int],
 ) -> None:
-    def fake_get_active_reminder_for_chat(
-        *,
+    def fake_delete_active_reminder_for_chat_in_db(
         reminder_id: int,
         chat_id: int,
-    ) -> object | None:
-        return reminder
-
-    def fake_mark_reminder_as_deleted(reminder_id: int) -> None:
+    ) -> bool:
+        if reminder is None:
+            return False
         deleted_ids.append(reminder_id)
+        return True
 
     monkeypatch.setattr(
         reminder_service_module,
-        "get_active_reminder_for_chat",
-        fake_get_active_reminder_for_chat,
-    )
-    monkeypatch.setattr(
-        reminder_service_module,
-        "mark_reminder_as_deleted",
-        fake_mark_reminder_as_deleted,
+        "delete_active_reminder_for_chat_in_db",
+        fake_delete_active_reminder_for_chat_in_db,
     )
 
 
@@ -278,6 +274,8 @@ def test_create_scheduled_reminder_creates_db_record_and_schedules_job(
             "reminder_text": "Проверить релиз",
             "reminder_kind": REMINDER_KIND_TEXT,
             "delete_after_two_days": False,
+            "requires_completion": False,
+            "repeat_interval_minutes": None,
             "schedule_type": "every_days",
             "start_at": start_at,
             "interval_days": 3,
@@ -296,6 +294,8 @@ def test_create_scheduled_reminder_creates_db_record_and_schedules_job(
             "reminder_text": "Проверить релиз",
             "reminder_kind": REMINDER_KIND_TEXT,
             "delete_after_two_days": False,
+            "requires_completion": False,
+            "repeat_interval_minutes": None,
             "schedule_type": "every_days",
             "start_at": start_at,
             "interval_days": 3,
@@ -619,6 +619,52 @@ def test_list_active_reminders_for_chat_returns_read_models(
             ),
             "month_day must be between 1 and 31.",
         ),
+        (
+            ReminderCreateData(
+                reminder_text="Проверить погоду",
+                reminder_kind=REMINDER_KIND_WEATHER,
+                requires_completion=True,
+                repeat_interval_minutes=60,
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            "Completion is supported only for text reminders.",
+        ),
+        (
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                delete_after_two_days=True,
+                requires_completion=True,
+                repeat_interval_minutes=60,
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            "Completion and automatic deletion cannot be enabled together.",
+        ),
+        (
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                requires_completion=True,
+                repeat_interval_minutes=45,
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            "repeat_interval_minutes is invalid.",
+        ),
+        (
+            ReminderCreateData(
+                reminder_text="x" * 3901,
+                requires_completion=True,
+                repeat_interval_minutes=60,
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            "reminder_text is too long for a completion reminder.",
+        ),
     ],
 )
 def test_validate_reminder_create_data_rejects_invalid_data(
@@ -627,6 +673,19 @@ def test_validate_reminder_create_data_rejects_invalid_data(
 ) -> None:
     with pytest.raises(ValueError, match=error_text):
         validate_reminder_create_data(data)
+
+
+def test_completion_text_at_backend_limit_is_valid() -> None:
+    validate_reminder_create_data(
+        ReminderCreateData(
+            reminder_text="x" * 3900,
+            requires_completion=True,
+            repeat_interval_minutes=60,
+            schedule_type="once",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+        )
+    )
 
 
 def test_create_scheduled_reminder_validates_data_before_db_write(
@@ -660,3 +719,49 @@ def test_create_scheduled_reminder_validates_data_before_db_write(
                 timezone_name="Asia/Yekaterinburg",
             ),
         )
+
+
+def test_update_reports_failure_when_database_changed_but_rescheduling_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reminder = object()
+    update_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "get_active_reminder_for_chat",
+        lambda **kwargs: reminder,
+    )
+
+    def fake_update_reminder_in_db(**kwargs: object) -> bool:
+        update_calls.append(kwargs)
+        return True
+
+    def fake_schedule_reminder(**kwargs: object) -> None:
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "update_reminder_in_db",
+        fake_update_reminder_in_db,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        fake_schedule_reminder,
+    )
+
+    with pytest.raises(ReminderSchedulingError, match="rescheduling failed"):
+        update_active_reminder_for_chat(
+            bot=object(),
+            reminder_id=42,
+            chat_id=100,
+            data=ReminderCreateData(
+                reminder_text="Новый текст",
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+        )
+
+    assert len(update_calls) == 1

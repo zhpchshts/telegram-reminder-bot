@@ -41,6 +41,23 @@ VALID_REMINDER_KINDS = {
     REMINDER_KIND_WEATHER,
 }
 
+COMPLETION_REPEAT_INTERVAL_OPTIONS = (
+    (15, "15 минут"),
+    (30, "30 минут"),
+    (60, "1 час"),
+    (120, "2 часа"),
+    (240, "4 часа"),
+    (480, "8 часов"),
+    (720, "12 часов"),
+    (1440, "24 часа"),
+)
+VALID_COMPLETION_REPEAT_INTERVALS = {
+    value for value, _label in COMPLETION_REPEAT_INTERVAL_OPTIONS
+}
+TELEGRAM_MESSAGE_MAX_LENGTH = 4096
+COMPLETION_REMINDER_TEXT_MAX_LENGTH = 3900
+COMPLETION_MESSAGE_SUFFIX = "\n\n✅ Выполнено"
+
 WEEKDAY_NAMES_RU_PLURAL = {
     "MON": "понедельникам",
     "TUE": "вторникам",
@@ -84,8 +101,24 @@ REMINDER_COLUMNS = """
     month_day,
     timezone,
     delete_after_two_days,
+    requires_completion,
+    repeat_interval_minutes,
+    revision,
     delivery_tracking_started_at_utc,
-    last_handled_scheduled_for_utc
+    last_handled_scheduled_for_utc,
+    EXISTS (
+        SELECT 1
+        FROM reminder_completion_occurrences AS completion_occurrence
+        WHERE completion_occurrence.reminder_id = reminders.id
+          AND completion_occurrence.reminder_revision = reminders.revision
+          AND (
+              completion_occurrence.status = 'active'
+              OR (
+                  completion_occurrence.status = 'pending'
+                  AND completion_occurrence.current_message_id IS NOT NULL
+              )
+          )
+    ) AS awaiting_completion
 """
 
 SCHEMA_MIGRATIONS = {
@@ -96,6 +129,9 @@ SCHEMA_MIGRATIONS = {
     "month_day": "month_day INTEGER",
     "timezone": "timezone TEXT",
     "delete_after_two_days": ("delete_after_two_days INTEGER NOT NULL DEFAULT 0"),
+    "requires_completion": "requires_completion INTEGER NOT NULL DEFAULT 0",
+    "repeat_interval_minutes": "repeat_interval_minutes INTEGER",
+    "revision": "revision INTEGER NOT NULL DEFAULT 1",
     "delivery_tracking_started_at_utc": "delivery_tracking_started_at_utc TEXT",
     "last_handled_scheduled_for_utc": "last_handled_scheduled_for_utc TEXT",
 }

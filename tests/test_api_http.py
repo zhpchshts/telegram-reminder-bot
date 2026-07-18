@@ -17,6 +17,7 @@ from app.api import app
 from app.api_auth import TMA_INIT_DATA_HEADER, require_matching_chat_id
 from app.constants import REMINDER_KIND_TEXT
 from app.reminder_models import ReminderReadData
+from app.reminder_service import ReminderSchedulingError
 from app.tma_auth import calculate_init_data_hash
 from app.tma_launch import create_tma_launch_token
 
@@ -110,6 +111,17 @@ def expected_reminder_options_response() -> dict[str, object]:
         ],
         "month_week_numbers": [1, 2, 3, 4, 5],
         "month_days": list(range(1, 32)),
+        "completion_repeat_intervals": [
+            {"value": 15, "label": "15 минут"},
+            {"value": 30, "label": "30 минут"},
+            {"value": 60, "label": "1 час"},
+            {"value": 120, "label": "2 часа"},
+            {"value": 240, "label": "4 часа"},
+            {"value": 480, "label": "8 часов"},
+            {"value": 720, "label": "12 часов"},
+            {"value": 1440, "label": "24 часа"},
+        ],
+        "completion_reminder_text_max_length": 3900,
     }
 
 
@@ -476,6 +488,9 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
             "reminder_text": "Проверить релиз",
             "reminder_kind": REMINDER_KIND_TEXT,
             "delete_after_two_days": True,
+            "requires_completion": False,
+            "repeat_interval_minutes": None,
+            "awaiting_completion": False,
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
@@ -506,6 +521,8 @@ def test_tma_reminder_preview_endpoint_accepts_valid_tma_init_data(
         "reminder_text": "Проверить релиз",
         "reminder_kind": REMINDER_KIND_TEXT,
         "delete_after_two_days": False,
+        "requires_completion": False,
+        "repeat_interval_minutes": None,
         "schedule_type": "every_days",
         "start_at": "2099-06-10T12:12:00+05:00",
         "timezone_name": "Asia/Yekaterinburg",
@@ -578,6 +595,9 @@ def test_get_chat_reminders_endpoint_accepts_valid_tma_init_data(
             "reminder_text": "Проверить релиз",
             "reminder_kind": REMINDER_KIND_TEXT,
             "delete_after_two_days": True,
+            "requires_completion": False,
+            "repeat_interval_minutes": None,
+            "awaiting_completion": False,
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
@@ -661,6 +681,9 @@ def test_get_chat_reminders_endpoint_returns_json(
             "reminder_text": "Проверить релиз",
             "reminder_kind": REMINDER_KIND_TEXT,
             "delete_after_two_days": False,
+            "requires_completion": False,
+            "repeat_interval_minutes": None,
+            "awaiting_completion": False,
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
@@ -904,6 +927,9 @@ def test_get_tma_reminders_endpoint_accepts_valid_tma_init_data(
             "reminder_text": "Проверить релиз",
             "reminder_kind": REMINDER_KIND_TEXT,
             "delete_after_two_days": True,
+            "requires_completion": False,
+            "repeat_interval_minutes": None,
+            "awaiting_completion": False,
             "schedule_type": "every_days",
             "start_at": "2099-06-10T12:12:00",
             "timezone_name": "Asia/Yekaterinburg",
@@ -1046,6 +1072,52 @@ def test_update_tma_reminder_endpoint_preserves_auto_delete_setting(
     assert len(captured_data) == 1
     assert captured_data[0].delete_after_two_days is True
     assert response.json()["delete_after_two_days"] is True
+
+
+def test_update_tma_reminder_reports_rescheduling_failure(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.bot = object()
+    current_reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Старый текст",
+        schedule_type="every_days",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+        interval_days=3,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        lambda **kwargs: current_reminder,
+    )
+
+    def fail_update(**kwargs):
+        raise ReminderSchedulingError(
+            "Reminder was updated in the database, but rescheduling failed."
+        )
+
+    monkeypatch.setattr(
+        api_module,
+        "update_active_reminder_for_chat",
+        fail_update,
+    )
+
+    response = authenticated_client.put(
+        "/api/tma/reminders/42",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Reminder was updated, but rescheduling failed.",
+    }
 
 
 def test_get_tma_timezone_endpoint_accepts_valid_tma_init_data(

@@ -753,6 +753,24 @@ def test_run_scheduled_reminder_reloads_row_and_skips_handled_occurrence(
     assert delivered == []
 
 
+def test_old_scheduled_job_does_nothing_after_reminder_deletion(monkeypatch) -> None:
+    delivered = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_active_reminder_from_db",
+        lambda reminder_id: None,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "deliver_reminder_occurrence",
+        lambda *args, **kwargs: delivered.append((args, kwargs)),
+    )
+
+    asyncio.run(scheduler_module.run_scheduled_reminder(FakeBot(), 42))
+
+    assert delivered == []
+
+
 def test_run_scheduled_reminder_delivers_exact_latest_occurrence(monkeypatch) -> None:
     reminder = build_reminder_data(reminder_id=7)
     scheduled_for = datetime(2026, 7, 18, 10, 0, tzinfo=timezone.utc)

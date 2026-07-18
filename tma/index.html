@@ -22,7 +22,7 @@
         document.documentElement.dataset.theme = "light";
       }
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20260719-01" />
+    <link rel="stylesheet" href="./styles.css?v=20260719-02" />
   </head>
   <body>
     <main id="app" class="app" aria-busy="true">
@@ -37,7 +37,9 @@
             <div class="brand-mark" aria-hidden="true">🌸</div>
             <div>
               <p class="eyebrow">Незабудка</p>
-              <h1 id="list-screen-title" tabindex="-1">Напоминания</h1>
+              <h1 id="list-screen-title" class="screen-title" tabindex="-1">
+                Напоминания
+              </h1>
               <p id="chat-title" class="hero-subtitle">Загрузка чата...</p>
             </div>
           </div>
@@ -97,8 +99,12 @@
             <span aria-hidden="true">←</span>
           </button>
           <div>
-            <p class="eyebrow">Незабудка</p>
-            <h1 id="form-title" tabindex="-1">Создать напоминание</h1>
+            <p id="form-chat-title" class="screen-context" title="">
+              Загрузка чата...
+            </p>
+            <h1 id="form-title" class="screen-title" tabindex="-1">
+              Создать напоминание
+            </h1>
           </div>
         </header>
 
@@ -393,8 +399,16 @@
             <span aria-hidden="true">←</span>
           </button>
           <div>
-            <p class="eyebrow">Незабудка</p>
-            <h1 id="settings-screen-title" tabindex="-1">Настройки</h1>
+            <p id="settings-chat-title" class="screen-context" title="">
+              Загрузка чата...
+            </p>
+            <h1
+              id="settings-screen-title"
+              class="screen-title"
+              tabindex="-1"
+            >
+              Настройки
+            </h1>
           </div>
         </header>
 
@@ -488,7 +502,9 @@
         <div class="fatal-error-card">
           <div class="fatal-error-icon" aria-hidden="true">🌸</div>
           <p class="eyebrow">Незабудка</p>
-          <h1 id="fatal-error-title" tabindex="-1">Не удалось открыть приложение</h1>
+          <h1 id="fatal-error-title" class="screen-title" tabindex="-1">
+            Не удалось открыть приложение
+          </h1>
           <p id="fatal-error-message" class="fatal-error-message">
             Проверь подключение и попробуй ещё раз.
           </p>
@@ -503,6 +519,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260719-01"></script>
+    <script src="./app.js?v=20260719-02"></script>
   </body>
 </html>

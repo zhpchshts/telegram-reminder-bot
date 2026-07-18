@@ -155,8 +155,27 @@ button:disabled {
   margin-bottom: 8px;
 }
 
+.screen-header > div {
+  min-width: 0;
+}
+
 .screen-header h1 {
   margin-bottom: 0;
+}
+
+.screen-title:focus {
+  outline: none;
+}
+
+.screen-context {
+  margin: 0 0 2px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .back-button {
@@ -997,13 +1016,13 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   text-align: left;
 }
 
-.reminder-content-button:active {
-  background: color-mix(in srgb, var(--accent-soft), transparent 55%);
+.reminder-content-button:active .reminder-title {
+  color: var(--accent);
 }
 
 @media (hover: hover) {
-  .reminder-content-button:hover {
-    background: color-mix(in srgb, var(--accent-soft), transparent 68%);
+  .reminder-content-button:hover .reminder-title {
+    color: var(--accent);
   }
 }
 
@@ -1049,8 +1068,24 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   place-items: center;
   padding: 0;
   border-radius: 14px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
   font-size: 24px;
   line-height: 1;
+}
+
+.reminder-menu-button:active,
+.reminder-menu-button:focus-visible {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+@media (hover: hover) {
+  .reminder-menu-button:hover {
+    background: var(--surface-muted);
+    color: var(--text);
+  }
 }
 
 .reminder-action-block {

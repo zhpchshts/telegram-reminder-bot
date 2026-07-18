@@ -186,6 +186,8 @@ const elements = {
   fatalErrorDetails: byId("fatal-error-details"),
   retryBootstrapButton: byId("retry-bootstrap-button"),
   chatTitle: byId("chat-title"),
+  formChatTitle: byId("form-chat-title"),
+  settingsChatTitle: byId("settings-chat-title"),
   timezoneSummaryText: byId("timezone-summary-text"),
   remindersCount: byId("reminders-count"),
   listStatus: byId("list-status"),
@@ -1078,12 +1080,20 @@ async function bootstrapApp() {
   }
 }
 
-function renderContext() {
+function getChatDisplayTitle() {
   const chat = state.context?.chat;
-  const title = chat?.title || chat?.type || "Telegram chat";
+  return chat?.title || chat?.type || "Telegram chat";
+}
+
+function renderContext() {
+  const title = getChatDisplayTitle();
   const timezoneName = state.context.timezone_name;
 
   elements.chatTitle.textContent = title;
+  elements.formChatTitle.textContent = title;
+  elements.formChatTitle.title = title;
+  elements.settingsChatTitle.textContent = title;
+  elements.settingsChatTitle.title = title;
 
   if (elements.timezoneSummaryText) {
     elements.timezoneSummaryText.textContent = `Текущая таймзона: ${timezoneName}`;

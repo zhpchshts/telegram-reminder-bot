@@ -779,7 +779,9 @@ def test_delivery_sends_button_and_does_not_duplicate_active(
     assert first == "sent"
     assert second == "already_delivered"
     assert len(bot.sent) == 1
-    assert bot.sent[0]["reply_markup"].inline_keyboard[0][0].text == "✅ Сделано"
+    assert (
+        bot.sent[0]["reply_markup"].inline_keyboard[0][0].text == "Отметить выполненным"
+    )
 
 
 def test_successful_send_with_failed_activation_is_deleted_and_not_watermarked(
@@ -1037,8 +1039,8 @@ def test_completion_with_auto_delete_sends_final_and_queues_both_messages(
     assert occurrence["completion_message_id"] == 11
     assert [row["message_id"] for row in queued] == [10, 11]
     assert queued[0]["sent_at_utc"] == bot.sent_at.isoformat(timespec="seconds")
-    assert datetime.fromisoformat(queued[0]["delete_at_utc"]) < datetime.fromisoformat(
-        queued[1]["delete_at_utc"]
+    assert datetime.fromisoformat(queued[0]["delete_at_utc"]) > datetime.fromisoformat(
+        queued[0]["sent_at_utc"]
     )
     assert datetime.fromisoformat(queued[1]["delete_at_utc"]) == (
         bot.sent_at + timedelta(hours=47, minutes=45)

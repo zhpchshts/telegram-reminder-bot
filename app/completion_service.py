@@ -66,7 +66,7 @@ def build_completion_keyboard(occurrence_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Сделано",
+                    text="Отметить выполненным",
                     callback_data=build_completion_callback_data(occurrence_id),
                 )
             ]

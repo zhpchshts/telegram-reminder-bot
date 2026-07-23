@@ -16,7 +16,7 @@ def test_completion_controls_are_available_in_reminder_form() -> None:
     assert 'id="completion-repeat-interval"' in html
     assert "Повторять до выполнения" in html
     assert "Бот будет поднимать напоминание, заменяя предыдущую копию." in html
-    assert "app.js?v=20260718-02" in html
+    assert 'src="./app.js"' in html
 
 
 def test_tma_completion_request_edit_reset_and_card_use_backend_contract() -> None:
@@ -47,7 +47,7 @@ def test_tma_completion_and_auto_delete_are_compatible() -> None:
         "elements.deleteAfterTwoDays.checked && elements.requiresCompletion"
         not in javascript
     )
-    assert "Автоудаление: после выполнения" in javascript
+    assert "Автоудаление после выполнения" in javascript
     assert (
         "После выполнения сообщение будет удалено примерно через два дня." in javascript
     )

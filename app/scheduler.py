@@ -173,12 +173,17 @@ def build_reminder_message(reminder_text: str, reminder_kind: str) -> str:
 async def prefetch_weather_reports() -> None:
     now = datetime.now(timezone.utc)
 
-    await asyncio.to_thread(
-        delete_expired_prepared_weather_reports,
-        now - WEATHER_REPORT_CACHE_RETENTION,
+    await delete_expired_prepared_weather_reports_best_effort(
+        now - WEATHER_REPORT_CACHE_RETENTION
     )
 
-    for reminder in get_all_active_reminders():
+    try:
+        active_reminders = await asyncio.to_thread(get_all_active_reminders)
+    except sqlite3.Error:
+        LOGGER.exception("Could not load reminders for weather report prefetch.")
+        return
+
+    for reminder in active_reminders:
         reminder_data = build_reminder_read_data(reminder)
 
         if reminder_data.reminder_kind != REMINDER_KIND_WEATHER:
@@ -194,8 +199,7 @@ async def prefetch_weather_reports() -> None:
         if not now <= scheduled_for <= now + WEATHER_PREFETCH_WINDOW:
             continue
 
-        prepared_report = await asyncio.to_thread(
-            get_prepared_weather_report,
+        prepared_report = await get_prepared_weather_report_best_effort(
             reminder_data.id,
             reminder_data.reminder_text,
             scheduled_for - timedelta(seconds=1),
@@ -225,8 +229,7 @@ async def prefetch_weather_reports() -> None:
             )
             continue
 
-        await asyncio.to_thread(
-            save_prepared_weather_report,
+        await save_prepared_weather_report_best_effort(
             reminder_data.id,
             scheduled_for,
             reminder_data.reminder_text,
@@ -249,8 +252,7 @@ async def send_reminder_message(
         prepared_report = None
 
         if use_prepared_weather_report:
-            prepared_report = await asyncio.to_thread(
-                get_prepared_weather_report,
+            prepared_report = await get_prepared_weather_report_best_effort(
                 reminder_id,
                 reminder_text,
                 now - WEATHER_REPORT_CACHE_LOOKUP_GRACE,
@@ -273,8 +275,7 @@ async def send_reminder_message(
         )
 
         if prepared_report is not None:
-            await asyncio.to_thread(
-                delete_prepared_weather_report,
+            await delete_prepared_weather_report_best_effort(
                 reminder_id,
                 prepared_report["scheduled_for_utc"],
             )
@@ -287,6 +288,78 @@ async def send_reminder_message(
         chat_id=chat_id,
         text=f"{message_prefix}{message}",
     )
+
+
+async def delete_expired_prepared_weather_reports_best_effort(
+    expired_before: datetime,
+) -> None:
+    try:
+        await asyncio.to_thread(
+            delete_expired_prepared_weather_reports,
+            expired_before,
+        )
+    except sqlite3.Error:
+        LOGGER.exception("Could not delete expired prepared weather reports.")
+
+
+async def get_prepared_weather_report_best_effort(
+    reminder_id: int,
+    reminder_text: str,
+    earliest_scheduled_for: datetime,
+    latest_scheduled_for: datetime,
+) -> dict[str, str] | None:
+    try:
+        return await asyncio.to_thread(
+            get_prepared_weather_report,
+            reminder_id,
+            reminder_text,
+            earliest_scheduled_for,
+            latest_scheduled_for,
+        )
+    except sqlite3.Error:
+        LOGGER.exception(
+            "Prepared weather report cache lookup failed: reminder_id=%s",
+            reminder_id,
+        )
+        return None
+
+
+async def save_prepared_weather_report_best_effort(
+    reminder_id: int,
+    scheduled_for: datetime,
+    reminder_text: str,
+    report_html: str,
+) -> None:
+    try:
+        await asyncio.to_thread(
+            save_prepared_weather_report,
+            reminder_id,
+            scheduled_for,
+            reminder_text,
+            report_html,
+        )
+    except sqlite3.Error:
+        LOGGER.exception(
+            "Prepared weather report cache write failed: reminder_id=%s",
+            reminder_id,
+        )
+
+
+async def delete_prepared_weather_report_best_effort(
+    reminder_id: int,
+    scheduled_for_utc: str,
+) -> None:
+    try:
+        await asyncio.to_thread(
+            delete_prepared_weather_report,
+            reminder_id,
+            scheduled_for_utc,
+        )
+    except sqlite3.Error:
+        LOGGER.exception(
+            "Prepared weather report cache deletion failed: reminder_id=%s",
+            reminder_id,
+        )
 
 
 def get_message_sent_at_utc(message: Message) -> datetime:

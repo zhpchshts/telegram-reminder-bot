@@ -6,6 +6,7 @@ import html
 import json
 import logging
 import re
+import sqlite3
 import time
 import urllib.error
 import urllib.parse
@@ -185,7 +186,7 @@ def find_location(
     request_attempts: int = WEATHER_REQUEST_ATTEMPTS,
 ) -> dict[str, Any]:
     location_key = normalize_location_key(location_name)
-    cached_location = get_cached_weather_location(location_key)
+    cached_location = get_cached_weather_location_best_effort(location_key)
 
     if cached_location is not None:
         return cached_location
@@ -215,9 +216,35 @@ def find_location(
     if location.get("latitude") is None or location.get("longitude") is None:
         raise WeatherServiceError("Не нашёл координаты населённого пункта.")
 
-    save_cached_weather_location(location_key, location)
+    save_cached_weather_location_best_effort(location_key, location)
 
     return location
+
+
+def get_cached_weather_location_best_effort(
+    location_key: str,
+) -> dict[str, Any] | None:
+    try:
+        return get_cached_weather_location(location_key)
+    except sqlite3.Error:
+        LOGGER.exception(
+            "Weather location cache lookup failed: location_key=%r",
+            location_key,
+        )
+        return None
+
+
+def save_cached_weather_location_best_effort(
+    location_key: str,
+    location: dict[str, Any],
+) -> None:
+    try:
+        save_cached_weather_location(location_key, location)
+    except sqlite3.Error:
+        LOGGER.exception(
+            "Weather location cache write failed: location_key=%r",
+            location_key,
+        )
 
 
 def fetch_forecast(
@@ -298,7 +325,7 @@ def fetch_json(
 
         try:
             payload = json.loads(raw_body.decode("utf-8"))
-        except json.JSONDecodeError as error:
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise WeatherServiceError(
                 "Погодный сервис вернул некорректный ответ."
             ) from error

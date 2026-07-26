@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import sqlite3
 
 import pytest
 
@@ -174,6 +175,63 @@ def test_find_location_saves_new_location_to_cache(monkeypatch) -> None:
     assert fetch_calls[0][0][0] == weather_service.GEOCODING_API_URL
     assert fetch_calls[0][1]["stage"] == "geocoding"
     assert fetch_calls[0][1]["location_name"] == "Хургада"
+
+
+def test_find_location_uses_network_when_derived_cache_is_unavailable(
+    monkeypatch,
+    caplog,
+) -> None:
+    found_location = {
+        "name": "Хургада",
+        "admin1": "Red Sea",
+        "country": "Egypt",
+        "latitude": 27.2579,
+        "longitude": 33.8116,
+    }
+
+    monkeypatch.setattr(
+        weather_service,
+        "get_cached_weather_location",
+        lambda location_key: (_ for _ in ()).throw(
+            sqlite3.OperationalError("cache unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        weather_service,
+        "fetch_json",
+        lambda *args, **kwargs: {"results": [found_location]},
+    )
+    monkeypatch.setattr(
+        weather_service,
+        "save_cached_weather_location",
+        lambda *args: (_ for _ in ()).throw(
+            sqlite3.OperationalError("cache unavailable")
+        ),
+    )
+
+    with caplog.at_level("ERROR"):
+        location = weather_service.find_location("Хургада")
+
+    assert location == found_location
+    assert "Weather location cache lookup failed" in caplog.text
+    assert "Weather location cache write failed" in caplog.text
+
+
+def test_fetch_json_wraps_invalid_utf8_response(monkeypatch) -> None:
+    monkeypatch.setattr(
+        weather_service,
+        "fetch_response_body",
+        lambda *args: b"\xff",
+    )
+
+    with pytest.raises(
+        weather_service.WeatherServiceError,
+        match="Погодный сервис вернул некорректный ответ.",
+    ):
+        weather_service.fetch_json(
+            "https://weather.example.test/forecast",
+            {"city": "Yekaterinburg"},
+        )
 
 
 @pytest.mark.parametrize(

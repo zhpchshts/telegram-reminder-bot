@@ -1881,6 +1881,69 @@ def test_prefetch_weather_reports_does_not_save_failed_report(monkeypatch) -> No
     assert saved_reports == []
 
 
+def test_prefetch_weather_reports_continues_when_cache_is_unavailable(
+    monkeypatch,
+    caplog,
+) -> None:
+    scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=4)
+    reminder_data = SimpleNamespace(
+        id=12,
+        reminder_kind=REMINDER_KIND_WEATHER,
+        reminder_text="Екатеринбург",
+    )
+    build_calls = []
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_expired_prepared_weather_reports",
+        lambda now: (_ for _ in ()).throw(
+            sqlite3.OperationalError("cache unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_all_active_reminders",
+        lambda: [object()],
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_reminder_read_data",
+        lambda reminder: reminder_data,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_next_run_at",
+        lambda reminder_id: scheduled_for,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_prepared_weather_report",
+        lambda *args: (_ for _ in ()).throw(
+            sqlite3.OperationalError("cache unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_weather_report",
+        lambda *args, **kwargs: build_calls.append((args, kwargs)) or "report",
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "save_prepared_weather_report",
+        lambda *args: (_ for _ in ()).throw(
+            sqlite3.OperationalError("cache unavailable")
+        ),
+    )
+
+    with caplog.at_level("ERROR"):
+        asyncio.run(scheduler_module.prefetch_weather_reports())
+
+    assert len(build_calls) == 1
+    assert "Could not delete expired prepared weather reports" in caplog.text
+    assert "Prepared weather report cache lookup failed" in caplog.text
+    assert "Prepared weather report cache write failed" in caplog.text
+
+
 def test_send_repeating_weather_reminder_uses_prepared_report_and_deletes_it(
     monkeypatch,
 ) -> None:
@@ -1947,6 +2010,106 @@ def test_send_repeating_weather_reminder_uses_prepared_report_and_deletes_it(
             "scheduled_for_utc": "2026-07-07T04:30:00+00:00",
         }
     ]
+
+
+def test_weather_delivery_records_success_when_prepared_cache_delete_fails(
+    monkeypatch,
+    caplog,
+) -> None:
+    bot = FakeBot()
+    scheduled_for = datetime.now(timezone.utc)
+    handled = []
+    prepared_report = {
+        "scheduled_for_utc": "2026-07-07T04:30:00+00:00",
+        "report_html": "<b>Подготовленный прогноз</b>",
+    }
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_prepared_weather_report",
+        lambda *args: prepared_report,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_prepared_weather_report",
+        lambda *args: (_ for _ in ()).throw(
+            sqlite3.OperationalError("cache unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "mark_reminder_occurrence_handled",
+        lambda *args, **kwargs: handled.append((args, kwargs)) or True,
+    )
+
+    with caplog.at_level("ERROR"):
+        outcome = asyncio.run(
+            scheduler_module.deliver_reminder_occurrence(
+                bot,
+                build_reminder_data(
+                    reminder_id=12,
+                    reminder_text="Екатеринбург",
+                    reminder_kind=REMINDER_KIND_WEATHER,
+                ),
+                scheduled_for,
+                is_catchup=False,
+            )
+        )
+
+    assert outcome == scheduler_module.DELIVERY_OUTCOME_SENT
+    assert len(bot.messages) == 1
+    assert handled == [((12, scheduled_for), {"final_status": None})]
+    assert "Prepared weather report cache deletion failed" in caplog.text
+
+
+def test_weather_delivery_falls_back_when_prepared_cache_lookup_fails(
+    monkeypatch,
+    caplog,
+) -> None:
+    bot = FakeBot()
+    scheduled_for = datetime.now(timezone.utc)
+    handled = []
+    build_calls = []
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_prepared_weather_report",
+        lambda *args: (_ for _ in ()).throw(
+            sqlite3.OperationalError("cache unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_weather_report",
+        lambda raw_locations: (
+            build_calls.append(raw_locations) or "<b>Новый прогноз</b>"
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "mark_reminder_occurrence_handled",
+        lambda *args, **kwargs: handled.append((args, kwargs)) or True,
+    )
+
+    with caplog.at_level("ERROR"):
+        outcome = asyncio.run(
+            scheduler_module.deliver_reminder_occurrence(
+                bot,
+                build_reminder_data(
+                    reminder_id=12,
+                    reminder_text="Екатеринбург",
+                    reminder_kind=REMINDER_KIND_WEATHER,
+                ),
+                scheduled_for,
+                is_catchup=False,
+            )
+        )
+
+    assert outcome == scheduler_module.DELIVERY_OUTCOME_SENT
+    assert build_calls == ["Екатеринбург"]
+    assert len(bot.messages) == 1
+    assert handled == [((12, scheduled_for), {"final_status": None})]
+    assert "Prepared weather report cache lookup failed" in caplog.text
 
 
 def test_successful_send_with_auto_delete_enqueues_message(monkeypatch) -> None:

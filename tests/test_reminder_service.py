@@ -617,7 +617,7 @@ def test_list_active_reminders_for_chat_returns_read_models(
                 timezone_name="Asia/Yekaterinburg",
                 month_day=32,
             ),
-            "month_day must be between 1 and 31.",
+            "month_day must be between 1 and 31 or the last-day value.",
         ),
         (
             ReminderCreateData(

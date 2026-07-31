@@ -169,7 +169,7 @@ def test_get_reminder_form_options_returns_response() -> None:
         "SUN",
     ]
     assert result.month_week_numbers == [1, 2, 3, 4, 5]
-    assert result.month_days == list(range(1, 32))
+    assert result.month_days == [*range(1, 32), 0]
 
 
 def test_get_tma_bootstrap_returns_response(
@@ -389,6 +389,22 @@ def test_preview_tma_reminder_normalizes_monthly_day_start_at() -> None:
     assert result.start_at == datetime.fromisoformat("2099-06-23T12:12:00+05:00")
     assert result.period is not None
     assert "23" in result.period
+
+
+def test_preview_tma_reminder_normalizes_last_month_day_start_at() -> None:
+    result = preview_tma_reminder(
+        request=ReminderPreviewRequest(
+            reminder_text="Закрыть месяц",
+            schedule_type="monthly_day",
+            start_at=datetime(2099, 2, 16, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            month_day=0,
+        ),
+        _chat_id=100,
+    )
+
+    assert result.start_at == datetime.fromisoformat("2099-02-28T12:12:00+05:00")
+    assert result.period == "каждый месяц в последний день"
 
 
 def test_preview_tma_reminder_normalizes_monthly_weekday_to_next_month() -> None:

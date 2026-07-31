@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from app.schedule_calculations import (
     add_months,
     find_nth_weekday_in_month,
@@ -220,6 +222,36 @@ def test_get_monthly_day_datetime_on_or_after_skips_month_without_day() -> None:
     )
 
     assert result == datetime(2026, 5, 31, 12, 12)
+
+
+@pytest.mark.parametrize(
+    ("lower_bound", "expected"),
+    [
+        (
+            datetime(2026, 2, 1, 10, 0),
+            datetime(2026, 2, 28, 12, 12),
+        ),
+        (
+            datetime(2028, 2, 1, 10, 0),
+            datetime(2028, 2, 29, 12, 12),
+        ),
+        (
+            datetime(2026, 4, 30, 13, 0),
+            datetime(2026, 5, 31, 12, 12),
+        ),
+    ],
+)
+def test_get_monthly_day_datetime_on_or_after_supports_last_day(
+    lower_bound: datetime,
+    expected: datetime,
+) -> None:
+    result = get_monthly_day_datetime_on_or_after(
+        month_day=0,
+        time_text="12:12",
+        lower_bound=lower_bound,
+    )
+
+    assert result == expected
 
 
 def test_get_nearest_monthly_day_datetime_current_month() -> None:

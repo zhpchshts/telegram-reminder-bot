@@ -26,6 +26,8 @@ VALID_WEEKDAYS = {
     "SUN": 6,
 }
 
+LAST_DAY_OF_MONTH = 0
+
 APSCHEDULER_WEEKDAYS = {
     "MON": "mon",
     "TUE": "tue",

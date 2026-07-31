@@ -29,6 +29,7 @@ from app.completion_service import (
 )
 from app.constants import (
     APSCHEDULER_WEEKDAYS,
+    LAST_DAY_OF_MONTH,
     MESSAGE_DELETION_DELAY,
     REMINDER_KIND_TEXT,
     REMINDER_KIND_WEATHER,
@@ -889,7 +890,7 @@ def build_reminder_trigger_kwargs(
 
         return {
             "trigger": "cron",
-            "day": month_day,
+            "day": "last" if month_day == LAST_DAY_OF_MONTH else month_day,
             "hour": start_at.hour,
             "minute": start_at.minute,
             "start_date": start_at,

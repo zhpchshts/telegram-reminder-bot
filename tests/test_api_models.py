@@ -268,7 +268,7 @@ def test_build_reminder_form_options_response() -> None:
             WeekdayOption(value="SUN", label="Воскресенье"),
         ],
         month_week_numbers=[1, 2, 3, 4, 5],
-        month_days=list(range(1, 32)),
+        month_days=[*range(1, 32), 0],
         completion_repeat_intervals=[
             CompletionRepeatIntervalOption(value=15, label="15 минут"),
             CompletionRepeatIntervalOption(value=30, label="30 минут"),

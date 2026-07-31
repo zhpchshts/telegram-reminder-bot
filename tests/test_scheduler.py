@@ -1646,6 +1646,29 @@ def test_schedule_monthly_day_reminder_adds_cron_job(monkeypatch) -> None:
     assert job["id"] == "7"
 
 
+def test_schedule_last_month_day_reminder_adds_cron_job(monkeypatch) -> None:
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+
+    start_at = datetime(2026, 2, 28, 12, 12)
+
+    schedule_reminder(
+        bot=FakeBot(),
+        reminder_id=7,
+        chat_id=100,
+        reminder_text="Закрыть месяц",
+        schedule_type="monthly_day",
+        start_at=start_at,
+        month_day=0,
+    )
+
+    job = fake_scheduler.jobs[0]
+
+    assert job["trigger"] == "cron"
+    assert job["day"] == "last"
+    assert job["start_date"] == start_at
+
+
 def test_schedule_healthcheck_adds_interval_job(monkeypatch) -> None:
     fake_scheduler = FakeScheduler()
     monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)

@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.constants import (
+    LAST_DAY_OF_MONTH,
     MONTH_NAMES_RU,
     ORDINAL_NAMES_RU,
     WEEKDAY_NAMES_RU_PLURAL,
@@ -62,6 +63,9 @@ def format_period_line(
         return f"каждый {ordinal_name} {weekday_name} месяца"
 
     if schedule_type == "monthly_day":
+        if month_day == LAST_DAY_OF_MONTH:
+            return "каждый месяц в последний день"
+
         return f"каждый месяц {month_day} числа"
 
     if schedule_type == "yearly_date":

@@ -1,7 +1,7 @@
 import calendar
 from datetime import datetime, timedelta, tzinfo
 
-from app.constants import VALID_WEEKDAYS
+from app.constants import LAST_DAY_OF_MONTH, VALID_WEEKDAYS
 
 
 def parse_time(time_text: str):
@@ -217,8 +217,9 @@ def get_monthly_day_datetime_on_or_after(
         if month_day > days_in_month:
             continue
 
+        target_day = days_in_month if month_day == LAST_DAY_OF_MONTH else month_day
         candidate = datetime.combine(
-            datetime(year, month, month_day).date(),
+            datetime(year, month, target_day).date(),
             parse_time(time_text),
             tzinfo=lower_bound.tzinfo,
         )

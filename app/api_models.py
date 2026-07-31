@@ -7,6 +7,7 @@ from app.formatting import format_period_line
 from app.constants import (
     COMPLETION_REMINDER_TEXT_MAX_LENGTH,
     COMPLETION_REPEAT_INTERVAL_OPTIONS,
+    LAST_DAY_OF_MONTH,
     REMINDER_KIND_TEXT,
 )
 from app.reminder_models import ReminderCreateData, ReminderReadData
@@ -382,7 +383,7 @@ def build_reminder_form_options_response() -> ReminderFormOptionsResponse:
             WeekdayOption(value="SUN", label="Воскресенье"),
         ],
         month_week_numbers=[1, 2, 3, 4, 5],
-        month_days=list(range(1, 32)),
+        month_days=[*range(1, 32), LAST_DAY_OF_MONTH],
         completion_repeat_intervals=[
             CompletionRepeatIntervalOption(value=value, label=label)
             for value, label in COMPLETION_REPEAT_INTERVAL_OPTIONS

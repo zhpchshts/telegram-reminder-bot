@@ -13,6 +13,7 @@ const SUPPORTED_THEMES = new Set(["dark", "light"]);
 const REMINDER_KIND_TEXT = "text";
 const REMINDER_KIND_WEATHER = "weather";
 const YEARLY_DATE_REFERENCE_YEAR = 2000;
+const LAST_DAY_OF_MONTH = 0;
 
 const YEARLY_MONTHS = [
   { value: 1, label: "Январь" },
@@ -1194,7 +1195,7 @@ function renderOptions() {
     state.reminderOptions.month_week_numbers,
     "Не выбрано",
   );
-  fillNumberSelect(
+  fillMonthDaySelect(
     elements.monthDay,
     state.reminderOptions.month_days,
     "Не выбрано",
@@ -1214,6 +1215,18 @@ function fillNumberSelect(select, values, emptyLabel) {
   fillSelect(
     select,
     values.map((value) => ({ value, label: `${value}` })),
+    emptyLabel,
+  );
+}
+
+function fillMonthDaySelect(select, values, emptyLabel) {
+  fillSelect(
+    select,
+    values.map((value) => ({
+      value,
+      label:
+        value === LAST_DAY_OF_MONTH ? "Последний день месяца" : `${value}`,
+    })),
     emptyLabel,
   );
 }
@@ -1754,7 +1767,7 @@ function startEdit(reminder) {
   elements.dayOfWeek.value = reminder.day_of_week || "";
   elements.monthDayOfWeek.value = reminder.day_of_week || "";
   elements.monthWeekNumber.value = reminder.month_week_number || "";
-  elements.monthDay.value = reminder.month_day || "";
+  elements.monthDay.value = reminder.month_day ?? "";
   if (elements.deleteAfterTwoDays) {
     elements.deleteAfterTwoDays.checked = Boolean(
       reminder.delete_after_two_days,

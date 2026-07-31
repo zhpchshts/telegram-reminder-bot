@@ -7,6 +7,7 @@ from aiogram import Bot
 from app.config import APP_TIMEZONE_NAME
 from app.constants import (
     COMPLETION_REMINDER_TEXT_MAX_LENGTH,
+    LAST_DAY_OF_MONTH,
     REMINDER_KIND_TEXT,
     VALID_COMPLETION_REPEAT_INTERVALS,
     VALID_REMINDER_KINDS,
@@ -123,8 +124,12 @@ def validate_reminder_create_data(data: ReminderCreateData) -> None:
         return
 
     if data.schedule_type == "monthly_day":
-        if data.month_day is None or not 1 <= data.month_day <= 31:
-            raise ValueError("month_day must be between 1 and 31.")
+        if data.month_day is None or (
+            data.month_day != LAST_DAY_OF_MONTH and not 1 <= data.month_day <= 31
+        ):
+            raise ValueError(
+                "month_day must be between 1 and 31 or the last-day value."
+            )
 
         return
 

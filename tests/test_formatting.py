@@ -60,6 +60,15 @@ def test_format_period_line_monthly_day() -> None:
     assert result == "каждый месяц 11 числа"
 
 
+def test_format_period_line_last_month_day() -> None:
+    result = format_period_line(
+        schedule_type="monthly_day",
+        month_day=0,
+    )
+
+    assert result == "каждый месяц в последний день"
+
+
 def test_format_period_line_yearly_date() -> None:
     result = format_period_line(
         schedule_type="yearly_date",

@@ -110,7 +110,7 @@ def expected_reminder_options_response() -> dict[str, object]:
             {"value": "SUN", "label": "Воскресенье"},
         ],
         "month_week_numbers": [1, 2, 3, 4, 5],
-        "month_days": list(range(1, 32)),
+        "month_days": [*range(1, 32), 0],
         "completion_repeat_intervals": [
             {"value": 15, "label": "15 минут"},
             {"value": 30, "label": "30 минут"},

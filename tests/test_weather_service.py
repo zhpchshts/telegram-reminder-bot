@@ -328,7 +328,7 @@ def test_format_location_forecast_includes_two_precipitation_periods() -> None:
             },
             "daily": {
                 "temperature_2m_max": [24.2],
-                "weather_code": [3],
+                "weather_code": [61],
             },
             "hourly": {
                 "time": [
@@ -343,8 +343,8 @@ def test_format_location_forecast_includes_two_precipitation_periods() -> None:
     )
 
     assert result == (
-        "☁️ <b>Екатеринбург · Свердловская область</b>\n"
-        "Сейчас 18°, днём до 24°. Пасмурно.\n"
+        "🌧 <b>Екатеринбург · Свердловская область</b>\n"
+        "Сейчас 18°, слабый дождь. Днём до 24°.\n"
         "Осадки: днём — до 80%, вечером — до 60%."
     )
 
@@ -489,5 +489,5 @@ def test_format_location_forecast_uses_tomorrow_daily_data_after_21() -> None:
         target_time_utc=datetime(2026, 7, 7, 16, 0, tzinfo=timezone.utc),
     )
 
-    assert "Сейчас 18°, завтра днём до 20°. Ясно." in result
+    assert "Сейчас 18°, ясно. Завтра днём до 20°." in result
     assert result.endswith("Осадки: ночью — до 70%, утром — до 40%.")

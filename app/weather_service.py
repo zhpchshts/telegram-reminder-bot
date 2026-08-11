@@ -449,15 +449,14 @@ def format_location_forecast(
         daily.get("weather_code"),
         daily_forecast_index,
     )
-    daily_weather = format_weather_sentence(daily_weather_code)
+    daily_weather = format_weather_code(daily_weather_code)
     weather_emoji = format_weather_emoji(daily_weather_code)
 
     return "\n".join(
         [
             f"{weather_emoji} <b>{format_location_name(location)}</b>",
-            f"Сейчас {current_temperature}, {daily_temperature_label} до "
-            f"{max_temperature}. "
-            f"{daily_weather}.",
+            f"Сейчас {current_temperature}, {daily_weather}. "
+            f"{daily_temperature_label.capitalize()} до {max_temperature}.",
             format_precipitation_line(hourly, current_time),
         ]
     )

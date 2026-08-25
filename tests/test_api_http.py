@@ -173,6 +173,18 @@ def test_health_endpoint_returns_status_and_active_chats_count(
     }
 
 
+def test_health_endpoint_supports_head(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.api.count_active_chats", lambda: 0)
+
+    response = client.head("/health")
+
+    assert response.status_code == 200
+    assert response.content == b""
+
+
 def test_tma_static_index_is_served(client: TestClient) -> None:
     response = client.get("/tma/")
 

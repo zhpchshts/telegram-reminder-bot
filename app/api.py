@@ -259,6 +259,7 @@ def get_timezone_database_info() -> dict[str, str]:
     }
 
 
+@app.head("/health", include_in_schema=False)
 @app.get("/health")
 def health() -> dict[str, str | int]:
     return {

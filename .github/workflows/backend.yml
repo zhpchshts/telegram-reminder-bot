@@ -51,5 +51,8 @@ jobs:
       - name: Run Ruff
         run: ruff check .
 
+      - name: Check shell scripts
+        run: bash -n scripts/*.sh
+
       - name: Run tests
         run: pytest

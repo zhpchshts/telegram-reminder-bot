@@ -42,6 +42,7 @@ TMA static: /opt/telegram-reminder-bot/tma
 Backups: /opt/telegram-reminder-bot-backups
 Deploy script: /opt/deploy-telegram-reminder-bot.sh
 Backup script: /opt/backup-telegram-reminder-bot.sh
+Backup script source: scripts/backup-database.sh
 Compose file: /opt/telegram-reminder-bot/docker-compose.yml
 ```
 
@@ -204,6 +205,15 @@ curl -s http://127.0.0.1:8000/health
 ```
 
 ## Backup
+
+Эталонный backup-скрипт хранится в `scripts/backup-database.sh`. Установленная
+копия на VPS должна совпадать с ним:
+
+```bash
+install -o root -g root -m 0755 \
+  /opt/telegram-reminder-bot/scripts/backup-database.sh \
+  /opt/backup-telegram-reminder-bot.sh
+```
 
 Сделать backup базы вручную:
 

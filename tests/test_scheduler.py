@@ -1669,7 +1669,7 @@ def test_schedule_last_month_day_reminder_adds_cron_job(monkeypatch) -> None:
     assert job["start_date"] == start_at
 
 
-def test_schedule_healthcheck_adds_interval_job(monkeypatch) -> None:
+def test_schedule_healthcheck_adds_one_time_startup_job(monkeypatch) -> None:
     fake_scheduler = FakeScheduler()
     monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
 
@@ -1678,7 +1678,6 @@ def test_schedule_healthcheck_adds_interval_job(monkeypatch) -> None:
     schedule_healthcheck(
         bot=bot,
         chat_id=100,
-        interval_minutes=360,
     )
 
     assert len(fake_scheduler.jobs) == 1
@@ -1686,12 +1685,13 @@ def test_schedule_healthcheck_adds_interval_job(monkeypatch) -> None:
     job = fake_scheduler.jobs[0]
 
     assert job["func"] == send_healthcheck
-    assert job["trigger"] == "interval"
-    assert job["minutes"] == 360
+    assert job["trigger"] == "date"
+    assert isinstance(job["run_date"], datetime)
     assert job["args"] == [bot, 100]
     assert job["id"] == "healthcheck"
     assert job["replace_existing"] is True
-    assert "next_run_time" in job
+    assert "minutes" not in job
+    assert "next_run_time" not in job
 
 
 def test_send_healthcheck_sends_status_message(monkeypatch) -> None:

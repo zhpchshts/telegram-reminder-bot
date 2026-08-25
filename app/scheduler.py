@@ -114,16 +114,14 @@ async def send_healthcheck(
 def schedule_healthcheck(
     bot: Bot,
     chat_id: int,
-    interval_minutes: int,
 ) -> None:
     scheduler.add_job(
         send_healthcheck,
-        trigger="interval",
-        minutes=interval_minutes,
+        trigger="date",
+        run_date=datetime.now(timezone.utc),
         args=[bot, chat_id],
         id="healthcheck",
         replace_existing=True,
-        next_run_time=datetime.now(timezone.utc),
     )
 
 

@@ -12,7 +12,6 @@ from app.config import (
     API_PORT,
     BOT_TOKEN,
     HEALTHCHECK_CHAT_ID,
-    HEALTHCHECK_INTERVAL_MINUTES,
 )
 from app.completion_handlers import router as completion_router
 from app.database import init_db
@@ -120,7 +119,6 @@ async def prepare_bot_runtime(runtime: BotRuntime) -> None:
         schedule_healthcheck(
             bot=runtime.bot,
             chat_id=HEALTHCHECK_CHAT_ID,
-            interval_minutes=HEALTHCHECK_INTERVAL_MINUTES,
         )
 
 

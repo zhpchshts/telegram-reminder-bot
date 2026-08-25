@@ -98,9 +98,8 @@ def test_prepare_bot_runtime_starts_shared_scheduler_and_restores_jobs(
         *,
         bot,
         chat_id: int,
-        interval_minutes: int,
     ) -> None:
-        calls.append(("schedule_healthcheck", bot, chat_id, interval_minutes))
+        calls.append(("schedule_healthcheck", bot, chat_id))
 
     monkeypatch.setattr(runtime_module, "init_db", lambda: calls.append("init_db"))
     monkeypatch.setattr(runtime_module, "set_bot_commands", fake_set_bot_commands)
@@ -116,7 +115,6 @@ def test_prepare_bot_runtime_starts_shared_scheduler_and_restores_jobs(
     )
     monkeypatch.setattr(runtime_module, "scheduler", FakeScheduler())
     monkeypatch.setattr(runtime_module, "HEALTHCHECK_CHAT_ID", 100)
-    monkeypatch.setattr(runtime_module, "HEALTHCHECK_INTERVAL_MINUTES", 360)
 
     runtime = BotRuntime(
         bot=bot,
@@ -131,7 +129,7 @@ def test_prepare_bot_runtime_starts_shared_scheduler_and_restores_jobs(
         ("set_bot_commands", bot),
         "scheduler.start",
         ("restore_active_reminders", bot),
-        ("schedule_healthcheck", bot, 100, 360),
+        ("schedule_healthcheck", bot, 100),
     ]
 
 

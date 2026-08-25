@@ -265,7 +265,6 @@ BOT_TOKEN
 APP_TIMEZONE
 DB_PATH
 HEALTHCHECK_CHAT_ID
-HEALTHCHECK_INTERVAL_MINUTES
 API_ALLOWED_ORIGINS
 TMA_URL
 TMA_BOT_USERNAME
@@ -276,17 +275,12 @@ TMA_DIRECT_URL
 
 Не выводить содержимое `.env` в консоль и не отправлять его в чаты.
 
-## Healthcheck-сообщения в Telegram
+## Стартовое healthcheck-сообщение в Telegram
 
-Если `HEALTHCHECK_CHAT_ID` задан, бот отправляет периодические healthcheck-сообщения.
+Если `HEALTHCHECK_CHAT_ID` задан, бот отправляет одно healthcheck-сообщение при
+каждом запуске процесса. Периодические healthcheck-сообщения не отправляются.
 
-Интервал задаётся через:
-
-```text
-HEALTHCHECK_INTERVAL_MINUTES
-```
-
-Если `HEALTHCHECK_CHAT_ID` не задан, healthcheck-сообщения отключены.
+Если `HEALTHCHECK_CHAT_ID` не задан, стартовое сообщение отключено.
 
 ## Troubleshooting
 

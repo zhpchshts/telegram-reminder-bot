@@ -7,7 +7,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_gitignore_excludes_secret_and_database_backup_artifacts() -> None:
-    gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+    gitignore_path = PROJECT_ROOT / ".gitignore"
+    if not gitignore_path.is_file():
+        pytest.skip("The runtime image intentionally excludes source-only .gitignore.")
+    gitignore = gitignore_path.read_text(encoding="utf-8")
     ignored_paths = {
         line.strip().rstrip("/")
         for line in gitignore.splitlines()
@@ -30,9 +33,7 @@ def test_gitignore_excludes_secret_and_database_backup_artifacts() -> None:
 def test_tma_is_served_from_the_same_image_as_backend() -> None:
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
-    backend_workflow = (
-        PROJECT_ROOT / ".github" / "workflows" / "backend.yml"
-    ).read_text(encoding="utf-8")
+    backend_workflow_path = PROJECT_ROOT / ".github" / "workflows" / "backend.yml"
 
     assert "/app/tma" not in compose
     assert "source: ./data" in compose
@@ -47,7 +48,12 @@ def test_tma_is_served_from_the_same_image_as_backend() -> None:
     assert "COPY app ./app" in dockerfile
     assert "COPY tma ./tma" in dockerfile
     assert "COPY tests ./tests" in dockerfile
-    assert 'python-version: "3.14.7"' in backend_workflow
+    if backend_workflow_path.is_file():
+        backend_workflow = backend_workflow_path.read_text(encoding="utf-8")
+        assert 'python-version: "3.14.7"' in backend_workflow
+        assert 'docker run --rm -e BOT_TOKEN=dummy "$IMAGE_NAME" pytest' in (
+            backend_workflow
+        )
 
 
 def test_docker_build_context_uses_an_explicit_allowlist() -> None:

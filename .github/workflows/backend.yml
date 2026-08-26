@@ -68,7 +68,11 @@ jobs:
           trap 'rm -f .env' EXIT
           printf 'BOT_TOKEN=%s\n' "$BOT_TOKEN" > .env
           docker compose config --quiet
-          docker build --tag telegram-reminder-bot:ci .
+          IMAGE_NAME=telegram-reminder-bot:ci
+          docker build --tag "$IMAGE_NAME" .
+          docker run --rm -e BOT_TOKEN=dummy "$IMAGE_NAME" ruff format --check .
+          docker run --rm -e BOT_TOKEN=dummy "$IMAGE_NAME" ruff check .
+          docker run --rm -e BOT_TOKEN=dummy "$IMAGE_NAME" pytest
 
       - name: Run tests
         run: pytest

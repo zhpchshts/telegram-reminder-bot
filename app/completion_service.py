@@ -784,12 +784,3 @@ async def finish_completion_callback(bot: Bot, result: dict[str, object]) -> Non
             chat_id=chat_id,
             message_id=callback_message_id,
         )
-
-
-async def process_completion_callback(
-    bot: Bot,
-    **kwargs,
-) -> str:
-    result = await claim_completion_callback(**kwargs)
-    await finish_completion_callback(bot, result)
-    return str(result["response_text"])

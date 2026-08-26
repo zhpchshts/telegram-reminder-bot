@@ -250,11 +250,7 @@ def synchronize_updated_reminder_job(
                 scheduler.remove_job(str(reminder_id))
             return None
 
-        current_revision = getattr(
-            current_reminder,
-            "revision",
-            scheduled_revision,
-        )
+        current_revision = current_reminder.revision
         if current_revision == scheduled_revision:
             return current_reminder
 
@@ -411,12 +407,6 @@ def create_scheduled_reminder(
         schedule_reminder(
             bot=bot,
             reminder_id=reminder_id,
-            chat_id=chat_id,
-            reminder_text=data.reminder_text,
-            reminder_kind=data.reminder_kind,
-            delete_after_two_days=data.delete_after_two_days,
-            requires_completion=data.requires_completion,
-            repeat_interval_minutes=data.repeat_interval_minutes,
             schedule_type=data.schedule_type,
             start_at=data.start_at,
             interval_days=data.interval_days,
@@ -541,17 +531,11 @@ def _update_active_reminder_for_chat(
         chat_id,
     )
 
-    scheduled_revision = getattr(reminder, "revision", 0) + 1
+    scheduled_revision = reminder.revision + 1
     try:
         schedule_reminder(
             bot=bot,
             reminder_id=reminder_id,
-            chat_id=chat_id,
-            reminder_text=data.reminder_text,
-            reminder_kind=data.reminder_kind,
-            delete_after_two_days=data.delete_after_two_days,
-            requires_completion=data.requires_completion,
-            repeat_interval_minutes=data.repeat_interval_minutes,
             schedule_type=data.schedule_type,
             start_at=data.start_at,
             interval_days=data.interval_days,

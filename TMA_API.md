@@ -22,14 +22,13 @@ Backend проверяет подпись Telegram Mini App `initData` и сро
 context. Ссылка `/app` действует 30 дней и не привязана к конкретному
 пользователю, поэтому одну кнопку могут открыть разные пользователи.
 
-Для endpoints вида `/api/chats/{chat_id}/...` backend дополнительно проверяет,
-что подписанный chat совпадает с `chat_id` в path. Mini App должна использовать
-`/api/tma/...`, чтобы не выбирать `chat_id` на клиенте.
+API не принимает `chat_id` от клиента: все chat-scoped операции используют
+контекст, полученный только из проверенного launch token.
 
 Ошибки авторизации:
 
 - `401` — initData отсутствует, устарел или невалиден;
-- `403` — signed chat не совпадает с launch context/path.
+- `403` — signed chat не совпадает с launch context.
 
 Все ответы `/api/...`, включая ошибки, возвращаются с
 `Cache-Control: private, no-store` и `Vary: X-Telegram-Init-Data`.
@@ -49,8 +48,6 @@ GET|HEAD /ready
 ## Основные TMA endpoints
 
 ```http
-GET    /api/tma/context
-GET    /api/tma/reminder-options
 GET    /api/tma/bootstrap
 
 GET    /api/tma/reminders
@@ -60,7 +57,6 @@ DELETE /api/tma/reminders/{reminder_id}?expected_revision={revision}
 
 POST   /api/tma/reminder-preview
 
-GET    /api/tma/timezone
 PUT    /api/tma/timezone
 ```
 
@@ -242,7 +238,8 @@ POST /api/tma/reminder-preview
 
 `reminder_kind` принимает `text` или `weather`. Для напоминания с подтверждением
 используются `requires_completion: true` и один из разрешённых
-`repeat_interval_minutes`; варианты также возвращает `reminder-options`.
+`repeat_interval_minutes`; варианты возвращает
+`bootstrap.reminder_options`.
 
 Request models строгие: неизвестные поля, неверные типы, превышение лимитов и
 несовместимые комбинации отклоняются. Если `start_at` приходит без offset,
@@ -257,7 +254,6 @@ backend интерпретирует его в `timezone_name` и возвращ
 ## Timezone
 
 ```http
-GET /api/tma/timezone
 PUT /api/tma/timezone
 ```
 

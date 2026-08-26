@@ -1042,12 +1042,12 @@ def test_count_active_chats_counts_unique_chats_with_active_reminders(
     )
 
     database.mark_reminder_as_deleted(deleted_reminder_id)
-    database.mark_reminder_as_sent(sent_reminder_id)
+    database.set_reminder_status(sent_reminder_id, "sent")
 
     assert database.count_active_chats() == 2
 
 
-def test_mark_reminder_as_sent_hides_it_from_active(monkeypatch, tmp_path) -> None:
+def test_sent_status_hides_reminder_from_active(monkeypatch, tmp_path) -> None:
     use_test_db(monkeypatch, tmp_path)
 
     reminder_id = database.create_reminder_in_db(
@@ -1057,7 +1057,7 @@ def test_mark_reminder_as_sent_hides_it_from_active(monkeypatch, tmp_path) -> No
         start_at=datetime(2026, 6, 8, 12, 12),
     )
 
-    database.mark_reminder_as_sent(reminder_id)
+    database.set_reminder_status(reminder_id, "sent")
 
     assert database.get_active_reminder_from_db(reminder_id) is None
     assert database.get_all_active_reminders() == []

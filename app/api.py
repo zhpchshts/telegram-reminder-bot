@@ -24,7 +24,6 @@ from app.api_auth import (
     get_tma_chat,
     get_tma_chat_id,
     get_tma_init_data,
-    require_matching_chat_id,
 )
 from app.api_models import (
     ChatTimezoneResponse,
@@ -33,19 +32,15 @@ from app.api_models import (
     ReminderCreateRequest,
     ReminderUpdateRequest,
     ReminderPreviewRequest,
-    ReminderFormOptionsResponse,
     ReminderPreviewResponse,
     ReminderResponse,
     TmaBootstrapResponse,
-    TmaContextResponse,
     build_created_reminder_response,
     build_reminder_create_data,
     normalize_start_at,
-    build_reminder_form_options_response,
     build_reminder_preview_response,
     build_reminder_response,
     build_tma_bootstrap_response,
-    build_tma_context_response,
 )
 from app.config import API_ALLOWED_ORIGINS
 from app.constants import SQLITE_INT64_MAX
@@ -397,17 +392,6 @@ def get_next_run_at_for_reminder_data(
     )
 
 
-def get_tma_chat_type(
-    chat: dict[str, object],
-    fallback_chat_type: str | None,
-) -> str | None:
-    chat_type = chat.get("type")
-    if isinstance(chat_type, str):
-        return chat_type
-
-    return fallback_chat_type
-
-
 @app.head("/health", include_in_schema=False)
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -444,36 +428,6 @@ def readiness(request: Request) -> dict[str, str]:
 
 
 @app.get(
-    "/api/tma/context",
-    response_model=TmaContextResponse,
-)
-def get_tma_context(
-    init_data=Depends(get_tma_init_data),
-    tma_chat: dict[str, object] = Depends(get_tma_chat),
-    chat_id: int = Depends(get_tma_chat_id),
-) -> TmaContextResponse:
-    return build_tma_context_response(
-        auth_date=init_data.auth_date,
-        user=init_data.user,
-        chat=tma_chat,
-        chat_id=chat_id,
-        timezone_name=get_chat_timezone_name(chat_id),
-        chat_type=get_tma_chat_type(tma_chat, init_data.chat_type),
-        start_param=init_data.start_param,
-    )
-
-
-@app.get(
-    "/api/tma/reminder-options",
-    response_model=ReminderFormOptionsResponse,
-)
-def get_reminder_form_options(
-    _init_data=Depends(get_tma_init_data),
-) -> ReminderFormOptionsResponse:
-    return build_reminder_form_options_response()
-
-
-@app.get(
     "/api/tma/bootstrap",
     response_model=TmaBootstrapResponse,
     response_model_exclude_unset=True,
@@ -492,7 +446,7 @@ def get_tma_bootstrap(
         chat=tma_chat,
         chat_id=chat_id,
         timezone_name=timezone_name,
-        chat_type=get_tma_chat_type(tma_chat, init_data.chat_type),
+        chat_type=tma_chat["type"],
         start_param=init_data.start_param,
         active_reminders=active_reminders,
     )
@@ -592,19 +546,6 @@ def update_tma_reminder(
     )
 
 
-@app.get(
-    "/api/tma/timezone",
-    response_model=ChatTimezoneResponse,
-)
-def get_tma_timezone(
-    chat_id: int = Depends(get_tma_chat_id),
-) -> ChatTimezoneResponse:
-    return ChatTimezoneResponse(
-        chat_id=chat_id,
-        timezone_name=get_chat_timezone_name(chat_id),
-    )
-
-
 @app.put(
     "/api/tma/timezone",
     response_model=ChatTimezoneResponse,
@@ -631,102 +572,6 @@ def delete_tma_reminder(
     return delete_reminder_for_chat(
         reminder_id=reminder_id,
         chat_id=chat_id,
-        expected_revision=expected_revision,
-    )
-
-
-@app.get(
-    "/api/chats/{chat_id}/reminders",
-    response_model=list[ReminderResponse],
-    response_model_exclude_unset=True,
-)
-def get_chat_reminders(
-    authorized_chat_id: int = Depends(require_matching_chat_id),
-) -> list[ReminderResponse]:
-    return [
-        build_reminder_response(reminder)
-        for reminder in list_active_reminders_for_chat(authorized_chat_id)
-    ]
-
-
-@app.post(
-    "/api/chats/{chat_id}/reminders",
-    response_model=ReminderResponse,
-    response_model_exclude_unset=True,
-    status_code=201,
-)
-def create_chat_reminder(
-    request: ReminderCreateRequest,
-    authorized_chat_id: int = Depends(require_matching_chat_id),
-    bot: Bot = Depends(get_bot_from_app_state),
-    idempotency_key: IdempotencyKeyHeader = None,
-) -> ReminderResponse:
-    return create_reminder_for_chat(
-        request=request,
-        chat_id=authorized_chat_id,
-        bot=bot,
-        idempotency_key=idempotency_key,
-    )
-
-
-@app.put(
-    "/api/chats/{chat_id}/reminders/{reminder_id}",
-    response_model=ReminderResponse,
-    response_model_exclude_unset=True,
-)
-def update_chat_reminder(
-    reminder_id: ReminderIdPath,
-    request: ReminderUpdateRequest,
-    authorized_chat_id: int = Depends(require_matching_chat_id),
-    bot: Bot = Depends(get_bot_from_app_state),
-) -> ReminderResponse:
-    return update_reminder_for_chat(
-        reminder_id=reminder_id,
-        request=request,
-        chat_id=authorized_chat_id,
-        bot=bot,
-    )
-
-
-@app.get(
-    "/api/chats/{chat_id}/timezone",
-    response_model=ChatTimezoneResponse,
-)
-def get_chat_timezone(
-    authorized_chat_id: int = Depends(require_matching_chat_id),
-) -> ChatTimezoneResponse:
-    return ChatTimezoneResponse(
-        chat_id=authorized_chat_id,
-        timezone_name=get_chat_timezone_name(authorized_chat_id),
-    )
-
-
-@app.put(
-    "/api/chats/{chat_id}/timezone",
-    response_model=ChatTimezoneResponse,
-)
-def update_chat_timezone(
-    request: ChatTimezoneUpdateRequest,
-    authorized_chat_id: int = Depends(require_matching_chat_id),
-) -> ChatTimezoneResponse:
-    return update_timezone_for_chat(
-        request=request,
-        chat_id=authorized_chat_id,
-    )
-
-
-@app.delete(
-    "/api/chats/{chat_id}/reminders/{reminder_id}",
-    response_model=DeleteReminderResponse,
-)
-def delete_chat_reminder(
-    reminder_id: ReminderIdPath,
-    expected_revision: ReminderRevisionQuery,
-    authorized_chat_id: int = Depends(require_matching_chat_id),
-) -> DeleteReminderResponse:
-    return delete_reminder_for_chat(
-        reminder_id=reminder_id,
-        chat_id=authorized_chat_id,
         expected_revision=expected_revision,
     )
 
@@ -838,11 +683,7 @@ def update_reminder_for_chat(
             status_code=404,
             detail="Reminder not found.",
         )
-    expected_revision = getattr(
-        request,
-        "expected_revision",
-        current_reminder.revision,
-    )
+    expected_revision = request.expected_revision
     if current_reminder.revision != expected_revision:
         raise HTTPException(
             status_code=409,
@@ -912,7 +753,7 @@ def delete_reminder_for_chat(
     *,
     reminder_id: int,
     chat_id: int,
-    expected_revision: int | None = None,
+    expected_revision: int,
 ) -> DeleteReminderResponse:
     try:
         was_deleted = delete_active_reminder_for_chat(

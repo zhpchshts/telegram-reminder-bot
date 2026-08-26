@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 \
     && python -m pip install --no-cache-dir -r requirements.txt
 
-COPY pyproject.toml bot.py Dockerfile docker-compose.yml ./
+COPY pyproject.toml Dockerfile docker-compose.yml ./
 COPY app ./app
 COPY tma ./tma
 COPY tests ./tests

@@ -10,9 +10,10 @@ import pytest
 from app import completion_service as completion_service_module
 from app import database as database_module
 from app.completion_service import (
+    claim_completion_callback,
     deliver_completion_occurrence,
+    finish_completion_callback,
     publish_completion_occurrence,
-    process_completion_callback,
     process_due_completion_occurrences,
     repeat_active_occurrence,
 )
@@ -34,6 +35,12 @@ from app.reminder_mapping import build_reminder_read_data
 
 
 UTC = timezone.utc
+
+
+async def process_completion_callback(bot, **kwargs) -> str:
+    result = await claim_completion_callback(**kwargs)
+    await finish_completion_callback(bot, result)
+    return str(result["response_text"])
 
 
 class FakeBot:

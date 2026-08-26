@@ -35,7 +35,6 @@ from app.constants import (
     APSCHEDULER_WEEKDAYS,
     LAST_DAY_OF_MONTH,
     MESSAGE_DELETION_DELAY,
-    REMINDER_KIND_TEXT,
     REMINDER_KIND_WEATHER,
 )
 from app.database import (
@@ -1580,12 +1579,6 @@ def schedule_reminder(
     *,
     bot: Bot,
     reminder_id: int,
-    chat_id: int,
-    reminder_text: str,
-    reminder_kind: str = REMINDER_KIND_TEXT,
-    delete_after_two_days: bool = False,
-    requires_completion: bool = False,
-    repeat_interval_minutes: int | None = None,
     schedule_type: str,
     start_at: datetime,
     interval_days: int | None = None,
@@ -1639,20 +1632,6 @@ def schedule_reminder(
         )
 
 
-def schedule_reminder_from_row(
-    bot: Bot,
-    reminder: sqlite3.Row,
-    *,
-    next_run_time: datetime | None = None,
-) -> None:
-    reminder_data = build_reminder_read_data(reminder)
-    schedule_reminder_data(
-        bot,
-        reminder_data,
-        next_run_time=next_run_time,
-    )
-
-
 def schedule_reminder_data(
     bot: Bot,
     reminder: ReminderReadData,
@@ -1662,12 +1641,6 @@ def schedule_reminder_data(
     schedule_reminder(
         bot=bot,
         reminder_id=reminder.id,
-        chat_id=reminder.chat_id,
-        reminder_text=reminder.reminder_text,
-        reminder_kind=reminder.reminder_kind,
-        delete_after_two_days=reminder.delete_after_two_days,
-        requires_completion=reminder.requires_completion,
-        repeat_interval_minutes=reminder.repeat_interval_minutes,
         schedule_type=reminder.schedule_type,
         start_at=reminder.start_at,
         interval_days=reminder.interval_days,

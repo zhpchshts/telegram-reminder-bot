@@ -1,5 +1,4 @@
 import html
-import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -24,14 +23,6 @@ def format_datetime_ru(
     display_value = display_value.replace(tzinfo=None)
     month_name = MONTH_NAMES_RU[display_value.month]
     return f"{display_value.day:02d} {month_name} в {display_value.strftime('%H:%M')}"
-
-
-def get_int(row: sqlite3.Row, key: str) -> int:
-    return int(row[key])
-
-
-def get_str(row: sqlite3.Row, key: str) -> str:
-    return str(row[key])
 
 
 def format_period_line(

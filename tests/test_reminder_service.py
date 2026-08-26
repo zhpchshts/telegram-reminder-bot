@@ -298,12 +298,6 @@ def test_create_scheduled_reminder_creates_db_record_and_schedules_job(
         {
             "bot": bot,
             "reminder_id": 42,
-            "chat_id": 100,
-            "reminder_text": "Проверить релиз",
-            "reminder_kind": REMINDER_KIND_TEXT,
-            "delete_after_two_days": False,
-            "requires_completion": False,
-            "repeat_interval_minutes": None,
             "schedule_type": "every_days",
             "start_at": start_at,
             "interval_days": 3,
@@ -1181,7 +1175,15 @@ def test_validate_reminder_create_data_rejects_excessive_intervals(
 def test_update_reports_failure_when_database_changed_but_rescheduling_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reminder = object()
+    reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Старый текст",
+        schedule_type="once",
+        start_at=datetime(2099, 6, 9, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+    )
     update_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(

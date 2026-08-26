@@ -631,12 +631,6 @@ def get_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     return value
 
 
-def first(value: object) -> object:
-    if isinstance(value, list) and value:
-        return value[0]
-    return None
-
-
 def format_location_name(location: dict[str, Any]) -> str:
     name = str(location.get("name") or "Населённый пункт")
     admin1 = normalize_location_part(location.get("admin1"))
@@ -686,13 +680,6 @@ def format_weather_code(value: object) -> str:
         return "погода неизвестна"
 
     return WEATHER_CODE_DESCRIPTIONS.get(weather_code, "погода неизвестна")
-
-
-def format_weather_sentence(value: object) -> str:
-    description = format_weather_code(value)
-    if description == "погода неизвестна":
-        return "Погода неизвестна"
-    return description.capitalize()
 
 
 def format_weather_emoji(value: object) -> str:

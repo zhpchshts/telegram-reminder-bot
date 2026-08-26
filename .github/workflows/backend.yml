@@ -17,7 +17,6 @@ on:
       - "Dockerfile"
       - "docker-compose.yml"
       - ".dockerignore"
-      - "bot.py"
       - "scripts/**"
       - ".github/workflows/**"
   pull_request:
@@ -30,7 +29,6 @@ on:
       - "Dockerfile"
       - "docker-compose.yml"
       - ".dockerignore"
-      - "bot.py"
       - "scripts/**"
       - ".github/workflows/**"
 

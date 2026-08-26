@@ -2,7 +2,6 @@
 **
 !requirements.txt
 !pyproject.toml
-!bot.py
 !Dockerfile
 !docker-compose.yml
 !app/

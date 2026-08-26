@@ -135,16 +135,3 @@ def get_tma_chat_id(
         )
 
     return chat_id
-
-
-def require_matching_chat_id(
-    chat_id: int,
-    tma_chat_id: int = Depends(get_tma_chat_id),
-) -> int:
-    if tma_chat_id != chat_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Telegram init data chat_id does not match requested chat_id.",
-        )
-
-    return tma_chat_id

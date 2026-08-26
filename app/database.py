@@ -814,10 +814,6 @@ def set_reminder_status(reminder_id: int, status: str) -> None:
         )
 
 
-def mark_reminder_as_sent(reminder_id: int) -> None:
-    set_reminder_status(reminder_id, "sent")
-
-
 def mark_reminder_as_deleted(reminder_id: int) -> None:
     set_reminder_status(reminder_id, "deleted")
 
@@ -1154,14 +1150,6 @@ def delete_prepared_weather_report(
                 reminder_revision,
                 scheduled_for_utc,
             ),
-        )
-
-
-def delete_prepared_weather_reports_for_reminder(reminder_id: int) -> None:
-    with get_connection() as connection:
-        _delete_prepared_weather_reports_for_reminder(
-            connection,
-            reminder_id=reminder_id,
         )
 
 

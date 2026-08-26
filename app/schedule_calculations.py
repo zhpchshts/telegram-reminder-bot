@@ -273,10 +273,3 @@ def get_schedule_start_at_on_or_after(
         )
 
     return start_at
-
-
-def normalize_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value
-
-    return value.astimezone().replace(tzinfo=None)

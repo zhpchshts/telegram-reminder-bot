@@ -9,7 +9,6 @@ from app.api_auth import (
     get_tma_chat,
     get_tma_chat_id,
     get_tma_init_data,
-    require_matching_chat_id,
 )
 from app.tma_auth import TelegramInitData, TelegramInitDataError
 from app.tma_launch import create_tma_launch_token
@@ -43,12 +42,6 @@ def client() -> TestClient:
         chat_id: int = Depends(get_tma_chat_id),
     ) -> dict[str, int]:
         return {"chat_id": chat_id}
-
-    @app.get("/api/chats/{chat_id}/protected")
-    def chat_protected_endpoint(
-        authorized_chat_id: int = Depends(require_matching_chat_id),
-    ) -> dict[str, int]:
-        return {"chat_id": authorized_chat_id}
 
     return TestClient(app)
 
@@ -283,62 +276,6 @@ def test_tma_chat_id_dependency_rejects_invalid_launch_token(
     assert response.status_code == 401
     assert response.json() == {
         "detail": "TMA launch token is invalid.",
-    }
-
-
-def test_matching_chat_id_dependency_returns_authorized_chat_id(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    patch_validated_init_data(
-        monkeypatch,
-        make_init_data(
-            user={"id": 123},
-            chat=None,
-            chat_type="group",
-            start_param=make_launch_token(
-                chat_id=100,
-                chat_type="group",
-                chat_title="Home",
-            ),
-        ),
-    )
-
-    response = client.get(
-        "/api/chats/100/protected",
-        headers={TMA_INIT_DATA_HEADER: "test-init-data"},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"chat_id": 100}
-
-
-def test_matching_chat_id_dependency_rejects_different_chat_id(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    patch_validated_init_data(
-        monkeypatch,
-        make_init_data(
-            user={"id": 123},
-            chat=None,
-            chat_type="group",
-            start_param=make_launch_token(
-                chat_id=200,
-                chat_type="group",
-                chat_title="Home",
-            ),
-        ),
-    )
-
-    response = client.get(
-        "/api/chats/100/protected",
-        headers={TMA_INIT_DATA_HEADER: "test-init-data"},
-    )
-
-    assert response.status_code == 403
-    assert response.json() == {
-        "detail": "Telegram init data chat_id does not match requested chat_id.",
     }
 
 

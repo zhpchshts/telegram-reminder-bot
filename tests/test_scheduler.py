@@ -152,8 +152,6 @@ def test_schedule_once_reminder_adds_date_job(monkeypatch) -> None:
     schedule_reminder(
         bot=FakeBot(),
         reminder_id=1,
-        chat_id=100,
-        reminder_text="Тест once",
         schedule_type="once",
         start_at=start_at,
     )
@@ -187,8 +185,6 @@ def test_schedule_reminder_does_not_replace_higher_revision_job(monkeypatch) -> 
     schedule_reminder(
         bot=FakeBot(),
         reminder_id=1,
-        chat_id=100,
-        reminder_text="Устаревшая ревизия",
         schedule_type="once",
         start_at=datetime(2026, 6, 8, 12, 12),
         reminder_revision=2,
@@ -206,8 +202,6 @@ def test_schedule_every_days_reminder_adds_interval_job(monkeypatch) -> None:
     schedule_reminder(
         bot=FakeBot(),
         reminder_id=2,
-        chat_id=100,
-        reminder_text="Тест every days",
         schedule_type="every_days",
         start_at=start_at,
         interval_days=3,
@@ -456,8 +450,6 @@ def test_schedule_every_week_reminder_adds_interval_job(monkeypatch) -> None:
     schedule_reminder(
         bot=FakeBot(),
         reminder_id=3,
-        chat_id=100,
-        reminder_text="Тест every week",
         schedule_type="every_week",
         start_at=start_at,
         interval_weeks=2,
@@ -480,8 +472,6 @@ def test_schedule_monthly_weekday_reminder_adds_cron_job(monkeypatch) -> None:
     schedule_reminder(
         bot=FakeBot(),
         reminder_id=4,
-        chat_id=100,
-        reminder_text="Тест monthly",
         schedule_type="monthly_weekday",
         start_at=start_at,
         month_week_number=1,
@@ -506,8 +496,6 @@ def test_schedule_monthly_weekday_requires_month_week_number_and_day() -> None:
         schedule_reminder(
             bot=FakeBot(),
             reminder_id=5,
-            chat_id=100,
-            reminder_text="Тест monthly invalid",
             schedule_type="monthly_weekday",
             start_at=datetime(2026, 6, 1, 12, 12),
         )
@@ -518,8 +506,6 @@ def test_schedule_unknown_type_raises_error() -> None:
         schedule_reminder(
             bot=FakeBot(),
             reminder_id=6,
-            chat_id=100,
-            reminder_text="Тест unknown",
             schedule_type="unknown",
             start_at=datetime(2026, 6, 1, 12, 12),
         )
@@ -2388,8 +2374,6 @@ def test_schedule_monthly_day_reminder_adds_cron_job(monkeypatch) -> None:
     schedule_reminder(
         bot=FakeBot(),
         reminder_id=7,
-        chat_id=100,
-        reminder_text="Тест monthly day",
         schedule_type="monthly_day",
         start_at=start_at,
         month_day=11,
@@ -2414,8 +2398,6 @@ def test_schedule_last_month_day_reminder_adds_cron_job(monkeypatch) -> None:
     schedule_reminder(
         bot=FakeBot(),
         reminder_id=7,
-        chat_id=100,
-        reminder_text="Закрыть месяц",
         schedule_type="monthly_day",
         start_at=start_at,
         month_day=0,

@@ -149,16 +149,6 @@ async def prepare_bot_runtime(runtime: BotRuntime) -> None:
     runtime.api_app.state.reminders_restored = True
 
 
-async def run_polling_runtime() -> None:
-    configure_application_logging()
-    runtime = create_bot_runtime()
-    try:
-        await prepare_bot_runtime(runtime)
-        await runtime.dispatcher.start_polling(runtime.bot)
-    finally:
-        await shutdown_runtime(runtime)
-
-
 async def stop_polling_best_effort(
     dispatcher: Dispatcher,
     *,

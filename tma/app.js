@@ -793,6 +793,7 @@ function isTelegramSessionError(error) {
 }
 
 function isTelegramLaunchContextError(error) {
+  // Launch links are chat-bound and intentionally shared between Telegram users.
   return error?.status === 403;
 }
 

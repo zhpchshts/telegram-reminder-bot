@@ -2,7 +2,10 @@
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
     <title>Незабудка · Напоминания</title>
     <script>
       try {
@@ -111,7 +114,12 @@
         <section id="form-status" class="status" aria-live="polite" hidden></section>
 
         <section class="card form-card">
-          <form id="reminder-form" class="form">
+          <form id="reminder-form" class="form" aria-busy="false">
+          <fieldset
+            id="reminder-form-fields"
+            class="form-fieldset"
+            aria-label="Параметры напоминания"
+          >
           <input id="reminder-id" type="hidden" />
           <input id="timezone-name" name="timezone_name" type="hidden" />
 
@@ -136,11 +144,12 @@
               rows="3"
               placeholder="Например: заказать воду"
               aria-label="Текст напоминания"
-              aria-describedby="reminder-text-hint"
+              aria-describedby="reminder-text-hint reminder-text-error"
               required
             ></textarea>
 
             <span id="reminder-text-hint" class="field-hint" hidden></span>
+            <span id="reminder-text-error" class="field-error" hidden></span>
           </label>
 
           <div class="form-section">
@@ -366,7 +375,14 @@
             </label>
           </div>
 
-          <section id="preview" class="preview" hidden></section>
+          <section
+            id="preview"
+            class="preview"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            hidden
+          ></section>
 
           <div class="actions form-actions">
             <button id="preview-button" class="secondary-button" type="button">
@@ -384,6 +400,7 @@
               Отменить
             </button>
           </div>
+          </fieldset>
           </form>
         </section>
       </section>

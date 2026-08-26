@@ -1,8 +1,4 @@
 from datetime import datetime
-import importlib.metadata
-
-import tzdata
-
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -39,6 +35,7 @@ from app.api_models import (
     ReminderFormOptionsResponse,
     ReminderPreviewResponse,
     ReminderResponse,
+    ReminderUpdateRequest,
     TmaBootstrapResponse,
     TmaContextResponse,
 )
@@ -64,17 +61,8 @@ class FakeTelegramInitData:
     start_param = "chat_100"
 
 
-def test_health_returns_status_and_active_chats_count(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(api_module, "count_active_chats", lambda: 3)
-
-    assert health() == {
-        "status": "ok",
-        "active_chats_count": 3,
-        "tzdata_package_version": importlib.metadata.version("tzdata"),
-        "tzdata_iana_version": tzdata.IANA_VERSION,
-    }
+def test_health_returns_minimal_public_status() -> None:
+    assert health() == {"status": "ok"}
 
 
 def test_configure_cors_skips_empty_origins() -> None:
@@ -593,6 +581,7 @@ def test_update_tma_reminder_returns_response(
         reminder_id: int,
         chat_id: int,
         data: ReminderCreateData,
+        expected_revision: int,
     ) -> ReminderReadData:
         captured_calls.append(
             {
@@ -600,6 +589,7 @@ def test_update_tma_reminder_returns_response(
                 "reminder_id": reminder_id,
                 "chat_id": chat_id,
                 "data": data,
+                "expected_revision": expected_revision,
             }
         )
         return ReminderReadData(
@@ -632,12 +622,13 @@ def test_update_tma_reminder_returns_response(
     result = update_tma_reminder(
         reminder_id=42,
         chat_id=100,
-        request=ReminderCreateRequest(
+        request=ReminderUpdateRequest(
             reminder_text="Обновлённое напоминание",
             schedule_type="every_days",
             start_at=datetime(2099, 6, 10, 12, 12),
             timezone_name="Asia/Yekaterinburg",
             interval_days=3,
+            expected_revision=1,
         ),
         bot=BOT,
     )
@@ -655,6 +646,7 @@ def test_update_tma_reminder_returns_response(
             "reminder_id": 42,
             "chat_id": 100,
             "data": expected_data,
+            "expected_revision": 1,
         }
     ]
     assert result == ReminderResponse(
@@ -744,11 +736,13 @@ def test_delete_tma_reminder_returns_response(
         *,
         reminder_id: int,
         chat_id: int,
+        expected_revision: int,
     ) -> bool:
         captured_calls.append(
             {
                 "reminder_id": reminder_id,
                 "chat_id": chat_id,
+                "expected_revision": expected_revision,
             }
         )
         return True
@@ -759,12 +753,17 @@ def test_delete_tma_reminder_returns_response(
         fake_delete_active_reminder_for_chat,
     )
 
-    result = delete_tma_reminder(chat_id=100, reminder_id=42)
+    result = delete_tma_reminder(
+        chat_id=100,
+        reminder_id=42,
+        expected_revision=1,
+    )
 
     assert captured_calls == [
         {
             "reminder_id": 42,
             "chat_id": 100,
+            "expected_revision": 1,
         }
     ]
     assert result == DeleteReminderResponse(
@@ -917,6 +916,7 @@ def test_update_chat_reminder_returns_response(
         reminder_id: int,
         chat_id: int,
         data: ReminderCreateData,
+        expected_revision: int,
     ) -> ReminderReadData:
         captured_calls.append(
             {
@@ -924,6 +924,7 @@ def test_update_chat_reminder_returns_response(
                 "reminder_id": reminder_id,
                 "chat_id": chat_id,
                 "data": data,
+                "expected_revision": expected_revision,
             }
         )
         return ReminderReadData(
@@ -956,12 +957,13 @@ def test_update_chat_reminder_returns_response(
     result = update_chat_reminder(
         reminder_id=42,
         authorized_chat_id=100,
-        request=ReminderCreateRequest(
+        request=ReminderUpdateRequest(
             reminder_text="Обновлённое напоминание",
             schedule_type="every_days",
             start_at=datetime(2099, 6, 10, 12, 12),
             timezone_name="Asia/Yekaterinburg",
             interval_days=3,
+            expected_revision=1,
         ),
         bot=BOT,
     )
@@ -979,6 +981,7 @@ def test_update_chat_reminder_returns_response(
             "reminder_id": 42,
             "chat_id": 100,
             "data": expected_data,
+            "expected_revision": 1,
         }
     ]
     assert result == ReminderResponse(
@@ -1147,11 +1150,13 @@ def test_delete_chat_reminder_returns_response(
         *,
         reminder_id: int,
         chat_id: int,
+        expected_revision: int,
     ) -> bool:
         captured_calls.append(
             {
                 "reminder_id": reminder_id,
                 "chat_id": chat_id,
+                "expected_revision": expected_revision,
             }
         )
         return True
@@ -1162,12 +1167,17 @@ def test_delete_chat_reminder_returns_response(
         fake_delete_active_reminder_for_chat,
     )
 
-    result = delete_chat_reminder(authorized_chat_id=100, reminder_id=42)
+    result = delete_chat_reminder(
+        authorized_chat_id=100,
+        reminder_id=42,
+        expected_revision=1,
+    )
 
     assert captured_calls == [
         {
             "reminder_id": 42,
             "chat_id": 100,
+            "expected_revision": 1,
         }
     ]
     assert result == DeleteReminderResponse(
@@ -1184,9 +1194,11 @@ def test_delete_chat_reminder_rejects_unknown_reminder(
         *,
         reminder_id: int,
         chat_id: int,
+        expected_revision: int,
     ) -> bool:
         assert reminder_id == 42
         assert chat_id == 100
+        assert expected_revision == 1
         return False
 
     monkeypatch.setattr(
@@ -1196,7 +1208,11 @@ def test_delete_chat_reminder_rejects_unknown_reminder(
     )
 
     with pytest.raises(HTTPException) as error:
-        delete_chat_reminder(authorized_chat_id=100, reminder_id=42)
+        delete_chat_reminder(
+            authorized_chat_id=100,
+            reminder_id=42,
+            expected_revision=1,
+        )
 
     assert error.value.status_code == 404
     assert error.value.detail == "Reminder not found."
@@ -1232,6 +1248,7 @@ def test_api_registers_initial_routes() -> None:
     route_paths = {route.path for route in app.routes}
 
     assert "/health" in route_paths
+    assert "/ready" in route_paths
     assert "/api/chats/{chat_id}/reminders" in route_paths
     assert "/api/chats/{chat_id}/timezone" in route_paths
     assert "/api/chats/{chat_id}/reminders/{reminder_id}" in route_paths
@@ -1279,6 +1296,7 @@ def test_update_tma_repeating_reminder_allows_past_unchanged_start_at(
         reminder_id: int,
         chat_id: int,
         data: ReminderCreateData,
+        expected_revision: int,
     ) -> ReminderReadData:
         captured_data.append(data)
         return ReminderReadData(
@@ -1307,12 +1325,13 @@ def test_update_tma_repeating_reminder_allows_past_unchanged_start_at(
     result = update_tma_reminder(
         reminder_id=42,
         chat_id=100,
-        request=ReminderCreateRequest(
+        request=ReminderUpdateRequest(
             reminder_text="Обновлённое напоминание",
             schedule_type="every_days",
             start_at=datetime(2000, 6, 10, 12, 12),
             timezone_name="Asia/Yekaterinburg",
             interval_days=7,
+            expected_revision=1,
         ),
         bot=BOT,
     )

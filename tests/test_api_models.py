@@ -10,9 +10,11 @@ from app.api_models import (
     DeleteReminderResponse,
     ReminderCreateRequest,
     ReminderFormOptionsResponse,
+    ReminderPreviewRequest,
     ReminderPreviewResponse,
     ReminderResponse,
     ReminderScheduleTypeOption,
+    ReminderUpdateRequest,
     TmaBootstrapResponse,
     TmaContextResponse,
     WeekdayOption,
@@ -26,6 +28,7 @@ from app.api_models import (
     build_tma_context_response,
     normalize_start_at,
 )
+from app.constants import SQLITE_INT64_MAX
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
 TEST_DELIVERY_TRACKING_STARTED_AT = datetime(2026, 7, 1, tzinfo=UTC)
@@ -114,6 +117,23 @@ def test_reminder_create_request_defaults_auto_delete_to_false() -> None:
     assert request.delete_after_two_days is False
 
 
+@pytest.mark.parametrize(
+    "request_model",
+    [ReminderUpdateRequest, ReminderPreviewRequest],
+)
+def test_reminder_mutation_request_rejects_revision_above_sqlite_int64(
+    request_model,
+) -> None:
+    with pytest.raises(ValidationError):
+        request_model(
+            reminder_text="Проверить релиз",
+            schedule_type="once",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            expected_revision=SQLITE_INT64_MAX + 1,
+        )
+
+
 @pytest.mark.parametrize("invalid_value", [0, 1, "true", "false"])
 def test_reminder_create_request_requires_strict_boolean(
     invalid_value: object,
@@ -122,6 +142,53 @@ def test_reminder_create_request_requires_strict_boolean(
         ReminderCreateRequest(
             reminder_text="Проверить релиз",
             delete_after_two_days=invalid_value,
+            schedule_type="once",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("interval_days", "3"),
+        ("interval_weeks", 5_201),
+        ("day_of_week", "FUNDAY"),
+        ("schedule_type", "daily"),
+        ("reminder_kind", "command"),
+    ],
+)
+def test_reminder_create_request_rejects_invalid_contract_values(
+    field_name: str,
+    invalid_value: object,
+) -> None:
+    values = {
+        "reminder_text": "Проверить релиз",
+        "schedule_type": "once",
+        "start_at": datetime(2099, 6, 10, 12, 12),
+        "timezone_name": "Asia/Yekaterinburg",
+        field_name: invalid_value,
+    }
+
+    with pytest.raises(ValidationError):
+        ReminderCreateRequest(**values)
+
+
+def test_reminder_create_request_rejects_extra_fields() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ReminderCreateRequest(
+            reminder_text="Проверить релиз",
+            schedule_type="once",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            chat_id=999,
+        )
+
+
+def test_reminder_create_request_rejects_oversized_text() -> None:
+    with pytest.raises(ValidationError, match="at most 3900 characters"):
+        ReminderCreateRequest(
+            reminder_text="x" * 3901,
             schedule_type="once",
             start_at=datetime(2099, 6, 10, 12, 12),
             timezone_name="Asia/Yekaterinburg",
@@ -280,6 +347,10 @@ def test_build_reminder_form_options_response() -> None:
             CompletionRepeatIntervalOption(value=1440, label="24 часа"),
         ],
         completion_reminder_text_max_length=3900,
+        reminder_text_max_length=3900,
+        weather_reminder_text_max_length=600,
+        weather_location_max_length=100,
+        weather_location_max_count=5,
     )
 
 

@@ -63,6 +63,14 @@ VALID_COMPLETION_REPEAT_INTERVALS = {
 }
 TELEGRAM_MESSAGE_MAX_LENGTH = 4096
 COMPLETION_REMINDER_TEXT_MAX_LENGTH = 3900
+REMINDER_TEXT_MAX_LENGTH = 3900
+WEATHER_REMINDER_TEXT_MAX_LENGTH = 600
+WEATHER_LOCATION_MAX_LENGTH = 100
+MAX_WEATHER_LOCATIONS = 5
+MAX_INTERVAL_DAYS = 36_500
+MAX_INTERVAL_WEEKS = 5_200
+MAX_ACTIVE_REMINDERS_PER_CHAT = 200
+SQLITE_INT64_MAX = (1 << 63) - 1
 COMPLETION_MESSAGE_SUFFIX = "\n\n✅ Выполнено"
 
 WEEKDAY_NAMES_RU_PLURAL = {
@@ -142,6 +150,9 @@ SCHEMA_MIGRATIONS = {
     "revision": "revision INTEGER NOT NULL DEFAULT 1",
     "delivery_tracking_started_at_utc": "delivery_tracking_started_at_utc TEXT",
     "last_handled_scheduled_for_utc": "last_handled_scheduled_for_utc TEXT",
+    "client_request_id": "client_request_id TEXT",
+    "client_request_hash": "client_request_hash TEXT",
+    "client_request_status": "client_request_status TEXT",
 }
 
 WEEKDAY_HELP = "MON, TUE, WED, THU, FRI, SAT, SUN"

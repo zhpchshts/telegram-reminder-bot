@@ -4,6 +4,12 @@ services:
     image: telegram-reminder-bot:latest
     container_name: telegram-reminder-bot
     restart: unless-stopped
+    stop_grace_period: 2m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     env_file:
       - .env
     environment:
@@ -12,6 +18,21 @@ services:
       API_PORT: 8000
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3).read()
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10m
     volumes:
-      - ./reminders.db:/data/reminders.db
-      - ./tma:/app/tma:ro
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false

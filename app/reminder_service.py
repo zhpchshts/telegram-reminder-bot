@@ -1,5 +1,8 @@
-import logging
+from dataclasses import asdict
 from datetime import datetime, timezone
+from hashlib import sha256
+import json
+import logging
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
@@ -8,17 +11,29 @@ from app.config import APP_TIMEZONE_NAME
 from app.constants import (
     COMPLETION_REMINDER_TEXT_MAX_LENGTH,
     LAST_DAY_OF_MONTH,
+    MAX_INTERVAL_DAYS,
+    MAX_INTERVAL_WEEKS,
     REMINDER_KIND_TEXT,
+    REMINDER_KIND_WEATHER,
+    REMINDER_TEXT_MAX_LENGTH,
     VALID_COMPLETION_REPEAT_INTERVALS,
     VALID_REMINDER_KINDS,
     VALID_WEEKDAYS,
+    WEATHER_REMINDER_TEXT_MAX_LENGTH,
 )
 from app.database import (
+    ActiveReminderLimitError as DatabaseActiveReminderLimitError,
+    ReminderIdempotencyConflictError as DatabaseReminderIdempotencyConflictError,
+    clear_reminder_idempotency_key,
     create_reminder_in_db,
+    create_reminder_idempotently_in_db,
     delete_active_reminder_for_chat_in_db,
     get_active_reminder_for_chat as get_active_reminder_from_db_for_chat,
     get_active_reminders_for_chat,
     get_chat_timezone,
+    get_reminder_idempotency_record,
+    mark_reminder_idempotency_succeeded,
+    mark_reminder_as_deleted,
     set_chat_timezone,
     update_reminder_in_db,
 )
@@ -30,17 +45,31 @@ from app.formatting import (
 from app.reminder_mapping import build_reminder_read_data
 from app.reminder_models import ReminderCreateData, ReminderReadData
 from app.scheduler import (
+    build_reminder_trigger,
     format_next_run_line,
+    get_reminder_mutation_lock,
     get_next_run_at,
     scheduler,
     schedule_reminder,
+    schedule_reminder_data,
 )
+from app.weather_service import parse_weather_locations
 
 
 LOGGER = logging.getLogger(__name__)
+ActiveReminderLimitError = DatabaseActiveReminderLimitError
+ReminderIdempotencyConflictError = DatabaseReminderIdempotencyConflictError
 
 
 class ReminderSchedulingError(RuntimeError):
+    pass
+
+
+class ReminderRevisionConflictError(RuntimeError):
+    pass
+
+
+class ReminderIdempotencyPendingError(RuntimeError):
     pass
 
 
@@ -51,7 +80,7 @@ def get_chat_timezone_name(chat_id: int) -> str:
 def set_chat_timezone_for_chat(*, chat_id: int, timezone_name: str) -> bool:
     try:
         ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
         return False
 
     set_chat_timezone(
@@ -76,9 +105,16 @@ def get_active_reminder_for_chat(
     return build_reminder_read_data(reminder)
 
 
-def validate_positive_int(value: int | None, field_name: str) -> None:
+def validate_positive_int(
+    value: int | None,
+    field_name: str,
+    *,
+    maximum: int,
+) -> None:
     if value is None or value < 1:
         raise ValueError(f"{field_name} must be greater than or equal to 1.")
+    if value > maximum:
+        raise ValueError(f"{field_name} must be less than or equal to {maximum}.")
 
 
 def validate_day_of_week(day_of_week: str | None) -> None:
@@ -96,6 +132,22 @@ def validate_reminder_create_data(data: ReminderCreateData) -> None:
     if not data.reminder_text.strip():
         raise ValueError("reminder_text is required.")
 
+    if (
+        not data.requires_completion
+        and len(data.reminder_text) > REMINDER_TEXT_MAX_LENGTH
+    ):
+        raise ValueError(
+            f"reminder_text must not exceed {REMINDER_TEXT_MAX_LENGTH} characters."
+        )
+
+    if data.reminder_kind == REMINDER_KIND_WEATHER:
+        if len(data.reminder_text) > WEATHER_REMINDER_TEXT_MAX_LENGTH:
+            raise ValueError(
+                "weather reminder locations must not exceed "
+                f"{WEATHER_REMINDER_TEXT_MAX_LENGTH} characters."
+            )
+        parse_weather_locations(data.reminder_text)
+
     if data.requires_completion:
         if data.reminder_kind != REMINDER_KIND_TEXT:
             raise ValueError("Completion is supported only for text reminders.")
@@ -108,11 +160,19 @@ def validate_reminder_create_data(data: ReminderCreateData) -> None:
         return
 
     if data.schedule_type == "every_days":
-        validate_positive_int(data.interval_days, "interval_days")
+        validate_positive_int(
+            data.interval_days,
+            "interval_days",
+            maximum=MAX_INTERVAL_DAYS,
+        )
         return
 
     if data.schedule_type == "every_week":
-        validate_positive_int(data.interval_weeks, "interval_weeks")
+        validate_positive_int(
+            data.interval_weeks,
+            "interval_weeks",
+            maximum=MAX_INTERVAL_WEEKS,
+        )
         validate_day_of_week(data.day_of_week)
         return
 
@@ -159,42 +219,138 @@ def sort_reminders_by_next_run(
     return sorted(reminders, key=get_reminder_next_run_sort_key)
 
 
+def build_reminder_idempotency_hash(data: ReminderCreateData) -> str:
+    request_payload = asdict(data)
+    request_payload["start_at"] = data.start_at.isoformat()
+    return sha256(
+        json.dumps(
+            request_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def synchronize_updated_reminder_job(
+    *,
+    bot: Bot,
+    reminder_id: int,
+    chat_id: int,
+    scheduled_revision: int,
+) -> ReminderReadData | None:
+    for _attempt in range(3):
+        current_reminder = get_active_reminder_for_chat(
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+        )
+        if current_reminder is None:
+            job = scheduler.get_job(str(reminder_id))
+            if job is not None:
+                scheduler.remove_job(str(reminder_id))
+            return None
+
+        current_revision = getattr(
+            current_reminder,
+            "revision",
+            scheduled_revision,
+        )
+        if current_revision == scheduled_revision:
+            return current_reminder
+
+        schedule_reminder_data(bot, current_reminder)
+        scheduled_revision = current_revision
+
+    LOGGER.warning(
+        "Reminder job reconciliation reached retry limit: reminder_id=%s chat_id=%s",
+        reminder_id,
+        chat_id,
+    )
+    return get_active_reminder_for_chat(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+    )
+
+
+def resolve_reminder_idempotency_record(
+    *,
+    record: dict[str, object],
+    idempotency_key: str,
+) -> int:
+    reminder_id = int(record["id"])
+    request_status = record.get("client_request_status")
+    if request_status == "succeeded":
+        return reminder_id
+
+    if record.get("reminder_status") != "active":
+        clear_reminder_idempotency_key(reminder_id)
+        raise ReminderIdempotencyPendingError(
+            "Предыдущая попытка создания не завершилась. Повторите запрос."
+        )
+
+    expected_job_name = f"reminder-revision:{int(record['revision'])}"
+    current_job = scheduler.get_job(str(reminder_id))
+    if (
+        current_job is not None
+        and getattr(current_job, "name", None) == expected_job_name
+    ):
+        try:
+            mark_reminder_idempotency_succeeded(
+                reminder_id=reminder_id,
+                client_request_id=idempotency_key,
+            )
+        except Exception:
+            LOGGER.exception(
+                "Could not recover idempotency state: reminder_id=%s",
+                reminder_id,
+            )
+        return reminder_id
+
+    raise ReminderIdempotencyPendingError(
+        "Создание напоминания ещё выполняется. Повторите запрос чуть позже."
+    )
+
+
 def create_scheduled_reminder(
     *,
     bot: Bot,
     chat_id: int,
     data: ReminderCreateData,
+    idempotency_key: str | None = None,
 ) -> int:
     validate_reminder_create_data(data)
 
-    reminder_id = create_reminder_in_db(
-        chat_id=chat_id,
-        reminder_text=data.reminder_text,
-        reminder_kind=data.reminder_kind,
-        delete_after_two_days=data.delete_after_two_days,
-        requires_completion=data.requires_completion,
-        repeat_interval_minutes=(
-            data.repeat_interval_minutes if data.requires_completion else None
-        ),
-        schedule_type=data.schedule_type,
-        start_at=data.start_at,
-        interval_days=data.interval_days,
-        interval_weeks=data.interval_weeks,
-        day_of_week=data.day_of_week,
-        month_week_number=data.month_week_number,
-        month_day=data.month_day,
-        timezone=data.timezone_name,
-    )
+    request_hash: str | None = None
+    if idempotency_key is not None:
+        request_hash = build_reminder_idempotency_hash(data)
+        idempotency_record = get_reminder_idempotency_record(
+            chat_id=chat_id,
+            client_request_id=idempotency_key,
+            client_request_hash=request_hash,
+        )
+        if idempotency_record is not None:
+            replayed_reminder_id = resolve_reminder_idempotency_record(
+                record=idempotency_record,
+                idempotency_key=idempotency_key,
+            )
+            LOGGER.info(
+                "Idempotent reminder creation replayed: reminder_id=%s chat_id=%s",
+                replayed_reminder_id,
+                chat_id,
+            )
+            return replayed_reminder_id
 
-    schedule_reminder(
-        bot=bot,
-        reminder_id=reminder_id,
-        chat_id=chat_id,
-        reminder_text=data.reminder_text,
-        reminder_kind=data.reminder_kind,
-        delete_after_two_days=data.delete_after_two_days,
-        requires_completion=data.requires_completion,
-        repeat_interval_minutes=data.repeat_interval_minutes,
+        reminder_timezone = ZoneInfo(data.timezone_name)
+        start_at = data.start_at
+        if start_at.tzinfo is None:
+            start_at = start_at.replace(tzinfo=reminder_timezone)
+        if start_at <= datetime.now(reminder_timezone):
+            raise ValueError("start_at must be in the future.")
+
+    # Constructing the trigger can fail for an invalid timezone or an interval
+    # that cannot be represented by APScheduler. Validate it before persisting
+    # an active reminder so a rejected request cannot leave a zombie row.
+    build_reminder_trigger(
         schedule_type=data.schedule_type,
         start_at=data.start_at,
         interval_days=data.interval_days,
@@ -204,52 +360,52 @@ def create_scheduled_reminder(
         month_day=data.month_day,
         timezone_name=data.timezone_name,
     )
-    return reminder_id
 
-
-def update_active_reminder_for_chat(
-    *,
-    bot: Bot,
-    reminder_id: int,
-    chat_id: int,
-    data: ReminderCreateData,
-) -> ReminderReadData | None:
-    validate_reminder_create_data(data)
-
-    reminder = get_active_reminder_for_chat(
-        reminder_id=reminder_id,
-        chat_id=chat_id,
-    )
-    if not reminder:
-        return None
-
-    is_updated = update_reminder_in_db(
-        reminder_id=reminder_id,
-        chat_id=chat_id,
-        reminder_text=data.reminder_text,
-        reminder_kind=data.reminder_kind,
-        delete_after_two_days=data.delete_after_two_days,
-        requires_completion=data.requires_completion,
-        repeat_interval_minutes=(
+    create_kwargs = {
+        "chat_id": chat_id,
+        "reminder_text": data.reminder_text,
+        "reminder_kind": data.reminder_kind,
+        "delete_after_two_days": data.delete_after_two_days,
+        "requires_completion": data.requires_completion,
+        "repeat_interval_minutes": (
             data.repeat_interval_minutes if data.requires_completion else None
         ),
-        schedule_type=data.schedule_type,
-        start_at=data.start_at,
-        interval_days=data.interval_days,
-        interval_weeks=data.interval_weeks,
-        day_of_week=data.day_of_week,
-        month_week_number=data.month_week_number,
-        month_day=data.month_day,
-        timezone=data.timezone_name,
-    )
-    if not is_updated:
-        return None
+        "schedule_type": data.schedule_type,
+        "start_at": data.start_at,
+        "interval_days": data.interval_days,
+        "interval_weeks": data.interval_weeks,
+        "day_of_week": data.day_of_week,
+        "month_week_number": data.month_week_number,
+        "month_day": data.month_day,
+        "timezone": data.timezone_name,
+    }
+    if idempotency_key is None:
+        reminder_id = create_reminder_in_db(**create_kwargs)
+        was_created = True
+    else:
+        assert request_hash is not None
+        reminder_id, was_created, request_status = create_reminder_idempotently_in_db(
+            **create_kwargs,
+            client_request_id=idempotency_key,
+            client_request_hash=request_hash,
+        )
 
-    LOGGER.info(
-        "Reminder updated and live completion occurrences cancelled: reminder_id=%s chat_id=%s",
-        reminder_id,
-        chat_id,
-    )
+    if not was_created:
+        replayed_reminder_id = resolve_reminder_idempotency_record(
+            record={
+                "id": reminder_id,
+                "client_request_status": request_status,
+                "reminder_status": "active",
+                "revision": 1,
+            },
+            idempotency_key=idempotency_key,
+        )
+        LOGGER.info(
+            "Idempotent reminder creation replayed: reminder_id=%s chat_id=%s",
+            replayed_reminder_id,
+            chat_id,
+        )
+        return replayed_reminder_id
 
     try:
         schedule_reminder(
@@ -272,6 +428,148 @@ def update_active_reminder_for_chat(
         )
     except Exception as error:
         LOGGER.exception(
+            "Reminder scheduling failed after database insert: reminder_id=%s chat_id=%s",
+            reminder_id,
+            chat_id,
+        )
+        try:
+            mark_reminder_as_deleted(reminder_id)
+            clear_reminder_idempotency_key(reminder_id)
+        except Exception:
+            LOGGER.exception(
+                "Could not deactivate reminder after scheduling failure: reminder_id=%s",
+                reminder_id,
+            )
+        raise ReminderSchedulingError("Reminder could not be scheduled.") from error
+
+    if idempotency_key is not None:
+        try:
+            mark_reminder_idempotency_succeeded(
+                reminder_id=reminder_id,
+                client_request_id=idempotency_key,
+            )
+        except Exception:
+            LOGGER.exception(
+                "Could not persist successful idempotency state: reminder_id=%s",
+                reminder_id,
+            )
+    return reminder_id
+
+
+def update_active_reminder_for_chat(
+    *,
+    bot: Bot,
+    reminder_id: int,
+    chat_id: int,
+    data: ReminderCreateData,
+    expected_revision: int | None = None,
+) -> ReminderReadData | None:
+    with get_reminder_mutation_lock(reminder_id):
+        return _update_active_reminder_for_chat(
+            bot=bot,
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+            data=data,
+            expected_revision=expected_revision,
+        )
+
+
+def _update_active_reminder_for_chat(
+    *,
+    bot: Bot,
+    reminder_id: int,
+    chat_id: int,
+    data: ReminderCreateData,
+    expected_revision: int | None = None,
+) -> ReminderReadData | None:
+    validate_reminder_create_data(data)
+
+    build_reminder_trigger(
+        schedule_type=data.schedule_type,
+        start_at=data.start_at,
+        interval_days=data.interval_days,
+        interval_weeks=data.interval_weeks,
+        day_of_week=data.day_of_week,
+        month_week_number=data.month_week_number,
+        month_day=data.month_day,
+        timezone_name=data.timezone_name,
+    )
+
+    reminder = get_active_reminder_for_chat(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+    )
+    if not reminder:
+        return None
+    if expected_revision is not None and reminder.revision != expected_revision:
+        raise ReminderRevisionConflictError("Reminder was changed by another client.")
+
+    is_updated = update_reminder_in_db(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+        reminder_text=data.reminder_text,
+        reminder_kind=data.reminder_kind,
+        delete_after_two_days=data.delete_after_two_days,
+        requires_completion=data.requires_completion,
+        repeat_interval_minutes=(
+            data.repeat_interval_minutes if data.requires_completion else None
+        ),
+        schedule_type=data.schedule_type,
+        start_at=data.start_at,
+        interval_days=data.interval_days,
+        interval_weeks=data.interval_weeks,
+        day_of_week=data.day_of_week,
+        month_week_number=data.month_week_number,
+        month_day=data.month_day,
+        timezone=data.timezone_name,
+        expected_revision=expected_revision,
+    )
+    if not is_updated:
+        current_reminder = get_active_reminder_for_chat(
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+        )
+        if current_reminder is not None and expected_revision is not None:
+            raise ReminderRevisionConflictError(
+                "Reminder was changed by another client."
+            )
+        return None
+
+    LOGGER.info(
+        "Reminder updated and live completion occurrences cancelled: reminder_id=%s chat_id=%s",
+        reminder_id,
+        chat_id,
+    )
+
+    scheduled_revision = getattr(reminder, "revision", 0) + 1
+    try:
+        schedule_reminder(
+            bot=bot,
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+            reminder_text=data.reminder_text,
+            reminder_kind=data.reminder_kind,
+            delete_after_two_days=data.delete_after_two_days,
+            requires_completion=data.requires_completion,
+            repeat_interval_minutes=data.repeat_interval_minutes,
+            schedule_type=data.schedule_type,
+            start_at=data.start_at,
+            interval_days=data.interval_days,
+            interval_weeks=data.interval_weeks,
+            day_of_week=data.day_of_week,
+            month_week_number=data.month_week_number,
+            month_day=data.month_day,
+            timezone_name=data.timezone_name,
+            reminder_revision=scheduled_revision,
+        )
+        updated_reminder = synchronize_updated_reminder_job(
+            bot=bot,
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+            scheduled_revision=scheduled_revision,
+        )
+    except Exception as error:
+        LOGGER.exception(
             "Reminder %s was updated in the database, but rescheduling failed.",
             reminder_id,
         )
@@ -279,10 +577,6 @@ def update_active_reminder_for_chat(
             "Reminder was updated in the database, but rescheduling failed."
         ) from error
 
-    updated_reminder = get_active_reminder_for_chat(
-        reminder_id=reminder_id,
-        chat_id=chat_id,
-    )
     if not updated_reminder:
         return None
 
@@ -336,8 +630,40 @@ def build_created_reminder_text(
     return "\n".join(answer_lines)
 
 
-def delete_active_reminder_for_chat(reminder_id: int, chat_id: int) -> bool:
-    if not delete_active_reminder_for_chat_in_db(reminder_id, chat_id):
+def delete_active_reminder_for_chat(
+    reminder_id: int,
+    chat_id: int,
+    *,
+    expected_revision: int | None = None,
+) -> bool:
+    with get_reminder_mutation_lock(reminder_id):
+        return _delete_active_reminder_for_chat(
+            reminder_id,
+            chat_id,
+            expected_revision=expected_revision,
+        )
+
+
+def _delete_active_reminder_for_chat(
+    reminder_id: int,
+    chat_id: int,
+    *,
+    expected_revision: int | None = None,
+) -> bool:
+    if not delete_active_reminder_for_chat_in_db(
+        reminder_id,
+        chat_id,
+        expected_revision=expected_revision,
+    ):
+        if expected_revision is not None:
+            current_reminder = get_active_reminder_for_chat(
+                reminder_id=reminder_id,
+                chat_id=chat_id,
+            )
+            if current_reminder is not None:
+                raise ReminderRevisionConflictError(
+                    "Reminder was changed by another client."
+                )
         return False
 
     LOGGER.info(

@@ -1,10 +1,12 @@
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import html
 import json
 import logging
+import math
 import re
 import sqlite3
 import time
@@ -17,16 +19,17 @@ from app.database import (
     get_cached_weather_location,
     save_cached_weather_location,
 )
+from app.constants import MAX_WEATHER_LOCATIONS, WEATHER_LOCATION_MAX_LENGTH
 
 
 GEOCODING_API_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_API_URL = "https://api.open-meteo.com/v1/forecast"
 
-MAX_WEATHER_LOCATIONS = 5
 OPEN_METEO_ATTRIBUTION = "Источник: Open-Meteo"
 WEATHER_REQUEST_TIMEOUT_SECONDS = 4
 WEATHER_REQUEST_ATTEMPTS = 3
 WEATHER_REQUEST_RETRY_DELAYS_SECONDS = (1, 2)
+WEATHER_RETRY_AFTER_MAX_SECONDS = 30
 
 LOGGER = logging.getLogger(__name__)
 WEATHER_DAY_PARTS = (
@@ -102,9 +105,29 @@ WEATHER_CODE_EMOJIS = {
 class WeatherServiceError(Exception):
     """Raised when weather data cannot be loaded or parsed."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+
 
 class RetryableWeatherRequestError(Exception):
     """Raised when a weather request can be retried."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 def parse_weather_locations(raw_locations: str) -> list[str]:
@@ -118,6 +141,12 @@ def parse_weather_locations(raw_locations: str) -> list[str]:
     seen_locations = set()
 
     for location in locations:
+        if len(location) > WEATHER_LOCATION_MAX_LENGTH:
+            raise ValueError(
+                "Название населённого пункта не должно быть длиннее "
+                f"{WEATHER_LOCATION_MAX_LENGTH} символов."
+            )
+
         normalized_location = location.casefold()
         if normalized_location in seen_locations:
             continue
@@ -144,7 +173,9 @@ def build_weather_report(
     request_attempts: int = WEATHER_REQUEST_ATTEMPTS,
 ) -> str:
     locations = parse_weather_locations(raw_locations)
-    location_blocks = []
+    location_blocks: list[str] = []
+    location_errors: list[WeatherServiceError] = []
+    successful_locations = 0
 
     for location_name in locations:
         try:
@@ -163,13 +194,35 @@ def build_weather_report(
                     target_time_utc=target_time_utc,
                 )
             )
+            successful_locations += 1
         except WeatherServiceError as error:
             if raise_on_error:
                 raise
 
+            location_errors.append(error)
             location_blocks.append(
                 f"⚠️ <b>{escape_html(location_name)}</b>\n{escape_html(str(error))}"
             )
+
+    if (
+        successful_locations == 0
+        and location_errors
+        and all(error.retryable for error in location_errors)
+    ):
+        retry_after_values = [
+            error.retry_after_seconds
+            for error in location_errors
+            if error.retry_after_seconds is not None
+        ]
+        raise WeatherServiceError(
+            "Не удалось получить прогноз ни для одного населённого пункта.",
+            retryable=True,
+            retry_after_seconds=(
+                min(max(retry_after_values), WEATHER_RETRY_AFTER_MAX_SECONDS)
+                if retry_after_values
+                else None
+            ),
+        )
 
     return "\n\n".join(
         [
@@ -205,20 +258,55 @@ def find_location(
     )
     results = payload.get("results")
 
-    if not isinstance(results, list) or not results:
+    if not isinstance(results, list):
+        raise WeatherServiceError(
+            "Не смог прочитать данные населённого пункта.",
+            retryable=True,
+        )
+
+    if not results:
         raise WeatherServiceError("Не нашёл населённый пункт.")
 
     location = results[0]
 
     if not isinstance(location, dict):
-        raise WeatherServiceError("Не смог прочитать данные населённого пункта.")
+        raise WeatherServiceError(
+            "Не смог прочитать данные населённого пункта.",
+            retryable=True,
+        )
 
-    if location.get("latitude") is None or location.get("longitude") is None:
-        raise WeatherServiceError("Не нашёл координаты населённого пункта.")
+    location = normalize_location_coordinates(location)
 
     save_cached_weather_location_best_effort(location_key, location)
 
     return location
+
+
+def normalize_location_coordinates(location: dict[str, Any]) -> dict[str, Any]:
+    try:
+        latitude = as_location_coordinate(location.get("latitude"), limit=90)
+        longitude = as_location_coordinate(location.get("longitude"), limit=180)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise WeatherServiceError(
+            "Не смог прочитать координаты населённого пункта.",
+            retryable=True,
+        ) from error
+
+    normalized_location = dict(location)
+    normalized_location["latitude"] = latitude
+    normalized_location["longitude"] = longitude
+    return normalized_location
+
+
+def as_location_coordinate(value: object, *, limit: float) -> float:
+    if value is None or isinstance(value, bool):
+        raise ValueError("location coordinate is missing")
+
+    coordinate = float(value)
+    if not math.isfinite(coordinate) or not -limit <= coordinate <= limit:
+        raise ValueError("location coordinate is outside its valid range")
+
+    return coordinate
 
 
 def get_cached_weather_location_best_effort(
@@ -311,27 +399,40 @@ def fetch_json(
             )
 
             if not retrying:
+                retry_after_seconds = (
+                    error.retry_after_seconds
+                    if isinstance(error, RetryableWeatherRequestError)
+                    else None
+                )
                 if is_timeout_error(error):
                     raise WeatherServiceError(
-                        "Погодный сервис не ответил вовремя."
+                        "Погодный сервис не ответил вовремя.",
+                        retryable=True,
+                        retry_after_seconds=retry_after_seconds,
                     ) from error
 
                 raise WeatherServiceError(
-                    "Погодный сервис временно недоступен."
+                    "Погодный сервис временно недоступен.",
+                    retryable=True,
+                    retry_after_seconds=retry_after_seconds,
                 ) from error
 
-            time.sleep(WEATHER_REQUEST_RETRY_DELAYS_SECONDS[attempt - 1])
+            time.sleep(get_weather_request_retry_delay(error, attempt))
             continue
 
         try:
             payload = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise WeatherServiceError(
-                "Погодный сервис вернул некорректный ответ."
+                "Погодный сервис вернул некорректный ответ.",
+                retryable=True,
             ) from error
 
         if not isinstance(payload, dict):
-            raise WeatherServiceError("Погодный сервис вернул некорректный ответ.")
+            raise WeatherServiceError(
+                "Погодный сервис вернул некорректный ответ.",
+                retryable=True,
+            )
 
         return payload
 
@@ -349,6 +450,13 @@ def fetch_response_body(url: str, timeout_seconds: float) -> bytes:
             status_code = response.status
 
             if status_code != 200:
+                if status_code == 429:
+                    raise RetryableWeatherRequestError(
+                        "HTTP status 429",
+                        retry_after_seconds=parse_retry_after_seconds(
+                            getattr(response, "headers", None)
+                        ),
+                    )
                 if status_code is not None and 500 <= status_code < 600:
                     raise RetryableWeatherRequestError(f"HTTP status {status_code}")
 
@@ -356,10 +464,64 @@ def fetch_response_body(url: str, timeout_seconds: float) -> bytes:
 
             return response.read()
     except urllib.error.HTTPError as error:
+        if error.code == 429:
+            raise RetryableWeatherRequestError(
+                "HTTP status 429",
+                retry_after_seconds=parse_retry_after_seconds(error.headers),
+            ) from error
         if 500 <= error.code < 600:
             raise RetryableWeatherRequestError(f"HTTP status {error.code}") from error
 
         raise WeatherServiceError("Погодный сервис временно недоступен.") from error
+
+
+def parse_retry_after_seconds(headers: object) -> int | None:
+    get_header = getattr(headers, "get", None)
+    if not callable(get_header):
+        return None
+
+    raw_value = get_header("Retry-After")
+    if raw_value is None:
+        return None
+
+    try:
+        delay_seconds = float(raw_value)
+    except (TypeError, ValueError):
+        try:
+            retry_at = parsedate_to_datetime(str(raw_value))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+        if retry_at.tzinfo is None or retry_at.utcoffset() is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        delay_seconds = (
+            retry_at.astimezone(timezone.utc) - datetime.now(timezone.utc)
+        ).total_seconds()
+
+    if not math.isfinite(delay_seconds):
+        return None
+
+    return min(
+        max(math.ceil(delay_seconds), 1),
+        WEATHER_RETRY_AFTER_MAX_SECONDS,
+    )
+
+
+def get_weather_request_retry_delay(error: Exception, attempt: int) -> int:
+    if (
+        isinstance(error, RetryableWeatherRequestError)
+        and error.retry_after_seconds is not None
+    ):
+        return min(
+            max(error.retry_after_seconds, 1),
+            WEATHER_RETRY_AFTER_MAX_SECONDS,
+        )
+
+    retry_delay_index = min(
+        attempt - 1,
+        len(WEATHER_REQUEST_RETRY_DELAYS_SECONDS) - 1,
+    )
+    return WEATHER_REQUEST_RETRY_DELAYS_SECONDS[retry_delay_index]
 
 
 def normalize_location_key(location_name: str) -> str:
@@ -445,17 +607,14 @@ def format_location_forecast(
             daily_forecast_index,
         )
     )
-    daily_weather_code = value_at(
-        daily.get("weather_code"),
-        daily_forecast_index,
-    )
-    daily_weather = format_weather_code(daily_weather_code)
-    weather_emoji = format_weather_emoji(daily_weather_code)
+    current_weather_code = current.get("weather_code")
+    current_weather = format_weather_code(current_weather_code)
+    weather_emoji = format_weather_emoji(current_weather_code)
 
     return "\n".join(
         [
             f"{weather_emoji} <b>{format_location_name(location)}</b>",
-            f"Сейчас {current_temperature}, {daily_weather}. "
+            f"Сейчас {current_temperature}, {current_weather}. "
             f"{daily_temperature_label.capitalize()} до {max_temperature}.",
             format_precipitation_line(hourly, current_time),
         ]
@@ -465,7 +624,10 @@ def format_location_forecast(
 def get_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     value = payload.get(key)
     if not isinstance(value, dict):
-        raise WeatherServiceError("Не смог прочитать прогноз погоды.")
+        raise WeatherServiceError(
+            "Не смог прочитать прогноз погоды.",
+            retryable=True,
+        )
     return value
 
 
@@ -500,14 +662,29 @@ def escape_html(value: object) -> str:
 def format_temperature(value: object) -> str:
     if value is None:
         return "—"
-    return f"{round(float(value))}°"
+
+    try:
+        temperature = float(value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise WeatherServiceError(
+            "Не смог прочитать температуру в прогнозе.",
+            retryable=True,
+        ) from error
+
+    if not math.isfinite(temperature):
+        raise WeatherServiceError(
+            "Не смог прочитать температуру в прогнозе.",
+            retryable=True,
+        )
+
+    return f"{round(temperature)}°"
 
 
 def format_weather_code(value: object) -> str:
-    if value is None:
+    weather_code = parse_weather_code(value)
+    if weather_code is None:
         return "погода неизвестна"
 
-    weather_code = int(value)
     return WEATHER_CODE_DESCRIPTIONS.get(weather_code, "погода неизвестна")
 
 
@@ -519,21 +696,45 @@ def format_weather_sentence(value: object) -> str:
 
 
 def format_weather_emoji(value: object) -> str:
-    if value is None:
+    weather_code = parse_weather_code(value)
+    if weather_code is None:
         return "🌡"
 
-    weather_code = int(value)
     return WEATHER_CODE_EMOJIS.get(weather_code, "🌡")
+
+
+def parse_weather_code(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise WeatherServiceError(
+            "Не смог прочитать код погоды в прогнозе.",
+            retryable=True,
+        )
+
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise WeatherServiceError(
+            "Не смог прочитать код погоды в прогнозе.",
+            retryable=True,
+        ) from error
 
 
 def parse_forecast_datetime(value: object) -> datetime:
     if not isinstance(value, str):
-        raise WeatherServiceError("Не смог прочитать время прогноза.")
+        raise WeatherServiceError(
+            "Не смог прочитать время прогноза.",
+            retryable=True,
+        )
 
     try:
         return datetime.fromisoformat(value)
     except ValueError as error:
-        raise WeatherServiceError("Не смог прочитать время прогноза.") from error
+        raise WeatherServiceError(
+            "Не смог прочитать время прогноза.",
+            retryable=True,
+        ) from error
 
 
 def get_forecast_reference_time(
@@ -550,12 +751,18 @@ def get_forecast_reference_time(
 
     timezone_name = forecast.get("timezone")
     if not isinstance(timezone_name, str) or not timezone_name:
-        raise WeatherServiceError("Не смог прочитать часовой пояс прогноза.")
+        raise WeatherServiceError(
+            "Не смог прочитать часовой пояс прогноза.",
+            retryable=True,
+        )
 
     try:
         location_timezone = ZoneInfo(timezone_name)
     except (ZoneInfoNotFoundError, ValueError) as error:
-        raise WeatherServiceError("Не смог прочитать часовой пояс прогноза.") from error
+        raise WeatherServiceError(
+            "Не смог прочитать часовой пояс прогноза.",
+            retryable=True,
+        ) from error
 
     return target_time_utc.astimezone(location_timezone).replace(tzinfo=None)
 
@@ -566,14 +773,20 @@ def get_daily_forecast_index(
 ) -> int:
     raw_dates = daily.get("time")
     if not isinstance(raw_dates, list):
-        return 0
+        raise WeatherServiceError(
+            "Не смог найти прогноз на нужную дату.",
+            retryable=True,
+        )
 
     reference_date = reference_time.date().isoformat()
     for index, raw_date in enumerate(raw_dates):
         if raw_date == reference_date:
             return index
 
-    return 0
+    raise WeatherServiceError(
+        "Не смог найти прогноз на нужную дату.",
+        retryable=True,
+    )
 
 
 def format_daily_temperature_label(
@@ -651,9 +864,15 @@ def get_period_precipitation_probability(
     raw_probabilities = hourly.get("precipitation_probability")
 
     if not isinstance(raw_times, list) or not isinstance(raw_probabilities, list):
-        raise WeatherServiceError("Не смог прочитать почасовой прогноз осадков.")
+        raise WeatherServiceError(
+            "Не смог прочитать почасовой прогноз осадков.",
+            retryable=True,
+        )
     if len(raw_times) != len(raw_probabilities):
-        raise WeatherServiceError("Не смог прочитать почасовой прогноз осадков.")
+        raise WeatherServiceError(
+            "Не смог прочитать почасовой прогноз осадков.",
+            retryable=True,
+        )
 
     first_relevant_time = max(
         period_start,
@@ -688,8 +907,17 @@ def as_float(value: object) -> float | None:
         return None
 
     try:
-        return float(value)
-    except (TypeError, ValueError) as error:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as error:
         raise WeatherServiceError(
-            "Не смог прочитать почасовой прогноз осадков."
+            "Не смог прочитать почасовой прогноз осадков.",
+            retryable=True,
         ) from error
+
+    if not math.isfinite(number):
+        raise WeatherServiceError(
+            "Не смог прочитать почасовой прогноз осадков.",
+            retryable=True,
+        )
+
+    return number

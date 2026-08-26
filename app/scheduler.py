@@ -1,8 +1,12 @@
 import asyncio
+from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 import logging
 import sqlite3
+from threading import RLock
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
@@ -35,20 +39,31 @@ from app.constants import (
     REMINDER_KIND_WEATHER,
 )
 from app.database import (
+    cancel_reminder_delivery_occurrence,
+    claim_reminder_delivery_occurrence,
     count_active_chats,
     delete_reminder_message_deletion,
+    delete_terminal_reminder_delivery_occurrences,
     delete_expired_prepared_weather_reports,
+    delete_expired_weather_location_cache,
     delete_prepared_weather_report,
     enqueue_reminder_message_deletion,
+    fail_reminder_delivery_occurrence,
+    finalize_reminder_delivery_occurrence,
     get_active_reminder_from_db,
     get_all_active_reminders,
+    get_due_reminder_delivery_occurrences,
     get_due_reminder_message_deletions,
     get_prepared_weather_report,
+    get_reminder_from_db,
     get_reminder_occurrence_handling_state,
     mark_reminder_as_missed,
     mark_reminder_occurrence_handled,
+    refresh_reminder_delivery_claim,
+    reschedule_reminder_delivery_occurrence,
     reschedule_reminder_message_deletion,
     save_prepared_weather_report,
+    WEATHER_LOCATION_CACHE_RETENTION,
 )
 from app.formatting import format_datetime_ru
 from app.reminder_mapping import build_reminder_read_data, parse_utc_datetime
@@ -62,6 +77,7 @@ LOGGER = logging.getLogger(__name__)
 WEATHER_PREFETCH_WINDOW = timedelta(minutes=5)
 WEATHER_REPORT_CACHE_RETENTION = timedelta(minutes=10)
 WEATHER_REPORT_CACHE_LOOKUP_GRACE = timedelta(minutes=1)
+WEATHER_LOCATION_CACHE_CLEANUP_BATCH_SIZE = 1000
 WEATHER_CATCHUP_MAX_AGE = timedelta(hours=6)
 LATE_REMINDER_NOTICE_THRESHOLD = timedelta(minutes=5)
 REMINDER_OCCURRENCE_SEARCH_LIMIT = 100_000
@@ -75,7 +91,76 @@ DELIVERY_OUTCOME_SENT = "sent"
 DELIVERY_OUTCOME_SENT_UNRECORDED = "sent_unrecorded"
 DELIVERY_OUTCOME_STALE_WEATHER_SKIPPED = "stale_weather_skipped"
 DELIVERY_OUTCOME_STALE_WEATHER_UNRECORDED = "stale_weather_unrecorded"
+DELIVERY_OUTCOME_RETRY_SCHEDULED = "retry_scheduled"
+DELIVERY_OUTCOME_FAILED = "failed"
 REMINDER_RESTORE_CATCHUP_LIMIT = 100
+REMINDER_DELIVERY_CLAIM_TIMEOUT = timedelta(minutes=2)
+REMINDER_DELIVERY_CLAIM_HEARTBEAT_SECONDS = 30
+REMINDER_DELIVERY_RETRY_DELAY = timedelta(minutes=1)
+REMINDER_DELIVERY_MAX_ATTEMPTS = 10
+REMINDER_DELIVERY_BATCH_SIZE = 100
+REMINDER_DELIVERY_ERROR_MAX_LENGTH = 1000
+REMINDER_DELIVERY_RETENTION = timedelta(days=7)
+REMINDER_DELIVERY_RETENTION_CLEANUP_BATCH_SIZE = 1000
+REMINDER_JOB_MISFIRE_GRACE_TIME_SECONDS = int(WEATHER_CATCHUP_MAX_AGE.total_seconds())
+REMINDER_WORKER_MISFIRE_GRACE_TIME_SECONDS = 60
+REMINDER_JOB_NAME_PREFIX = "reminder-revision:"
+REQUIRED_SCHEDULER_JOB_IDS = frozenset(
+    {
+        "weather-report-prefetch",
+        "reminder-message-deletion-cleanup",
+        "reminder-delivery-worker",
+        "reminder-delivery-retention-cleanup",
+        "completion-occurrence-repeat-worker",
+    }
+)
+REMINDER_MUTATION_LOCK_STRIPES = 64
+_REMINDER_MUTATION_LOCKS = tuple(
+    RLock() for _index in range(REMINDER_MUTATION_LOCK_STRIPES)
+)
+DeliveryClaimGuard = Callable[[], Awaitable[None]]
+CURRENT_DELIVERY_CLAIM_GUARD: ContextVar[DeliveryClaimGuard | None] = ContextVar(
+    "current_delivery_claim_guard",
+    default=None,
+)
+
+
+class ReminderDeliveryClaimLostError(RuntimeError):
+    pass
+
+
+def get_reminder_mutation_lock(reminder_id: int):
+    # The canonical runtime is a single process. Fixed stripes serialize DB and
+    # scheduler mutations without an ever-growing per-reminder lock map.
+    return _REMINDER_MUTATION_LOCKS[reminder_id % REMINDER_MUTATION_LOCK_STRIPES]
+
+
+def get_scheduled_reminder_revision(job: object | None) -> int | None:
+    job_name = getattr(job, "name", None)
+    if not isinstance(job_name, str) or not job_name.startswith(
+        REMINDER_JOB_NAME_PREFIX
+    ):
+        return None
+
+    try:
+        revision = int(job_name.removeprefix(REMINDER_JOB_NAME_PREFIX))
+    except ValueError:
+        return None
+    return revision if revision >= 1 else None
+
+
+def get_missing_required_scheduler_job_ids(
+    runtime_scheduler: object,
+) -> tuple[str, ...]:
+    get_job = getattr(runtime_scheduler, "get_job", None)
+    if not callable(get_job):
+        return tuple(sorted(REQUIRED_SCHEDULER_JOB_IDS))
+
+    return tuple(
+        sorted(
+            job_id for job_id in REQUIRED_SCHEDULER_JOB_IDS if get_job(job_id) is None
+        )
+    )
 
 
 def ensure_timezone_aware(
@@ -166,6 +251,8 @@ def build_reminder_message(reminder_text: str, reminder_kind: str) -> str:
     except ValueError as error:
         return f"Не смог подготовить прогноз погоды.\n{error}"
     except WeatherServiceError as error:
+        if error.retryable:
+            raise
         return f"Не смог получить прогноз погоды.\n{error}"
 
 
@@ -175,6 +262,9 @@ async def prefetch_weather_reports() -> None:
     await delete_expired_prepared_weather_reports_best_effort(
         now - WEATHER_REPORT_CACHE_RETENTION
     )
+    await delete_expired_weather_location_cache_best_effort(
+        now - WEATHER_LOCATION_CACHE_RETENTION
+    )
 
     try:
         active_reminders = await asyncio.to_thread(get_all_active_reminders)
@@ -182,8 +272,13 @@ async def prefetch_weather_reports() -> None:
         LOGGER.exception("Could not load reminders for weather report prefetch.")
         return
 
+    candidates: list[tuple[datetime, ReminderReadData]] = []
     for reminder in active_reminders:
-        reminder_data = build_reminder_read_data(reminder)
+        try:
+            reminder_data = build_reminder_read_data(reminder)
+        except (KeyError, TypeError, ValueError):
+            LOGGER.exception("Could not map reminder for weather report prefetch.")
+            continue
 
         if reminder_data.reminder_kind != REMINDER_KIND_WEATHER:
             continue
@@ -198,8 +293,21 @@ async def prefetch_weather_reports() -> None:
         if not now <= scheduled_for <= now + WEATHER_PREFETCH_WINDOW:
             continue
 
+        candidates.append((scheduled_for, reminder_data))
+
+    candidates.sort(key=lambda item: (item[0], item[1].id))
+
+    for scheduled_for, reminder_data in candidates:
+        if datetime.now(timezone.utc) >= scheduled_for:
+            LOGGER.warning(
+                "Weather report prefetch skipped after due time: reminder_id=%s",
+                reminder_data.id,
+            )
+            continue
+
         prepared_report = await get_prepared_weather_report_best_effort(
             reminder_data.id,
+            reminder_data.revision,
             reminder_data.reminder_text,
             scheduled_for - timedelta(seconds=1),
             scheduled_for + timedelta(seconds=1),
@@ -228,8 +336,16 @@ async def prefetch_weather_reports() -> None:
             )
             continue
 
+        if datetime.now(timezone.utc) >= scheduled_for:
+            LOGGER.warning(
+                "Weather report prefetch finished after due time: reminder_id=%s",
+                reminder_data.id,
+            )
+            continue
+
         await save_prepared_weather_report_best_effort(
             reminder_data.id,
+            reminder_data.revision,
             scheduled_for,
             reminder_data.reminder_text,
             report_html,
@@ -242,10 +358,13 @@ async def send_reminder_message(
     reminder_text: str,
     reminder_kind: str,
     reminder_id: int,
+    reminder_revision: int,
     *,
     use_prepared_weather_report: bool = True,
     message_prefix: str = "",
 ) -> Message:
+    claim_guard = CURRENT_DELIVERY_CLAIM_GUARD.get()
+
     if reminder_kind == REMINDER_KIND_WEATHER:
         now = datetime.now(timezone.utc)
         prepared_report = None
@@ -253,6 +372,7 @@ async def send_reminder_message(
         if use_prepared_weather_report:
             prepared_report = await get_prepared_weather_report_best_effort(
                 reminder_id,
+                reminder_revision,
                 reminder_text,
                 now - WEATHER_REPORT_CACHE_LOOKUP_GRACE,
                 now + WEATHER_REPORT_CACHE_LOOKUP_GRACE,
@@ -267,6 +387,8 @@ async def send_reminder_message(
         else:
             message = prepared_report["report_html"]
 
+        if claim_guard is not None:
+            await claim_guard()
         sent_message = await bot.send_message(
             chat_id=chat_id,
             text=f"{message_prefix}{message}",
@@ -276,6 +398,7 @@ async def send_reminder_message(
         if prepared_report is not None:
             await delete_prepared_weather_report_best_effort(
                 reminder_id,
+                reminder_revision,
                 prepared_report["scheduled_for_utc"],
             )
 
@@ -283,6 +406,8 @@ async def send_reminder_message(
 
     message = build_reminder_message(reminder_text, reminder_kind)
 
+    if claim_guard is not None:
+        await claim_guard()
     return await bot.send_message(
         chat_id=chat_id,
         text=f"{message_prefix}{message}",
@@ -301,8 +426,22 @@ async def delete_expired_prepared_weather_reports_best_effort(
         LOGGER.exception("Could not delete expired prepared weather reports.")
 
 
+async def delete_expired_weather_location_cache_best_effort(
+    expired_before: datetime,
+) -> None:
+    try:
+        await asyncio.to_thread(
+            delete_expired_weather_location_cache,
+            expired_before=expired_before,
+            limit=WEATHER_LOCATION_CACHE_CLEANUP_BATCH_SIZE,
+        )
+    except sqlite3.Error:
+        LOGGER.exception("Could not delete expired weather location cache entries.")
+
+
 async def get_prepared_weather_report_best_effort(
     reminder_id: int,
+    reminder_revision: int,
     reminder_text: str,
     earliest_scheduled_for: datetime,
     latest_scheduled_for: datetime,
@@ -311,6 +450,7 @@ async def get_prepared_weather_report_best_effort(
         return await asyncio.to_thread(
             get_prepared_weather_report,
             reminder_id,
+            reminder_revision,
             reminder_text,
             earliest_scheduled_for,
             latest_scheduled_for,
@@ -325,6 +465,7 @@ async def get_prepared_weather_report_best_effort(
 
 async def save_prepared_weather_report_best_effort(
     reminder_id: int,
+    reminder_revision: int,
     scheduled_for: datetime,
     reminder_text: str,
     report_html: str,
@@ -333,6 +474,7 @@ async def save_prepared_weather_report_best_effort(
         await asyncio.to_thread(
             save_prepared_weather_report,
             reminder_id,
+            reminder_revision,
             scheduled_for,
             reminder_text,
             report_html,
@@ -346,12 +488,14 @@ async def save_prepared_weather_report_best_effort(
 
 async def delete_prepared_weather_report_best_effort(
     reminder_id: int,
+    reminder_revision: int,
     scheduled_for_utc: str,
 ) -> None:
     try:
         await asyncio.to_thread(
             delete_prepared_weather_report,
             reminder_id,
+            reminder_revision,
             scheduled_for_utc,
         )
     except sqlite3.Error:
@@ -380,7 +524,22 @@ async def enqueue_sent_reminder_message_for_deletion(
         return
 
     sent_at = get_message_sent_at_utc(message)
-    delete_at = sent_at + MESSAGE_DELETION_DELAY
+    await enqueue_reminder_message_deletion_best_effort(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+        message=message,
+        delete_at=sent_at + MESSAGE_DELETION_DELAY,
+    )
+
+
+async def enqueue_reminder_message_deletion_best_effort(
+    *,
+    reminder_id: int,
+    chat_id: int,
+    message: Message,
+    delete_at: datetime,
+) -> None:
+    sent_at = get_message_sent_at_utc(message)
 
     for attempt in range(1, MESSAGE_DELETION_ENQUEUE_ATTEMPTS + 1):
         try:
@@ -421,6 +580,48 @@ async def enqueue_sent_reminder_message_for_deletion(
             await asyncio.sleep(MESSAGE_DELETION_ENQUEUE_RETRY_DELAY_SECONDS * attempt)
 
 
+async def delete_stale_sent_reminder_message(
+    *,
+    bot: Bot,
+    reminder_id: int,
+    chat_id: int,
+    message: Message,
+) -> None:
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+        return
+    except TelegramAPIError as error:
+        if is_message_not_found_error(error):
+            return
+        LOGGER.warning(
+            (
+                "Could not delete a stale reminder message immediately; "
+                "queueing it: reminder_id=%s chat_id=%s message_id=%s error=%s"
+            ),
+            reminder_id,
+            chat_id,
+            message.message_id,
+            error,
+        )
+    except Exception:
+        LOGGER.exception(
+            (
+                "Could not delete a stale reminder message immediately; "
+                "queueing it: reminder_id=%s chat_id=%s message_id=%s"
+            ),
+            reminder_id,
+            chat_id,
+            message.message_id,
+        )
+
+    await enqueue_reminder_message_deletion_best_effort(
+        reminder_id=reminder_id,
+        chat_id=chat_id,
+        message=message,
+        delete_at=datetime.now(timezone.utc),
+    )
+
+
 def build_late_reminder_notice(
     reminder: ReminderReadData,
     scheduled_for_utc: datetime,
@@ -438,6 +639,7 @@ async def deliver_reminder_occurrence(
     scheduled_for_utc: datetime,
     *,
     is_catchup: bool,
+    expected_revision: int | None = None,
 ) -> str:
     scheduled_for = ensure_timezone_aware(scheduled_for_utc).astimezone(timezone.utc)
     now = datetime.now(timezone.utc)
@@ -449,11 +651,14 @@ async def deliver_reminder_occurrence(
         and occurrence_age > WEATHER_CATCHUP_MAX_AGE
     ):
         final_status = "missed" if reminder.schedule_type == "once" else None
+        mark_kwargs: dict[str, object] = {"final_status": final_status}
+        if expected_revision is not None:
+            mark_kwargs["expected_revision"] = expected_revision
         handled = await asyncio.to_thread(
             mark_reminder_occurrence_handled,
             reminder.id,
             scheduled_for,
-            final_status=final_status,
+            **mark_kwargs,
         )
         if not handled:
             handling_state = await get_occurrence_handling_state_for_log(
@@ -509,21 +714,19 @@ async def deliver_reminder_occurrence(
         reminder_text=reminder.reminder_text,
         reminder_kind=reminder.reminder_kind,
         reminder_id=reminder.id,
+        reminder_revision=reminder.revision,
         use_prepared_weather_report=not is_catchup,
         message_prefix=message_prefix,
     )
-    await enqueue_sent_reminder_message_for_deletion(
-        reminder_id=reminder.id,
-        chat_id=reminder.chat_id,
-        message=sent_message,
-        delete_after_two_days=reminder.delete_after_two_days,
-    )
     final_status = "sent" if reminder.schedule_type == "once" else None
+    mark_kwargs = {"final_status": final_status}
+    if expected_revision is not None:
+        mark_kwargs["expected_revision"] = expected_revision
     handled = await asyncio.to_thread(
         mark_reminder_occurrence_handled,
         reminder.id,
         scheduled_for,
-        final_status=final_status,
+        **mark_kwargs,
     )
     if not handled:
         handling_state = await get_occurrence_handling_state_for_log(
@@ -539,9 +742,264 @@ async def deliver_reminder_occurrence(
             scheduled_for.isoformat(timespec="seconds"),
             handling_state,
         )
+        await delete_stale_sent_reminder_message(
+            bot=bot,
+            reminder_id=reminder.id,
+            chat_id=reminder.chat_id,
+            message=sent_message,
+        )
         return DELIVERY_OUTCOME_SENT_UNRECORDED
 
+    await enqueue_sent_reminder_message_for_deletion(
+        reminder_id=reminder.id,
+        chat_id=reminder.chat_id,
+        message=sent_message,
+        delete_after_two_days=reminder.delete_after_two_days,
+    )
     return DELIVERY_OUTCOME_SENT
+
+
+def is_terminal_reminder_delivery_error(error: Exception) -> bool:
+    return isinstance(
+        error,
+        (
+            TelegramBadRequest,
+            TelegramForbiddenError,
+            TelegramNotFound,
+            TelegramUnauthorizedError,
+        ),
+    ) and not isinstance(error, TelegramRetryAfter)
+
+
+def get_reminder_delivery_retry_delay(error: Exception) -> timedelta:
+    if isinstance(error, TelegramRetryAfter):
+        return timedelta(seconds=max(int(error.retry_after), 1))
+    if isinstance(error, WeatherServiceError) and error.retry_after_seconds is not None:
+        return timedelta(seconds=max(error.retry_after_seconds, 1))
+    return REMINDER_DELIVERY_RETRY_DELAY
+
+
+async def record_reminder_delivery_error(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    attempts: int,
+    error: Exception,
+) -> str:
+    last_error = f"{type(error).__name__}: {error}"[:REMINDER_DELIVERY_ERROR_MAX_LENGTH]
+    should_fail = (
+        is_terminal_reminder_delivery_error(error)
+        or attempts >= REMINDER_DELIVERY_MAX_ATTEMPTS
+    )
+
+    try:
+        if should_fail:
+            await asyncio.to_thread(
+                fail_reminder_delivery_occurrence,
+                occurrence_id=occurrence_id,
+                claim_token=claim_token,
+                last_error=last_error,
+            )
+            LOGGER.warning(
+                (
+                    "Reminder delivery stopped: occurrence_id=%s attempts=%s "
+                    "error_type=%s"
+                ),
+                occurrence_id,
+                attempts,
+                type(error).__name__,
+            )
+            return DELIVERY_OUTCOME_FAILED
+
+        next_attempt_at = datetime.now(timezone.utc) + (
+            get_reminder_delivery_retry_delay(error)
+        )
+        await asyncio.to_thread(
+            reschedule_reminder_delivery_occurrence,
+            occurrence_id=occurrence_id,
+            claim_token=claim_token,
+            next_attempt_at=next_attempt_at,
+            last_error=last_error,
+        )
+        LOGGER.warning(
+            (
+                "Reminder delivery rescheduled: occurrence_id=%s attempts=%s "
+                "error_type=%s next_attempt_at=%s"
+            ),
+            occurrence_id,
+            attempts,
+            type(error).__name__,
+            next_attempt_at.isoformat(timespec="seconds"),
+        )
+        return DELIVERY_OUTCOME_RETRY_SCHEDULED
+    except sqlite3.Error:
+        # The claim remains persisted. The maintenance worker will reclaim it
+        # after REMINDER_DELIVERY_CLAIM_TIMEOUT when SQLite is available again.
+        LOGGER.exception(
+            (
+                "Could not persist reminder delivery failure: occurrence_id=%s "
+                "attempts=%s error_type=%s"
+            ),
+            occurrence_id,
+            attempts,
+            type(error).__name__,
+        )
+        return DELIVERY_OUTCOME_RETRY_SCHEDULED
+
+
+async def deliver_persisted_reminder_occurrence(
+    bot: Bot,
+    reminder: ReminderReadData,
+    scheduled_for_utc: datetime,
+    *,
+    is_catchup: bool,
+    occurrence_id: int | None = None,
+    expected_revision: int | None = None,
+) -> str:
+    if reminder.requires_completion:
+        return await deliver_reminder_occurrence(
+            bot,
+            reminder,
+            scheduled_for_utc,
+            is_catchup=is_catchup,
+        )
+
+    now = datetime.now(timezone.utc)
+    claim_token = uuid4().hex
+    claim_revision = (
+        reminder.revision if expected_revision is None else expected_revision
+    )
+
+    try:
+        claim = await asyncio.to_thread(
+            claim_reminder_delivery_occurrence,
+            reminder_id=reminder.id,
+            expected_revision=claim_revision,
+            scheduled_for_utc=scheduled_for_utc,
+            claim_token=claim_token,
+            now=now,
+            stale_before=now - REMINDER_DELIVERY_CLAIM_TIMEOUT,
+            max_attempts=REMINDER_DELIVERY_MAX_ATTEMPTS,
+            occurrence_id=occurrence_id,
+        )
+    except sqlite3.Error:
+        LOGGER.exception(
+            (
+                "Could not claim reminder delivery: reminder_id=%s "
+                "revision=%s scheduled_for=%s"
+            ),
+            reminder.id,
+            claim_revision,
+            scheduled_for_utc.isoformat(timespec="seconds"),
+        )
+        return DELIVERY_OUTCOME_RETRY_SCHEDULED
+
+    claim_outcome = str(claim["outcome"])
+    if claim_outcome == "already_handled":
+        return DELIVERY_OUTCOME_SENT
+    if claim_outcome in {"retry_scheduled", "delivery_in_progress"}:
+        return DELIVERY_OUTCOME_RETRY_SCHEDULED
+    if claim_outcome == "attempts_exhausted":
+        return DELIVERY_OUTCOME_FAILED
+    if claim_outcome != "claimed":
+        return DELIVERY_OUTCOME_SENT_UNRECORDED
+
+    claimed_occurrence_id = int(claim["occurrence_id"])
+    attempts = int(claim["delivery_attempts"])
+
+    async def assert_claim_is_owned() -> None:
+        is_owned = await asyncio.to_thread(
+            refresh_reminder_delivery_claim,
+            occurrence_id=claimed_occurrence_id,
+            claim_token=claim_token,
+            now=datetime.now(timezone.utc),
+        )
+        if not is_owned:
+            raise ReminderDeliveryClaimLostError(
+                "Reminder delivery claim is no longer owned."
+            )
+
+    async def maintain_claim_heartbeat() -> None:
+        while True:
+            await asyncio.sleep(REMINDER_DELIVERY_CLAIM_HEARTBEAT_SECONDS)
+            try:
+                await assert_claim_is_owned()
+            except ReminderDeliveryClaimLostError:
+                LOGGER.warning(
+                    "Reminder delivery claim was lost: occurrence_id=%s",
+                    claimed_occurrence_id,
+                )
+                return
+            except sqlite3.Error:
+                LOGGER.warning(
+                    "Could not refresh reminder delivery claim: occurrence_id=%s",
+                    claimed_occurrence_id,
+                    exc_info=True,
+                )
+
+    heartbeat_task = asyncio.create_task(
+        maintain_claim_heartbeat(),
+        name=f"reminder-delivery-heartbeat-{claimed_occurrence_id}",
+    )
+    claim_guard_token = CURRENT_DELIVERY_CLAIM_GUARD.set(assert_claim_is_owned)
+
+    try:
+        # Telegram and SQLite cannot participate in one atomic transaction.
+        # A process crash after Telegram accepts the message but before the
+        # revision-CAS watermark is committed can therefore resend after claim
+        # recovery. This is deliberately at-least-once, not exactly-once.
+        outcome = await deliver_reminder_occurrence(
+            bot,
+            reminder,
+            scheduled_for_utc,
+            is_catchup=is_catchup,
+            expected_revision=claim_revision,
+        )
+    except ReminderDeliveryClaimLostError:
+        return DELIVERY_OUTCOME_RETRY_SCHEDULED
+    except Exception as error:
+        return await record_reminder_delivery_error(
+            occurrence_id=claimed_occurrence_id,
+            claim_token=claim_token,
+            attempts=attempts,
+            error=error,
+        )
+    finally:
+        CURRENT_DELIVERY_CLAIM_GUARD.reset(claim_guard_token)
+        heartbeat_task.cancel()
+        await asyncio.gather(heartbeat_task, return_exceptions=True)
+
+    if outcome in {
+        DELIVERY_OUTCOME_SENT,
+        DELIVERY_OUTCOME_STALE_WEATHER_SKIPPED,
+    }:
+        try:
+            await asyncio.to_thread(
+                finalize_reminder_delivery_occurrence,
+                occurrence_id=claimed_occurrence_id,
+                claim_token=claim_token,
+                outcome=("sent" if outcome == DELIVERY_OUTCOME_SENT else "skipped"),
+            )
+        except sqlite3.Error:
+            # The reminder watermark is already committed. A later reclaim
+            # observes it and repairs the occurrence without sending again.
+            LOGGER.exception(
+                "Could not finalize reminder delivery: occurrence_id=%s",
+                claimed_occurrence_id,
+            )
+        return outcome
+
+    try:
+        await asyncio.to_thread(
+            cancel_reminder_delivery_occurrence,
+            claimed_occurrence_id,
+        )
+    except sqlite3.Error:
+        LOGGER.exception(
+            "Could not cancel stale reminder delivery: occurrence_id=%s",
+            claimed_occurrence_id,
+        )
+    return outcome
 
 
 async def get_occurrence_handling_state_for_log(
@@ -583,12 +1041,83 @@ async def run_scheduled_reminder(bot: Bot, reminder_id: int) -> None:
     if scheduled_for is None:
         return
 
-    await deliver_reminder_occurrence(
+    await deliver_persisted_reminder_occurrence(
         bot,
         reminder,
         scheduled_for,
         is_catchup=False,
     )
+
+
+async def process_due_reminder_deliveries(bot: Bot) -> None:
+    now = datetime.now(timezone.utc)
+    try:
+        pending_occurrences = await asyncio.to_thread(
+            get_due_reminder_delivery_occurrences,
+            now=now,
+            stale_before=now - REMINDER_DELIVERY_CLAIM_TIMEOUT,
+            limit=REMINDER_DELIVERY_BATCH_SIZE,
+        )
+    except sqlite3.Error:
+        LOGGER.exception("Could not load due reminder deliveries.")
+        pending_occurrences = []
+
+    for occurrence in pending_occurrences:
+        occurrence_id = int(occurrence["id"])
+        reminder_id = int(occurrence["reminder_id"])
+        try:
+            reminder_row = await asyncio.to_thread(
+                get_reminder_from_db,
+                reminder_id,
+            )
+            if reminder_row is None:
+                await asyncio.to_thread(
+                    cancel_reminder_delivery_occurrence,
+                    occurrence_id,
+                )
+                continue
+            reminder = build_reminder_read_data(reminder_row)
+            await deliver_persisted_reminder_occurrence(
+                bot,
+                reminder,
+                parse_utc_datetime(str(occurrence["scheduled_for_utc"])),
+                is_catchup=True,
+                occurrence_id=occurrence_id,
+                expected_revision=int(occurrence["reminder_revision"]),
+            )
+        except Exception:
+            LOGGER.exception(
+                (
+                    "Reminder delivery worker item failed unexpectedly: "
+                    "occurrence_id=%s reminder_id=%s"
+                ),
+                occurrence_id,
+                reminder_id,
+            )
+
+    try:
+        active_rows = await asyncio.to_thread(get_all_active_reminders)
+    except sqlite3.Error:
+        LOGGER.exception("Could not load active reminders for reconciliation.")
+        return
+
+    for reminder_row in active_rows:
+        try:
+            reminder = build_reminder_read_data(reminder_row)
+            scheduled_for = get_latest_unhandled_run_at(reminder, now=now)
+            if scheduled_for is not None:
+                await deliver_persisted_reminder_occurrence(
+                    bot,
+                    reminder,
+                    scheduled_for,
+                    is_catchup=True,
+                )
+            reconcile_reminder_job(bot, reminder, now=now)
+        except Exception:
+            LOGGER.exception(
+                "Reminder reconciliation failed: reminder_id=%s",
+                get_restore_row_value(reminder_row, "id"),
+            )
 
 
 def is_message_not_found_error(error: TelegramAPIError) -> bool:
@@ -1066,13 +1595,16 @@ def schedule_reminder(
     month_day: int | None = None,
     timezone_name: str | None = None,
     next_run_time: datetime | None = None,
+    reminder_revision: int = 1,
 ) -> None:
     job_kwargs: dict[str, Any] = {
         "args": [bot, reminder_id],
         "id": str(reminder_id),
+        "name": f"{REMINDER_JOB_NAME_PREFIX}{reminder_revision}",
         "replace_existing": True,
         "max_instances": 1,
         "coalesce": True,
+        "misfire_grace_time": REMINDER_JOB_MISFIRE_GRACE_TIME_SECONDS,
     }
     if next_run_time is not None:
         job_kwargs["next_run_time"] = next_run_time
@@ -1086,11 +1618,25 @@ def schedule_reminder(
         month_day=month_day,
         timezone_name=timezone_name,
     )
-    scheduler.add_job(
-        run_scheduled_reminder,
-        **trigger_kwargs,
-        **job_kwargs,
-    )
+    with get_reminder_mutation_lock(reminder_id):
+        current_job = scheduler.get_job(str(reminder_id))
+        current_revision = get_scheduled_reminder_revision(current_job)
+        if current_revision is not None and current_revision > reminder_revision:
+            LOGGER.warning(
+                (
+                    "Skipped reminder job revision downgrade: reminder_id=%s "
+                    "requested_revision=%s job_revision=%s"
+                ),
+                reminder_id,
+                reminder_revision,
+                current_revision,
+            )
+            return
+        scheduler.add_job(
+            run_scheduled_reminder,
+            **trigger_kwargs,
+            **job_kwargs,
+        )
 
 
 def schedule_reminder_from_row(
@@ -1131,6 +1677,143 @@ def schedule_reminder_data(
         month_day=reminder.month_day,
         timezone_name=reminder.timezone_name,
         next_run_time=next_run_time,
+        reminder_revision=reminder.revision,
+    )
+
+
+def reconcile_reminder_job(
+    bot: Bot,
+    reminder: ReminderReadData,
+    *,
+    now: datetime,
+) -> bool:
+    reminder_id = reminder.id
+    with get_reminder_mutation_lock(reminder_id):
+        canonical_row = get_active_reminder_from_db(reminder_id)
+        current_job = scheduler.get_job(str(reminder_id))
+        if canonical_row is None:
+            if current_job is None:
+                return False
+            scheduler.remove_job(str(reminder_id))
+            LOGGER.info(
+                "Removed job for inactive reminder: reminder_id=%s previous_name=%s",
+                reminder_id,
+                getattr(current_job, "name", None),
+            )
+            return True
+
+        canonical_reminder = build_reminder_read_data(canonical_row)
+        current_job_revision = get_scheduled_reminder_revision(current_job)
+        if (
+            current_job_revision is not None
+            and current_job_revision > canonical_reminder.revision
+        ):
+            LOGGER.warning(
+                (
+                    "Skipped reminder job revision downgrade: reminder_id=%s "
+                    "database_revision=%s job_revision=%s"
+                ),
+                reminder_id,
+                canonical_reminder.revision,
+                current_job_revision,
+            )
+            return False
+
+        expected_name = f"{REMINDER_JOB_NAME_PREFIX}{canonical_reminder.revision}"
+        if (
+            current_job is not None
+            and getattr(current_job, "name", None) == expected_name
+        ):
+            return False
+
+        next_run_time = get_next_run_at_for_schedule(
+            schedule_type=canonical_reminder.schedule_type,
+            start_at=canonical_reminder.start_at,
+            interval_days=canonical_reminder.interval_days,
+            interval_weeks=canonical_reminder.interval_weeks,
+            day_of_week=canonical_reminder.day_of_week,
+            month_week_number=canonical_reminder.month_week_number,
+            month_day=canonical_reminder.month_day,
+            timezone_name=canonical_reminder.timezone_name,
+            now=now + timedelta(microseconds=1),
+        )
+        if next_run_time is None:
+            return False
+
+        schedule_reminder_data(
+            bot,
+            canonical_reminder,
+            next_run_time=next_run_time,
+        )
+        LOGGER.info(
+            (
+                "Reminder job reconciled: reminder_id=%s revision=%s "
+                "previous_name=%s next_run_time=%s"
+            ),
+            reminder_id,
+            canonical_reminder.revision,
+            getattr(current_job, "name", None),
+            next_run_time.isoformat(timespec="seconds"),
+        )
+        return True
+
+
+def schedule_reminder_delivery_worker(bot: Bot) -> None:
+    scheduler.add_job(
+        process_due_reminder_deliveries,
+        trigger="interval",
+        minutes=1,
+        args=[bot],
+        id="reminder-delivery-worker",
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=REMINDER_WORKER_MISFIRE_GRACE_TIME_SECONDS,
+    )
+
+
+async def cleanup_terminal_reminder_deliveries() -> None:
+    expired_before = datetime.now(timezone.utc) - REMINDER_DELIVERY_RETENTION
+    total_deleted = 0
+
+    while True:
+        try:
+            deleted_count = await asyncio.to_thread(
+                delete_terminal_reminder_delivery_occurrences,
+                expired_before=expired_before,
+                limit=REMINDER_DELIVERY_RETENTION_CLEANUP_BATCH_SIZE,
+            )
+        except sqlite3.Error:
+            LOGGER.exception("Could not clean up terminal reminder deliveries.")
+            break
+
+        total_deleted += deleted_count
+        if deleted_count < REMINDER_DELIVERY_RETENTION_CLEANUP_BATCH_SIZE:
+            break
+
+        # Each batch commits independently; yield before taking the next
+        # SQLite write lock so reminder delivery and API work can progress.
+        await asyncio.sleep(0)
+
+    if total_deleted:
+        LOGGER.info(
+            "Terminal reminder deliveries cleaned up: count=%s",
+            total_deleted,
+        )
+
+
+def schedule_reminder_delivery_retention_cleanup() -> None:
+    scheduler.add_job(
+        cleanup_terminal_reminder_deliveries,
+        trigger="interval",
+        hours=6,
+        id="reminder-delivery-retention-cleanup",
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=REMINDER_WORKER_MISFIRE_GRACE_TIME_SECONDS,
     )
 
 
@@ -1180,7 +1863,7 @@ async def deliver_restored_occurrence(
     scheduled_for: datetime,
 ) -> str:
     try:
-        return await deliver_reminder_occurrence(
+        return await deliver_persisted_reminder_occurrence(
             bot,
             reminder,
             scheduled_for,
@@ -1210,6 +1893,14 @@ async def restore_active_reminders(bot: Bot) -> None:
         (
             "message_deletion_cleanup_scheduling",
             lambda: schedule_reminder_message_deletion_cleanup(bot),
+        ),
+        (
+            "reminder_delivery_worker_scheduling",
+            lambda: schedule_reminder_delivery_worker(bot),
+        ),
+        (
+            "reminder_delivery_retention_cleanup_scheduling",
+            schedule_reminder_delivery_retention_cleanup,
         ),
     ):
         try:

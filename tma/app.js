@@ -14,6 +14,15 @@ const REMINDER_KIND_TEXT = "text";
 const REMINDER_KIND_WEATHER = "weather";
 const YEARLY_DATE_REFERENCE_YEAR = 2000;
 const LAST_DAY_OF_MONTH = 0;
+const API_REQUEST_TIMEOUT_MS = 20000;
+const DEFAULT_REMINDER_TEXT_MAX_LENGTH = 3900;
+const DEFAULT_WEATHER_REMINDER_TEXT_MAX_LENGTH = 600;
+const DEFAULT_WEATHER_LOCATION_MAX_LENGTH = 100;
+const DEFAULT_WEATHER_LOCATION_MAX_COUNT = 5;
+const DELETE_CONFIRMATION_EXCERPT_MAX_LENGTH = 240;
+const ACCESSIBLE_REMINDER_EXCERPT_MAX_LENGTH = 160;
+const EDIT_CONFLICT_RECOVERED_MESSAGE =
+  "Черновик сохранён, версия обновлена. Проверь предпросмотр и повтори сохранение.";
 
 const YEARLY_MONTHS = [
   { value: 1, label: "Январь" },
@@ -166,6 +175,8 @@ const state = {
   returnReminderId: null,
   returnFocusTarget: "create",
   openActionBlock: null,
+  editingReminderRevision: null,
+  pendingCreateRequest: null,
 };
 
 function byId(id) {
@@ -207,6 +218,7 @@ const elements = {
   themeToggleButton: byId("theme-toggle-button"),
   themeToggleLabel: byId("theme-toggle-label"),
   form: byId("reminder-form"),
+  formFieldset: byId("reminder-form-fields"),
   formTitle: byId("form-title"),
   reminderId: byId("reminder-id"),
   reminderKindControl: byId("reminder-kind-control"),
@@ -215,6 +227,7 @@ const elements = {
   reminderKind: byId("reminder-kind"),
   reminderTextLabel: byId("reminder-text-label"),
   reminderTextHint: byId("reminder-text-hint"),
+  reminderTextError: byId("reminder-text-error"),
   reminderText: byId("reminder-text"),
   scheduleType: byId("schedule-type"),
   scheduleTypeControl: byId("schedule-type-control"),
@@ -346,13 +359,18 @@ function setBootstrapLoading(isLoading) {
 }
 
 function showFatalError(error) {
-  const technicalMessage = error?.message || "Неизвестная ошибка";
-  let message = "Проверь подключение и попробуй ещё раз.";
+  const shouldShowTechnicalDetails = !isTelegramLaunchContextError(error);
+  const technicalMessage = shouldShowTechnicalDetails
+    ? error?.message || "Неизвестная ошибка"
+    : "";
+  let message = getUserFacingErrorMessage(error);
 
   if (isMissingChatContextError(error)) {
     message = "Открой Незабудку из нужного Telegram-чата и попробуй ещё раз.";
-  } else if (isExpiredLaunchTokenError(error)) {
-    message = "Ссылка устарела. Открой Незабудку заново из Telegram-чата.";
+  } else if (isTelegramSessionError(error)) {
+    message = "Сессия устарела. Открой Незабудку заново из Telegram-чата.";
+  } else if (isTelegramLaunchContextError(error)) {
+    message = buildLaunchContextMismatchMessage();
   }
 
   elements.fatalErrorMessage.textContent = message;
@@ -608,8 +626,21 @@ function clearStartAtError() {
   }
 }
 
+function showReminderTextError(message) {
+  elements.reminderTextError.textContent = message;
+  elements.reminderTextError.hidden = false;
+  elements.reminderText.setAttribute("aria-invalid", "true");
+}
+
+function clearReminderTextError() {
+  elements.reminderTextError.textContent = "";
+  elements.reminderTextError.hidden = true;
+  elements.reminderText.removeAttribute("aria-invalid");
+}
+
 function clearFieldErrors() {
   clearStartAtError();
+  clearReminderTextError();
 }
 
 function setStartAtValue(value) {
@@ -746,20 +777,40 @@ function focusStartAtField() {
 }
 
 function isMissingChatContextError(error) {
-  return error.message === "Telegram init data start_param is required.";
+  return error?.message === "Telegram init data start_param is required.";
 }
 
 function isExpiredLaunchTokenError(error) {
-  return error.message === "TMA launch token is expired.";
+  return error?.message === "TMA launch token is expired.";
 }
 
-function buildExpiredLaunchTokenMessage() {
+function isTelegramSessionError(error) {
+  return (
+    error?.status === 401 ||
+    isExpiredLaunchTokenError(error) ||
+    error?.message === "init_data is expired."
+  );
+}
+
+function isTelegramLaunchContextError(error) {
+  return error?.status === 403;
+}
+
+function buildExpiredSessionMessage() {
   return [
-    "Ссылка на Mini App устарела.",
+    "Сессия Mini App устарела.",
     "",
     "Открой Незабудку заново из Telegram: отправь /app в нужном чате и нажми свежую кнопку.",
     "",
     "Старые кнопки из истории чата могут перестать работать.",
+  ].join("\n");
+}
+
+function buildLaunchContextMismatchMessage() {
+  return [
+    "Этот запуск Mini App предназначен для другого пользователя или чата.",
+    "",
+    "Открой Незабудку заново: отправь /app в нужном Telegram-чате и нажми свежую кнопку.",
   ].join("\n");
 }
 
@@ -780,11 +831,11 @@ function buildStartAtPastMessage() {
 }
 
 function isStartAtPastError(error) {
-  return error.message === "start_at must be in the future.";
+  return error?.message === "start_at must be in the future.";
 }
 
 function isInvalidTimezoneError(error) {
-  return error.message === "Invalid timezone name.";
+  return error?.message === "Invalid timezone name.";
 }
 
 function buildInvalidTimezoneMessage() {
@@ -795,13 +846,157 @@ function buildInvalidTimezoneMessage() {
   ].join("\n");
 }
 
+const VALIDATION_FIELD_LABELS = {
+  reminder_text: "Текст напоминания",
+  reminder_kind: "Тип уведомления",
+  schedule_type: "Повтор",
+  start_at: "Время срабатывания",
+  timezone_name: "Таймзона",
+  interval_days: "Интервал в днях",
+  interval_weeks: "Интервал в неделях",
+  day_of_week: "День недели",
+  month_week_number: "Неделя месяца",
+  month_day: "День месяца",
+  repeat_interval_minutes: "Интервал повтора до выполнения",
+};
+
+function getValidationFieldLabel(issue) {
+  const location = Array.isArray(issue?.loc) ? issue.loc : [];
+  const fieldName = [...location]
+    .reverse()
+    .find((part) => typeof part === "string" && part !== "body");
+
+  return VALIDATION_FIELD_LABELS[fieldName] || "Поле формы";
+}
+
+function getValidationIssueMessage(issue) {
+  const message = String(issue?.msg || "").toLocaleLowerCase("ru-RU");
+
+  if (message.includes("field required")) {
+    return "обязательное поле";
+  }
+  if (message.includes("valid integer")) {
+    return "нужно указать целое число";
+  }
+  if (message.includes("valid datetime") || message.includes("valid date")) {
+    return "укажи корректные дату и время";
+  }
+
+  return "некорректное значение";
+}
+
+function buildValidationErrorMessage(detail) {
+  if (!Array.isArray(detail) || !detail.length) {
+    return "Проверь заполнение полей формы и попробуй ещё раз.";
+  }
+
+  const issues = detail.map(
+    (issue) =>
+      `• ${getValidationFieldLabel(issue)}: ${getValidationIssueMessage(issue)}`,
+  );
+
+  return ["Проверь данные формы:", ...issues].join("\n");
+}
+
+function isPotentiallyStateChangingRequest(error) {
+  return Boolean(
+    error?.method &&
+      !["GET", "HEAD", "OPTIONS"].includes(error.method) &&
+      error.path !== "/api/tma/reminder-preview",
+  );
+}
+
+function isReminderCreateRequest(error) {
+  return (
+    error?.method === "POST" && error?.path === "/api/tma/reminders"
+  );
+}
+
+function buildRetryMessage(message, error) {
+  if (!isPotentiallyStateChangingRequest(error)) {
+    return message;
+  }
+
+  if (isReminderCreateRequest(error)) {
+    return `${message} Не меняя поля, нажми «Создать» ещё раз — повтор не создаст дубликат.`;
+  }
+
+  return `${message} Изменение могло сохраниться. Вернись к списку и нажми «Обновить» перед повтором.`;
+}
+
+function getUserFacingErrorMessage(error) {
+  if (error?.code === "missing_init_data") {
+    return "Не удалось подтвердить запуск Mini App. Открой Незабудку заново из нужного Telegram-чата.";
+  }
+  if (error?.code === "request_timeout") {
+    return buildRetryMessage(
+      "Сервер отвечает слишком долго. Проверь подключение.",
+      error,
+    );
+  }
+  if (error?.code === "network_error") {
+    return buildRetryMessage(
+      "Не удалось связаться с сервером. Проверь подключение.",
+      error,
+    );
+  }
+  if (error?.code === "invalid_response") {
+    return buildRetryMessage(
+      "Сервер вернул некорректный ответ. Попробуй ещё раз чуть позже.",
+      error,
+    );
+  }
+  if (isTelegramSessionError(error)) {
+    return buildExpiredSessionMessage();
+  }
+  if (isTelegramLaunchContextError(error)) {
+    return buildLaunchContextMismatchMessage();
+  }
+  if (error?.status === 404) {
+    return "Напоминание уже удалено или недоступно. Обнови список.";
+  }
+  if (error?.status === 409) {
+    if (isReminderCreateRequest(error)) {
+      state.pendingCreateRequest = null;
+      return "Не удалось безопасно повторить создание: ключ запроса уже использован. Нажми «Создать» ещё раз.";
+    }
+    return "Напоминание изменилось в другом окне. Обнови список и повтори действие.";
+  }
+  if (error?.status === 425 && isReminderCreateRequest(error)) {
+    return "Создание ещё выполняется. Подожди несколько секунд и, не меняя поля, нажми «Создать» снова.";
+  }
+  if (error?.status === 422) {
+    return buildValidationErrorMessage(error.detail);
+  }
+  if (error?.status === 503) {
+    return buildRetryMessage(
+      "Сервис временно недоступен. Попробуй ещё раз чуть позже.",
+      error,
+    );
+  }
+  if (error?.status >= 500) {
+    return buildRetryMessage(
+      "Не удалось выполнить действие из-за ошибки сервера. Попробуй ещё раз чуть позже.",
+      error,
+    );
+  }
+  if (
+    error?.status === 400 &&
+    !/[А-Яа-яЁё]/.test(String(error?.message || ""))
+  ) {
+    return "Не удалось сохранить данные. Проверь заполненные поля и попробуй ещё раз.";
+  }
+
+  return error?.message || "Неизвестная ошибка. Попробуй ещё раз.";
+}
+
 function handleError(error) {
   if (isMissingChatContextError(error)) {
     showStatus(buildMissingChatContextMessage(), "info");
     return;
   }
-  if (isExpiredLaunchTokenError(error)) {
-    showStatus(buildExpiredLaunchTokenMessage(), "info");
+  if (isTelegramSessionError(error)) {
+    showStatus(buildExpiredSessionMessage(), "info");
     return;
   }
   if (isStartAtPastError(error)) {
@@ -817,7 +1012,7 @@ function handleError(error) {
     }
     return;
   }
-  showStatus(error.message, "error");
+  showStatus(getUserFacingErrorMessage(error), "error");
 }
 
 function setBusy(isBusy) {
@@ -829,6 +1024,27 @@ function setBusy(isBusy) {
     }
 
     button.disabled = isBusy;
+  }
+}
+
+async function withReminderFormPending(button, pendingText, action) {
+  const idleText = button.textContent;
+
+  elements.form.setAttribute("aria-busy", "true");
+  elements.formFieldset.disabled = true;
+  button.textContent = pendingText;
+
+  try {
+    return await action();
+  } finally {
+    elements.formFieldset.disabled = false;
+    elements.form.setAttribute("aria-busy", "false");
+    button.textContent =
+      button === elements.saveButton
+        ? isEditMode()
+          ? "Сохранить изменения"
+          : "Создать"
+        : idleText;
   }
 }
 
@@ -916,6 +1132,82 @@ function getReminderTextRequiredMessage() {
     : "Укажи текст напоминания.";
 }
 
+function getPositiveIntegerOption(optionName, fallback) {
+  const value = Number(state.reminderOptions?.[optionName]);
+
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function getReminderTextMaxLength() {
+  const generalMaxLength = getPositiveIntegerOption(
+    "reminder_text_max_length",
+    DEFAULT_REMINDER_TEXT_MAX_LENGTH,
+  );
+
+  if (getReminderKind() === REMINDER_KIND_WEATHER) {
+    const weatherMaxLength = getPositiveIntegerOption(
+      "weather_reminder_text_max_length",
+      DEFAULT_WEATHER_REMINDER_TEXT_MAX_LENGTH,
+    );
+
+    return Math.min(generalMaxLength, weatherMaxLength);
+  }
+
+  if (!elements.requiresCompletion?.checked) {
+    return generalMaxLength;
+  }
+
+  const completionMaxLength = getPositiveIntegerOption(
+    "completion_reminder_text_max_length",
+    DEFAULT_REMINDER_TEXT_MAX_LENGTH,
+  );
+
+  return Math.min(generalMaxLength, completionMaxLength);
+}
+
+function getWeatherLocationMaxLength() {
+  return getPositiveIntegerOption(
+    "weather_location_max_length",
+    DEFAULT_WEATHER_LOCATION_MAX_LENGTH,
+  );
+}
+
+function getWeatherLocationMaxCount() {
+  return getPositiveIntegerOption(
+    "weather_location_max_count",
+    DEFAULT_WEATHER_LOCATION_MAX_COUNT,
+  );
+}
+
+function parseUniqueWeatherLocations(value) {
+  const uniqueLocations = [];
+  const seenLocations = new Set();
+
+  for (const rawLocation of String(value).split(/[;\n]+/)) {
+    const location = rawLocation.trim();
+    const normalizedLocation = location.toLocaleLowerCase("ru-RU");
+
+    if (!location || seenLocations.has(normalizedLocation)) {
+      continue;
+    }
+
+    seenLocations.add(normalizedLocation);
+    uniqueLocations.push(location);
+  }
+
+  return uniqueLocations;
+}
+
+function buildTextExcerpt(value, maximumLength) {
+  const text = String(value).replace(/\s+/g, " ").trim();
+
+  if (text.length <= maximumLength) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, maximumLength - 1)).trimEnd()}…`;
+}
+
 function updateReminderKindFields() {
   const reminderKind = getReminderKind();
   const label = getReminderTextLabel(reminderKind);
@@ -933,7 +1225,7 @@ function updateReminderKindFields() {
     const isWeather = reminderKind === REMINDER_KIND_WEATHER;
     elements.reminderTextHint.hidden = !isWeather;
     elements.reminderTextHint.textContent = isWeather
-      ? "Можно указать до 5 населённых пунктов через точку с запятой или с новой строки."
+      ? `До ${getWeatherLocationMaxCount()} уникальных населённых пунктов. Каждое название — до ${getWeatherLocationMaxLength()} символов, весь список — до ${getReminderTextMaxLength()}. Разделяй точкой с запятой или новой строкой.`
       : "";
   }
 
@@ -968,12 +1260,7 @@ function updateCompletionFields() {
     }
   }
   if (elements.reminderText) {
-    const maxLength = state.reminderOptions?.completion_reminder_text_max_length;
-    if (isEnabled && Number.isInteger(maxLength)) {
-      elements.reminderText.maxLength = maxLength;
-    } else {
-      elements.reminderText.removeAttribute("maxlength");
-    }
+    elements.reminderText.maxLength = getReminderTextMaxLength();
   }
 }
 
@@ -986,33 +1273,117 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+class ApiRequestError extends Error {
+  constructor(
+    message,
+    { code = "api_error", status = null, detail = null, path = "", method = "GET" } = {},
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.code = code;
+    this.status = status;
+    this.detail = detail;
+    this.path = path;
+    this.method = method;
+  }
+}
+
+function getApiDetailMessage(detail, status) {
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((issue) => issue?.msg)
+      .filter((message) => typeof message === "string" && message.trim());
+
+    if (messages.length) {
+      return messages.join("; ");
+    }
+  }
+
+  return `HTTP ${status}`;
+}
+
 async function apiRequest(path, options = {}) {
   const initData = getTelegramInitData();
+  const method = String(options.method || "GET").toUpperCase();
 
   if (!initData) {
-    throw new Error(buildMissingInitDataMessage());
+    throw new ApiRequestError(buildMissingInitDataMessage(), {
+      code: "missing_init_data",
+      path,
+      method,
+    });
   }
 
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Telegram-Init-Data": initData,
-      ...(options.headers || {}),
-    },
-  });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(
+    () => controller.abort(),
+    API_REQUEST_TIMEOUT_MS,
+  );
 
-  const contentType = response.headers.get("content-type") || "";
-  const body = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
+  try {
+    const response = await fetch(path, {
+      ...options,
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Telegram-Init-Data": initData,
+        ...(options.headers || {}),
+      },
+    });
 
-  if (!response.ok) {
-    const detail = typeof body === "object" ? body.detail : body;
-    throw new Error(detail || `HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type") || "";
+    const body = contentType.includes("application/json")
+      ? await response.json()
+      : await response.text();
+
+    if (!response.ok) {
+      const detail =
+        body && typeof body === "object" && "detail" in body
+          ? body.detail
+          : body;
+      throw new ApiRequestError(getApiDetailMessage(detail, response.status), {
+        status: response.status,
+        detail,
+        path,
+        method,
+      });
+    }
+
+    return body;
+  } catch (error) {
+    if (error instanceof ApiRequestError) {
+      throw error;
+    }
+
+    if (controller.signal.aborted) {
+      throw new ApiRequestError("Request timed out.", {
+        code: "request_timeout",
+        path,
+        method,
+      });
+    }
+
+    if (error instanceof TypeError) {
+      throw new ApiRequestError("Network request failed.", {
+        code: "network_error",
+        path,
+        method,
+      });
+    }
+
+    throw new ApiRequestError("Invalid server response.", {
+      code: "invalid_response",
+      path,
+      method,
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-
-  return body;
 }
 
 function applyBootstrap(bootstrap) {
@@ -1065,10 +1436,8 @@ async function bootstrapApp() {
       showFatalError(error);
     } else {
       showScreen("list", { focus: false, scrollToTop: false });
-      let message = error.message;
-      if (isExpiredLaunchTokenError(error)) {
-        message = buildExpiredLaunchTokenMessage();
-      } else if (isMissingChatContextError(error)) {
+      let message = getUserFacingErrorMessage(error);
+      if (isMissingChatContextError(error)) {
         message = buildMissingChatContextMessage();
       }
       showStatus(message, "error", "list");
@@ -1343,7 +1712,10 @@ function createReminderCard(reminder) {
   contentButton.dataset.reminderContentId = String(reminder.id);
   contentButton.setAttribute(
     "aria-label",
-    `Изменить напоминание: ${reminder.reminder_text}`,
+    `Изменить напоминание: ${buildTextExcerpt(
+      reminder.reminder_text,
+      ACCESSIBLE_REMINDER_EXCERPT_MAX_LENGTH,
+    )}`,
   );
   contentButton.addEventListener("click", () =>
     openReminderEditor(reminder, "card"),
@@ -1359,13 +1731,14 @@ function createReminderCard(reminder) {
   nextRun.className = "reminder-next-run";
   if (reminder.schedule_type === "once" && reminder.awaiting_completion) {
     nextRun.textContent = "Ожидает выполнения";
-  } else {
-    const nextRunAt = reminder.next_run_at || reminder.start_at;
+  } else if (reminder.next_run_at) {
     const timezoneName = reminder.timezone_name || state.context?.timezone_name;
     nextRun.textContent = `Следующее: ${formatDateTimeWithConditionalTimezone(
-      nextRunAt,
+      reminder.next_run_at,
       timezoneName,
     )}`;
+  } else {
+    nextRun.textContent = "Не запланировано";
   }
 
   const period = createTextElement(
@@ -1430,7 +1803,10 @@ function createReminderCard(reminder) {
   menuButton.dataset.reminderMenuId = String(reminder.id);
   menuButton.setAttribute(
     "aria-label",
-    `Действия с напоминанием: ${reminder.reminder_text}`,
+    `Действия с напоминанием: ${buildTextExcerpt(
+      reminder.reminder_text,
+      ACCESSIBLE_REMINDER_EXCERPT_MAX_LENGTH,
+    )}`,
   );
   menuButton.setAttribute("aria-expanded", "false");
   menuButton.setAttribute("aria-controls", actionBlockId);
@@ -1441,7 +1817,10 @@ function createReminderCard(reminder) {
   actionBlock.setAttribute("role", "group");
   actionBlock.setAttribute(
     "aria-label",
-    `Действия с напоминанием: ${reminder.reminder_text}`,
+    `Действия с напоминанием: ${buildTextExcerpt(
+      reminder.reminder_text,
+      ACCESSIBLE_REMINDER_EXCERPT_MAX_LENGTH,
+    )}`,
   );
   actionBlock.hidden = true;
 
@@ -1483,7 +1862,7 @@ function sortReminders(reminders) {
 }
 
 function getReminderSortTime(reminder) {
-  const value = reminder.next_run_at || reminder.start_at;
+  const value = reminder.next_run_at;
 
   if (!value) {
     return Number.POSITIVE_INFINITY;
@@ -1536,6 +1915,16 @@ function buildRequestPayload() {
   };
 
   applySchedulePayload(payload, scheduleType);
+
+  const reminderId = Number(elements.reminderId.value);
+  if (
+    Number.isInteger(reminderId) &&
+    reminderId > 0 &&
+    Number.isInteger(state.editingReminderRevision) &&
+    state.editingReminderRevision > 0
+  ) {
+    payload.expected_revision = state.editingReminderRevision;
+  }
 
   return payload;
 }
@@ -1628,6 +2017,9 @@ function validateReminderForm() {
 
   if (errors.length) {
     showStatus(errors.join("\n"), "error");
+    if (!elements.reminderTextError.hidden) {
+      elements.reminderText.focus();
+    }
     return false;
   }
 
@@ -1637,9 +2029,46 @@ function validateReminderForm() {
 function getReminderFormErrors() {
   const errors = [];
   const scheduleType = elements.scheduleType.value;
+  const reminderText = elements.reminderText.value.trim();
+  const isWeather = getReminderKind() === REMINDER_KIND_WEATHER;
+  const weatherLocations = isWeather
+    ? parseUniqueWeatherLocations(reminderText)
+    : [];
+  const reminderTextMaxLength = getReminderTextMaxLength();
+  const reminderTextErrors = [];
 
-  if (!elements.reminderText.value.trim()) {
-    errors.push(getReminderTextRequiredMessage());
+  if (!reminderText || (isWeather && !weatherLocations.length)) {
+    reminderTextErrors.push(getReminderTextRequiredMessage());
+  }
+
+  if (reminderText.length > reminderTextMaxLength) {
+    reminderTextErrors.push(
+      isWeather
+        ? `Список населённых пунктов не должен быть длиннее ${reminderTextMaxLength} символов.`
+        : `Текст не должен быть длиннее ${reminderTextMaxLength} символов.`,
+    );
+  }
+
+  const weatherLocationMaxCount = getWeatherLocationMaxCount();
+  if (isWeather && weatherLocations.length > weatherLocationMaxCount) {
+    reminderTextErrors.push(
+      `Можно указать не больше ${weatherLocationMaxCount} населённых пунктов.`,
+    );
+  }
+
+  const weatherLocationMaxLength = getWeatherLocationMaxLength();
+  const overlongWeatherLocation = weatherLocations.find(
+    (location) => location.length > weatherLocationMaxLength,
+  );
+  if (overlongWeatherLocation) {
+    reminderTextErrors.push(
+      `Название «${buildTextExcerpt(overlongWeatherLocation, 40)}» длиннее ${weatherLocationMaxLength} символов. Сократи его.`,
+    );
+  }
+
+  if (reminderTextErrors.length) {
+    showReminderTextError(reminderTextErrors[0]);
+    errors.push(...reminderTextErrors);
   }
 
   if (
@@ -1744,6 +2173,8 @@ function closeSettings() {
 }
 
 function startEdit(reminder) {
+  state.pendingCreateRequest = null;
+  state.editingReminderRevision = Number(reminder.revision);
   elements.reminderId.value = reminder.id;
   elements.formTitle.textContent = "Редактировать напоминание";
   if (elements.reminderKind) {
@@ -1797,6 +2228,8 @@ function startEdit(reminder) {
 }
 
 function resetForm() {
+  state.editingReminderRevision = null;
+  state.pendingCreateRequest = null;
   elements.form.reset();
   elements.reminderId.value = "";
   elements.formTitle.textContent = "Создать напоминание";
@@ -1825,6 +2258,67 @@ function resetForm() {
   renderStartAtHint();
 }
 
+function isEditRevisionConflict(error, reminderId) {
+  if (!reminderId || error?.status !== 409) {
+    return false;
+  }
+
+  return (
+    (error.method === "PUT" &&
+      error.path === `/api/tma/reminders/${reminderId}`) ||
+    (error.method === "POST" &&
+      error.path === "/api/tma/reminder-preview")
+  );
+}
+
+async function refreshEditingReminderAfterConflict(reminderId) {
+  await refreshReminderList();
+
+  const freshReminder = state.reminders.find(
+    (reminder) => Number(reminder.id) === Number(reminderId),
+  );
+  if (!freshReminder) {
+    throw new ApiRequestError("Reminder not found.", {
+      status: 404,
+      path: `/api/tma/reminders/${reminderId}`,
+      method: "GET",
+    });
+  }
+
+  const freshRevision = Number(freshReminder.revision);
+  if (!Number.isInteger(freshRevision) || freshRevision < 1) {
+    throw new ApiRequestError("Invalid reminder revision.", {
+      code: "invalid_response",
+      path: "/api/tma/reminders",
+      method: "GET",
+    });
+  }
+
+  state.editingReminderRevision = freshRevision;
+  hidePreview();
+  markNextNotificationForPreview();
+  showStatus(EDIT_CONFLICT_RECOVERED_MESSAGE, "info", "form");
+}
+
+async function refreshReminderList() {
+  const reminders = await apiRequest("/api/tma/reminders");
+  state.reminders = sortReminders(reminders);
+  renderReminders();
+}
+
+async function requestWithEditConflictRefresh(reminderId, action) {
+  try {
+    return await action();
+  } catch (error) {
+    if (!isEditRevisionConflict(error, reminderId)) {
+      throw error;
+    }
+
+    await refreshEditingReminderAfterConflict(reminderId);
+    return null;
+  }
+}
+
 async function previewReminder() {
   hideStatus();
   clearFieldErrors();
@@ -1833,17 +2327,31 @@ async function previewReminder() {
     return;
   }
 
-  const preview = await apiRequest("/api/tma/reminder-preview", {
-    method: "POST",
-    body: JSON.stringify(buildPreviewPayload()),
-  });
+  const reminderId = elements.reminderId.value;
 
-  showPreview(preview);
-  renderNextNotification(
-    preview.next_run_at,
-    preview.timezone_name ||
-      elements.timezoneName.value ||
-      state.context?.timezone_name,
+  return withReminderFormPending(
+    elements.previewButton,
+    "Рассчитываем…",
+    async () => {
+      const preview = await requestWithEditConflictRefresh(reminderId, () =>
+        apiRequest("/api/tma/reminder-preview", {
+          method: "POST",
+          body: JSON.stringify(buildPreviewPayload()),
+        }),
+      );
+
+      if (!preview) {
+        return;
+      }
+
+      showPreview(preview);
+      renderNextNotification(
+        preview.next_run_at,
+        preview.timezone_name ||
+          elements.timezoneName.value ||
+          state.context?.timezone_name,
+      );
+    },
   );
 }
 
@@ -1900,29 +2408,80 @@ async function saveReminder() {
     ? `/api/tma/reminders/${reminderId}`
     : "/api/tma/reminders";
   const method = isEdit ? "PUT" : "POST";
+  const payload = buildRequestPayload();
+  const requestHeaders = isEdit
+    ? {}
+    : { "Idempotency-Key": getCreateIdempotencyKey(payload) };
 
-  const savedReminder = await apiRequest(path, {
-    method,
-    body: JSON.stringify(buildRequestPayload()),
-  });
+  return withReminderFormPending(
+    elements.saveButton,
+    isEdit ? "Сохраняем…" : "Создаём…",
+    async () => {
+      const savedReminder = await requestWithEditConflictRefresh(
+        reminderId,
+        () =>
+          apiRequest(path, {
+            method,
+            headers: requestHeaders,
+            body: JSON.stringify(payload),
+          }),
+      );
 
-  state.reminders = sortReminders([
-    ...state.reminders.filter(
-      (reminder) => Number(reminder.id) !== Number(savedReminder.id),
-    ),
-    savedReminder,
-  ]);
-  renderReminders();
-  resetForm();
-  showListAndRestoreFocus({
-    reminderId: savedReminder.id,
-    mode: isEdit ? "edit" : "create",
-  });
-  showStatus(
-    isEdit ? "Напоминание обновлено." : "Напоминание создано.",
-    "success",
-    "list",
+      if (!savedReminder) {
+        return;
+      }
+
+      state.reminders = sortReminders([
+        ...state.reminders.filter(
+          (reminder) => Number(reminder.id) !== Number(savedReminder.id),
+        ),
+        savedReminder,
+      ]);
+      renderReminders();
+      resetForm();
+      showListAndRestoreFocus({
+        reminderId: savedReminder.id,
+        mode: isEdit ? "edit" : "create",
+      });
+      showStatus(
+        isEdit ? "Напоминание обновлено." : "Напоминание создано.",
+        "success",
+        "list",
+      );
+    },
   );
+}
+
+function createClientRequestId() {
+  if (typeof window.crypto?.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+
+  if (typeof window.crypto?.getRandomValues === "function") {
+    const randomBytes = new Uint8Array(16);
+    window.crypto.getRandomValues(randomBytes);
+    const randomPart = Array.from(randomBytes, (value) =>
+      value.toString(16).padStart(2, "0"),
+    ).join("");
+    return `tma-${randomPart}`;
+  }
+
+  throw new Error(
+    "Не удалось подготовить безопасный повтор запроса. Перезапусти Mini App.",
+  );
+}
+
+function getCreateIdempotencyKey(payload) {
+  const fingerprint = JSON.stringify(payload);
+
+  if (state.pendingCreateRequest?.fingerprint !== fingerprint) {
+    state.pendingCreateRequest = {
+      fingerprint,
+      key: createClientRequestId(),
+    };
+  }
+
+  return state.pendingCreateRequest.key;
 }
 
 function showDeleteConfirmation(reminder, invoker) {
@@ -1940,7 +2499,14 @@ function showDeleteConfirmation(reminder, invoker) {
     const title = createTextElement("h2", "", "Удалить напоминание?");
     title.id = "delete-confirmation-title";
 
-    const text = createTextElement("p", "modal-text", reminder.reminder_text);
+    const text = createTextElement(
+      "p",
+      "modal-text",
+      buildTextExcerpt(
+        reminder.reminder_text,
+        DELETE_CONFIRMATION_EXCERPT_MAX_LENGTH,
+      ),
+    );
     text.id = "delete-confirmation-description";
 
     const actions = document.createElement("div");
@@ -2031,7 +2597,10 @@ async function deleteReminder(reminder, invoker) {
   let shouldRestoreInvokerFocus = false;
   setBusy(true);
   try {
-    await apiRequest(`/api/tma/reminders/${reminder.id}`, {
+    const deleteQuery = new URLSearchParams({
+      expected_revision: String(reminder.revision),
+    });
+    await apiRequest(`/api/tma/reminders/${reminder.id}?${deleteQuery}`, {
       method: "DELETE",
     });
 
@@ -2050,8 +2619,26 @@ async function deleteReminder(reminder, invoker) {
       fallbackTarget: elements.createReminderButton,
     });
   } catch (error) {
-    handleError(error);
-    shouldRestoreInvokerFocus = true;
+    if (error?.status === 409) {
+      try {
+        await refreshReminderList();
+        showStatus(
+          "Напоминание изменилось в другом окне. Список обновлён — проверь данные и повтори удаление.",
+          "info",
+          "list",
+        );
+        restoreListPositionAndFocus({
+          reminderId: reminder.id,
+          fallbackTarget: elements.createReminderButton,
+        });
+      } catch (refreshError) {
+        handleError(refreshError);
+        shouldRestoreInvokerFocus = true;
+      }
+    } else {
+      handleError(error);
+      shouldRestoreInvokerFocus = true;
+    }
   } finally {
     setBusy(false);
     if (shouldRestoreInvokerFocus && invoker?.isConnected) {
@@ -2188,6 +2775,17 @@ function isReminderScheduleField(element) {
 
 function handleReminderFormChange(event) {
   hidePreview();
+
+  if ([elements.reminderText, elements.reminderKind].includes(event.target)) {
+    clearReminderTextError();
+  }
+
+  if (!elements.reminderId.value && state.pendingCreateRequest) {
+    const currentFingerprint = JSON.stringify(buildRequestPayload());
+    if (currentFingerprint !== state.pendingCreateRequest.fingerprint) {
+      state.pendingCreateRequest = null;
+    }
+  }
 
   if (isReminderScheduleField(event.target)) {
     markNextNotificationForPreview();

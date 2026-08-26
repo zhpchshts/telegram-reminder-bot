@@ -10,9 +10,15 @@ from app import weather_service
 
 
 class FakeResponse:
-    def __init__(self, payload: dict[str, object], status: int = 200) -> None:
+    def __init__(
+        self,
+        payload: dict[str, object],
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.payload = payload
         self.status = status
+        self.headers = headers or {}
 
     def __enter__(self) -> "FakeResponse":
         return self
@@ -84,7 +90,7 @@ def test_fetch_json_returns_timeout_error_after_all_attempts(monkeypatch) -> Non
     with pytest.raises(
         weather_service.WeatherServiceError,
         match="Погодный сервис не ответил вовремя.",
-    ):
+    ) as captured:
         weather_service.fetch_json(
             "https://weather.example.test/forecast",
             {"city": "Yekaterinburg"},
@@ -98,6 +104,48 @@ def test_fetch_json_returns_timeout_error_after_all_attempts(monkeypatch) -> Non
         weather_service.WEATHER_REQUEST_TIMEOUT_SECONDS,
     ]
     assert retry_delays == [1, 2]
+    assert captured.value.retryable is True
+
+
+def test_fetch_json_retries_429_with_capped_retry_after(monkeypatch) -> None:
+    requests = []
+    retry_delays = []
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        raise weather_service.urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            {"Retry-After": "120"},
+            None,
+        )
+
+    monkeypatch.setattr(
+        weather_service.urllib.request,
+        "urlopen",
+        fake_urlopen,
+    )
+    monkeypatch.setattr(
+        weather_service.time,
+        "sleep",
+        retry_delays.append,
+    )
+
+    with pytest.raises(weather_service.WeatherServiceError) as captured:
+        weather_service.fetch_json(
+            "https://weather.example.test/forecast",
+            {"city": "Yekaterinburg"},
+            attempts=2,
+        )
+
+    assert len(requests) == 2
+    assert retry_delays == [weather_service.WEATHER_RETRY_AFTER_MAX_SECONDS]
+    assert captured.value.retryable is True
+    assert (
+        captured.value.retry_after_seconds
+        == weather_service.WEATHER_RETRY_AFTER_MAX_SECONDS
+    )
 
 
 def test_find_location_returns_cached_location_without_network(monkeypatch) -> None:
@@ -217,6 +265,35 @@ def test_find_location_uses_network_when_derived_cache_is_unavailable(
     assert "Weather location cache write failed" in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("results", "expected_retryable"),
+    [
+        ([], False),
+        ("unexpected payload", True),
+    ],
+)
+def test_find_location_types_permanent_and_transient_errors(
+    monkeypatch,
+    results: object,
+    expected_retryable: bool,
+) -> None:
+    monkeypatch.setattr(
+        weather_service,
+        "get_cached_weather_location",
+        lambda location_key: None,
+    )
+    monkeypatch.setattr(
+        weather_service,
+        "fetch_json",
+        lambda *args, **kwargs: {"results": results},
+    )
+
+    with pytest.raises(weather_service.WeatherServiceError) as captured:
+        weather_service.find_location("Неизвестный город")
+
+    assert captured.value.retryable is expected_retryable
+
+
 def test_fetch_json_wraps_invalid_utf8_response(monkeypatch) -> None:
     monkeypatch.setattr(
         weather_service,
@@ -227,11 +304,13 @@ def test_fetch_json_wraps_invalid_utf8_response(monkeypatch) -> None:
     with pytest.raises(
         weather_service.WeatherServiceError,
         match="Погодный сервис вернул некорректный ответ.",
-    ):
+    ) as captured:
         weather_service.fetch_json(
             "https://weather.example.test/forecast",
             {"city": "Yekaterinburg"},
         )
+
+    assert captured.value.retryable is True
 
 
 @pytest.mark.parametrize(
@@ -325,8 +404,10 @@ def test_format_location_forecast_includes_two_precipitation_periods() -> None:
             "current": {
                 "temperature_2m": 18.4,
                 "time": "2026-07-07T09:30",
+                "weather_code": 61,
             },
             "daily": {
+                "time": ["2026-07-07"],
                 "temperature_2m_max": [24.2],
                 "weather_code": [61],
             },
@@ -347,6 +428,32 @@ def test_format_location_forecast_includes_two_precipitation_periods() -> None:
         "Сейчас 18°, слабый дождь. Днём до 24°.\n"
         "Осадки: днём — до 80%, вечером — до 60%."
     )
+
+
+def test_format_location_forecast_describes_current_not_daily_weather() -> None:
+    result = weather_service.format_location_forecast(
+        {"name": "Екатеринбург"},
+        {
+            "current": {
+                "temperature_2m": 17.2,
+                "time": "2026-07-07T09:30",
+                "weather_code": 61,
+            },
+            "daily": {
+                "time": ["2026-07-07"],
+                "temperature_2m_max": [21.1],
+                "weather_code": [0],
+            },
+            "hourly": {
+                "time": [],
+                "precipitation_probability": [],
+            },
+        },
+    )
+
+    assert result.startswith("🌧 <b>Екатеринбург</b>\n")
+    assert "Сейчас 17°, слабый дождь. Днём до 21°." in result
+    assert "ясно" not in result
 
 
 def test_fetch_forecast_requests_hourly_probability_for_two_days(
@@ -406,6 +513,62 @@ def test_build_weather_report_uses_neutral_header(monkeypatch) -> None:
     assert "на сегодня" not in result
 
 
+def test_build_weather_report_raises_when_every_location_fails_transiently(
+    monkeypatch,
+) -> None:
+    def fail_find_location(location_name: str, *, request_attempts: int):
+        raise weather_service.WeatherServiceError(
+            f"Временный сбой: {location_name}",
+            retryable=True,
+            retry_after_seconds=12,
+        )
+
+    monkeypatch.setattr(weather_service, "find_location", fail_find_location)
+
+    with pytest.raises(weather_service.WeatherServiceError) as captured:
+        weather_service.build_weather_report("Первый;Второй")
+
+    assert captured.value.retryable is True
+    assert captured.value.retry_after_seconds == 12
+
+
+def test_build_weather_report_keeps_partial_success_for_malformed_payload(
+    monkeypatch,
+) -> None:
+    def fake_find_location(location_name: str, *, request_attempts: int):
+        return {"name": location_name}
+
+    def fake_fetch_forecast(location: dict, *, request_attempts: int):
+        temperature: object = (
+            "not-a-temperature" if location["name"] == "Сломанный" else 18.4
+        )
+        return {
+            "current": {
+                "temperature_2m": temperature,
+                "time": "2026-07-07T09:30",
+                "weather_code": 0,
+            },
+            "daily": {
+                "time": ["2026-07-07"],
+                "temperature_2m_max": [24.2],
+            },
+            "hourly": {
+                "time": [],
+                "precipitation_probability": [],
+            },
+        }
+
+    monkeypatch.setattr(weather_service, "find_location", fake_find_location)
+    monkeypatch.setattr(weather_service, "fetch_forecast", fake_fetch_forecast)
+
+    result = weather_service.build_weather_report("Сломанный;Исправный")
+
+    assert result.count("<b>Прогноз погоды</b>") == 1
+    assert "⚠️ <b>Сломанный</b>" in result
+    assert "☀️ <b>Исправный</b>" in result
+    assert result.count(weather_service.OPEN_METEO_ATTRIBUTION) == 1
+
+
 def test_format_location_forecast_uses_target_time_for_periods() -> None:
     result = weather_service.format_location_forecast(
         {
@@ -454,6 +617,16 @@ def test_get_daily_forecast_index_selects_target_date() -> None:
     assert result == 1
 
 
+def test_get_daily_forecast_index_rejects_missing_target_date() -> None:
+    with pytest.raises(weather_service.WeatherServiceError) as captured:
+        weather_service.get_daily_forecast_index(
+            {"time": ["2026-07-07"]},
+            datetime(2026, 7, 8, 0, 0),
+        )
+
+    assert captured.value.retryable is True
+
+
 def test_format_location_forecast_uses_tomorrow_daily_data_after_21() -> None:
     result = weather_service.format_location_forecast(
         {
@@ -465,6 +638,7 @@ def test_format_location_forecast_uses_tomorrow_daily_data_after_21() -> None:
             "current": {
                 "temperature_2m": 18.4,
                 "time": "2026-07-07T20:56",
+                "weather_code": 0,
             },
             "daily": {
                 "time": [

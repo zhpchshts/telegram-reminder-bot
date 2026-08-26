@@ -1,6 +1,7 @@
 import asyncio
 
 from fastapi import FastAPI
+import pytest
 
 from app import runtime as runtime_module
 from app.runtime import (
@@ -88,6 +89,9 @@ def test_prepare_bot_runtime_starts_shared_scheduler_and_restores_jobs(
             self.running = True
             calls.append("scheduler.start")
 
+        def get_job(self, job_id: str):
+            return object()
+
     async def fake_set_bot_commands(received_bot) -> None:
         calls.append(("set_bot_commands", received_bot))
 
@@ -131,6 +135,50 @@ def test_prepare_bot_runtime_starts_shared_scheduler_and_restores_jobs(
         ("restore_active_reminders", bot),
         ("schedule_healthcheck", bot, 100),
     ]
+    assert runtime.api_app.state.reminders_restored is True
+
+
+def test_prepare_bot_runtime_fails_closed_when_required_worker_is_missing(
+    monkeypatch,
+) -> None:
+    bot = object()
+
+    class FakeScheduler:
+        running = True
+
+        def get_job(self, job_id: str):
+            if job_id == "completion-occurrence-repeat-worker":
+                return None
+            return object()
+
+    async def fake_set_bot_commands(received_bot) -> None:
+        assert received_bot is bot
+
+    async def fake_restore_active_reminders(received_bot) -> None:
+        assert received_bot is bot
+
+    monkeypatch.setattr(runtime_module, "init_db", lambda: None)
+    monkeypatch.setattr(runtime_module, "set_bot_commands", fake_set_bot_commands)
+    monkeypatch.setattr(
+        runtime_module,
+        "restore_active_reminders",
+        fake_restore_active_reminders,
+    )
+    monkeypatch.setattr(runtime_module, "scheduler", FakeScheduler())
+    monkeypatch.setattr(runtime_module, "HEALTHCHECK_CHAT_ID", None)
+    runtime = BotRuntime(
+        bot=bot,
+        dispatcher=object(),
+        api_app=FastAPI(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="completion-occurrence-repeat-worker",
+    ):
+        asyncio.run(prepare_bot_runtime(runtime))
+
+    assert runtime.api_app.state.reminders_restored is False
 
 
 def test_run_polling_and_api_runtime_starts_polling_and_api_server(
@@ -140,8 +188,13 @@ def test_run_polling_and_api_runtime_starts_polling_and_api_server(
     bot = object()
 
     class FakeDispatcher:
-        async def start_polling(self, received_bot) -> None:
-            calls.append(("start_polling", received_bot))
+        async def start_polling(
+            self,
+            received_bot,
+            *,
+            handle_signals: bool,
+        ) -> None:
+            calls.append(("start_polling", received_bot, handle_signals))
 
     class FakeApiServer:
         async def serve(self) -> None:
@@ -196,6 +249,118 @@ def test_run_polling_and_api_runtime_starts_polling_and_api_server(
         "create_bot_runtime",
         ("prepare_bot_runtime", runtime),
         ("create_api_server", runtime, "127.0.0.1", 9000),
-        ("start_polling", bot),
+        ("start_polling", bot, False),
         "api_server.serve",
     ]
+
+
+def test_combined_runtime_stops_polling_when_api_fails(
+    monkeypatch,
+) -> None:
+    calls: list[object] = []
+    stop_event = asyncio.Event()
+
+    class FakeDispatcher:
+        async def start_polling(
+            self,
+            received_bot,
+            *,
+            handle_signals: bool,
+        ) -> None:
+            calls.append(("polling_started", handle_signals))
+            await stop_event.wait()
+
+        async def stop_polling(self) -> None:
+            calls.append("polling_stopped")
+            stop_event.set()
+
+    class FakeApiServer:
+        should_exit = False
+
+        async def serve(self) -> None:
+            await asyncio.sleep(0)
+            raise RuntimeError("api failed")
+
+    runtime = BotRuntime(
+        bot=object(),
+        dispatcher=FakeDispatcher(),
+        api_app=FastAPI(),
+    )
+    monkeypatch.setattr(runtime_module, "create_bot_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        runtime_module,
+        "prepare_bot_runtime",
+        lambda received_runtime: asyncio.sleep(0),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "create_api_server",
+        lambda *args, **kwargs: FakeApiServer(),
+    )
+
+    async def fake_shutdown_runtime(received_runtime: BotRuntime) -> None:
+        calls.append(("runtime_stopped", received_runtime))
+
+    monkeypatch.setattr(runtime_module, "shutdown_runtime", fake_shutdown_runtime)
+
+    with pytest.raises(RuntimeError, match="api failed"):
+        asyncio.run(run_polling_and_api_runtime())
+
+    assert ("polling_started", False) in calls
+    assert "polling_stopped" in calls
+    assert ("runtime_stopped", runtime) in calls
+
+
+def test_combined_runtime_bounds_stuck_polling_shutdown(monkeypatch) -> None:
+    calls: list[object] = []
+    never_stops = asyncio.Event()
+
+    class FakeDispatcher:
+        async def start_polling(
+            self,
+            received_bot,
+            *,
+            handle_signals: bool,
+        ) -> None:
+            calls.append(("polling_started", handle_signals))
+            await never_stops.wait()
+
+        async def stop_polling(self) -> None:
+            calls.append("polling_stop_requested")
+            await never_stops.wait()
+
+    class FakeApiServer:
+        should_exit = False
+
+        async def serve(self) -> None:
+            await asyncio.sleep(0)
+            raise RuntimeError("api failed")
+
+    runtime = BotRuntime(
+        bot=object(),
+        dispatcher=FakeDispatcher(),
+        api_app=FastAPI(),
+    )
+    monkeypatch.setattr(runtime_module, "RUNTIME_SHUTDOWN_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(runtime_module, "create_bot_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        runtime_module,
+        "prepare_bot_runtime",
+        lambda received_runtime: asyncio.sleep(0),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "create_api_server",
+        lambda *args, **kwargs: FakeApiServer(),
+    )
+
+    async def fake_shutdown_runtime(received_runtime: BotRuntime) -> None:
+        calls.append(("runtime_stopped", received_runtime))
+
+    monkeypatch.setattr(runtime_module, "shutdown_runtime", fake_shutdown_runtime)
+
+    with pytest.raises(RuntimeError, match="api failed"):
+        asyncio.run(run_polling_and_api_runtime())
+
+    assert "polling_stop_requested" in calls
+    assert ("runtime_stopped", runtime) in calls

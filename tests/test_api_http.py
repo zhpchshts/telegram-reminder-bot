@@ -1,12 +1,10 @@
+import asyncio
 from collections.abc import Iterator
 from datetime import datetime
 import json
 from time import time
 from urllib.parse import urlencode
-import importlib.metadata
-
-import tzdata
-
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,7 +15,12 @@ from app.api import app
 from app.api_auth import TMA_INIT_DATA_HEADER, require_matching_chat_id
 from app.constants import REMINDER_KIND_TEXT
 from app.reminder_models import ReminderReadData
-from app.reminder_service import ReminderSchedulingError
+from app.reminder_service import (
+    ReminderIdempotencyConflictError,
+    ReminderIdempotencyPendingError,
+    ReminderRevisionConflictError,
+    ReminderSchedulingError,
+)
 from app.tma_auth import calculate_init_data_hash
 from app.tma_launch import create_tma_launch_token
 
@@ -29,6 +32,7 @@ def build_launch_token_for_chat(chat_id: int) -> str:
     return create_tma_launch_token(
         chat_id=chat_id,
         chat_type="group",
+        user_id=123,
         chat_title="Home",
         secret=BOT_TOKEN,
         now=1_700_000_000,
@@ -122,6 +126,10 @@ def expected_reminder_options_response() -> dict[str, object]:
             {"value": 1440, "label": "24 часа"},
         ],
         "completion_reminder_text_max_length": 3900,
+        "reminder_text_max_length": 3900,
+        "weather_reminder_text_max_length": 600,
+        "weather_location_max_length": 100,
+        "weather_location_max_count": 5,
     }
 
 
@@ -156,33 +164,136 @@ def authenticated_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
         app.dependency_overrides.update(previous_overrides)
 
 
-def test_health_endpoint_returns_status_and_active_chats_count(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("app.api.count_active_chats", lambda: 0)
-
+def test_health_endpoint_returns_minimal_public_status(client: TestClient) -> None:
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "ok",
-        "active_chats_count": 0,
-        "tzdata_package_version": importlib.metadata.version("tzdata"),
-        "tzdata_iana_version": tzdata.IANA_VERSION,
-    }
+    assert response.json() == {"status": "ok"}
 
 
 def test_health_endpoint_supports_head(
     client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.api.count_active_chats", lambda: 0)
-
     response = client.head("/health")
 
     assert response.status_code == 200
     assert response.content == b""
+
+
+def test_readiness_endpoint_rejects_unprepared_runtime(client: TestClient) -> None:
+    app.state.bot = None
+    app.state.scheduler = None
+    app.state.reminders_restored = False
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Service is not ready."}
+
+
+def test_readiness_endpoint_checks_runtime_and_database(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executed_queries: list[str] = []
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback) -> bool:
+            return False
+
+        def execute(self, query: str):
+            assert query in {
+                "SELECT 1 FROM reminders LIMIT 1",
+                "SELECT 1 FROM chat_settings LIMIT 1",
+            }
+            executed_queries.append(query)
+            return self
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    app.state.bot = object()
+    app.state.scheduler = SimpleNamespace(
+        running=True,
+        get_job=lambda job_id: object(),
+    )
+    app.state.reminders_restored = True
+    monkeypatch.setattr(api_module, "get_connection", FakeConnection)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+    assert executed_queries == [
+        "SELECT 1 FROM reminders LIMIT 1",
+        "SELECT 1 FROM chat_settings LIMIT 1",
+    ]
+
+
+@pytest.mark.parametrize("missing_table", ["reminders", "chat_settings"])
+def test_readiness_endpoint_rejects_database_without_required_schema(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_table: str,
+) -> None:
+    class EmptyDatabaseConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback) -> bool:
+            return False
+
+        def execute(self, query: str):
+            if missing_table in query:
+                raise api_module.sqlite3.OperationalError(
+                    f"no such table: {missing_table}"
+                )
+            return self
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    app.state.bot = object()
+    app.state.scheduler = SimpleNamespace(
+        running=True,
+        get_job=lambda job_id: object(),
+    )
+    app.state.reminders_restored = True
+    monkeypatch.setattr(
+        api_module,
+        "get_connection",
+        EmptyDatabaseConnection,
+    )
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Service is not ready."}
+
+
+@pytest.mark.parametrize(
+    "get_job", [lambda job_id: None, pytest.param(None, id="error")]
+)
+def test_readiness_endpoint_rejects_missing_or_unreadable_required_jobs(
+    client: TestClient,
+    get_job,
+) -> None:
+    if get_job is None:
+
+        def get_job(job_id: str):
+            raise RuntimeError("scheduler job store is unavailable")
+
+    app.state.bot = object()
+    app.state.scheduler = SimpleNamespace(running=True, get_job=get_job)
+    app.state.reminders_restored = True
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Service is not ready."}
 
 
 def test_tma_static_index_is_served(client: TestClient) -> None:
@@ -206,6 +317,10 @@ def test_chat_endpoint_requires_tma_auth_without_dependency_override() -> None:
         app.dependency_overrides.update(previous_overrides)
 
     assert response.status_code == 401
+    assert response.headers["cache-control"] == "private, no-store"
+    assert TMA_INIT_DATA_HEADER.casefold() in {
+        value.strip().casefold() for value in response.headers["vary"].split(",")
+    }
     assert response.json() == {
         "detail": "Telegram init data is required.",
     }
@@ -424,6 +539,23 @@ def test_tma_reminder_options_endpoint_returns_contract(
     assert response.json() == expected_reminder_options_response()
 
 
+def test_api_success_response_disables_private_cache(
+    authenticated_client: TestClient,
+) -> None:
+    response = authenticated_client.get(
+        "/api/tma/reminder-options",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert TMA_INIT_DATA_HEADER.casefold() in {
+        value.strip().casefold() for value in response.headers["vary"].split(",")
+    }
+
+
 def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
     authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -513,6 +645,7 @@ def test_tma_bootstrap_endpoint_accepts_valid_tma_init_data(
             "day_of_week": None,
             "month_week_number": None,
             "month_day": None,
+            "revision": 1,
         }
     ]
 
@@ -620,6 +753,7 @@ def test_get_chat_reminders_endpoint_accepts_valid_tma_init_data(
             "day_of_week": None,
             "month_week_number": None,
             "month_day": None,
+            "revision": 1,
         }
     ]
 
@@ -706,6 +840,7 @@ def test_get_chat_reminders_endpoint_returns_json(
             "day_of_week": None,
             "month_week_number": None,
             "month_day": None,
+            "revision": 1,
         }
     ]
 
@@ -817,11 +952,13 @@ def test_delete_chat_reminder_endpoint_returns_json(
         *,
         reminder_id: int,
         chat_id: int,
+        expected_revision: int,
     ) -> bool:
         captured_calls.append(
             {
                 "reminder_id": reminder_id,
                 "chat_id": chat_id,
+                "expected_revision": expected_revision,
             }
         )
         return True
@@ -832,13 +969,14 @@ def test_delete_chat_reminder_endpoint_returns_json(
         fake_delete_active_reminder_for_chat,
     )
 
-    response = client.delete("/api/chats/100/reminders/42")
+    response = client.delete("/api/chats/100/reminders/42?expected_revision=1")
 
     assert response.status_code == 200
     assert captured_calls == [
         {
             "reminder_id": 42,
             "chat_id": 100,
+            "expected_revision": 1,
         }
     ]
     assert response.json() == {
@@ -846,6 +984,39 @@ def test_delete_chat_reminder_endpoint_returns_json(
         "chat_id": 100,
         "deleted": True,
     }
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/api/chats/100/reminders/0?expected_revision=1",
+        (
+            "/api/chats/100/reminders/"
+            f"{api_module.SQLITE_INT64_MAX + 1}?expected_revision=1"
+        ),
+        "/api/chats/100/reminders/42?expected_revision=0",
+        (
+            "/api/chats/100/reminders/42?expected_revision="
+            f"{api_module.SQLITE_INT64_MAX + 1}"
+        ),
+    ],
+)
+def test_delete_chat_reminder_rejects_values_outside_sqlite_int64_range(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+) -> None:
+    service_calls: list[object] = []
+    monkeypatch.setattr(
+        api_module,
+        "delete_active_reminder_for_chat",
+        lambda *args, **kwargs: service_calls.append((args, kwargs)),
+    )
+
+    response = client.delete(url)
+
+    assert response.status_code == 422
+    assert service_calls == []
 
 
 def test_delete_chat_reminder_endpoint_rejects_unknown_reminder(
@@ -856,9 +1027,11 @@ def test_delete_chat_reminder_endpoint_rejects_unknown_reminder(
         *,
         reminder_id: int,
         chat_id: int,
+        expected_revision: int,
     ) -> bool:
         assert reminder_id == 42
         assert chat_id == 100
+        assert expected_revision == 1
         return False
 
     monkeypatch.setattr(
@@ -867,7 +1040,7 @@ def test_delete_chat_reminder_endpoint_rejects_unknown_reminder(
         fake_delete_active_reminder_for_chat,
     )
 
-    response = client.delete("/api/chats/100/reminders/42")
+    response = client.delete("/api/chats/100/reminders/42?expected_revision=1")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Reminder not found."}
@@ -884,8 +1057,9 @@ def build_create_reminder_request(
     start_at: str = "2099-06-10T12:12:00",
     timezone_name: str = "Asia/Yekaterinburg",
     interval_days: int | None = 3,
+    expected_revision: int | None = None,
 ) -> dict[str, object]:
-    return {
+    request: dict[str, object] = {
         "reminder_text": reminder_text,
         "reminder_kind": reminder_kind,
         "delete_after_two_days": delete_after_two_days,
@@ -896,6 +1070,9 @@ def build_create_reminder_request(
         "timezone_name": timezone_name,
         "interval_days": interval_days,
     }
+    if expected_revision is not None:
+        request["expected_revision"] = expected_revision
+    return request
 
 
 def test_get_tma_reminders_endpoint_accepts_valid_tma_init_data(
@@ -956,6 +1133,7 @@ def test_get_tma_reminders_endpoint_accepts_valid_tma_init_data(
             "day_of_week": None,
             "month_week_number": None,
             "month_day": None,
+            "revision": 1,
         }
     ]
 
@@ -987,6 +1165,11 @@ def test_create_tma_reminder_endpoint_accepts_valid_tma_init_data(
         api_module,
         "create_scheduled_reminder",
         fake_create_scheduled_reminder,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        lambda **kwargs: None,
     )
 
     response = authenticated_client.post(
@@ -1037,6 +1220,159 @@ def test_create_tma_reminder_endpoint_accepts_valid_tma_init_data(
     assert response_json["month_day"] is None
 
 
+def test_create_tma_reminder_forwards_idempotency_key(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.bot = object()
+    captured_keys: list[str] = []
+
+    def fake_create_scheduled_reminder(
+        *,
+        bot,
+        chat_id: int,
+        data,
+        idempotency_key: str,
+    ) -> int:
+        captured_keys.append(idempotency_key)
+        return 42
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        lambda **kwargs: None,
+    )
+
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+            "Idempotency-Key": "request-12345678",
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 201
+    assert captured_keys == ["request-12345678"]
+
+
+def test_idempotent_create_response_uses_current_stored_revision(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.bot = object()
+    stored_reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Изменено после создания",
+        schedule_type="every_days",
+        start_at=datetime(2099, 6, 11, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+        interval_days=2,
+        revision=3,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        lambda **kwargs: 42,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        lambda **kwargs: stored_reminder,
+    )
+
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+            "Idempotency-Key": "request-12345678",
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["reminder_text"] == "Изменено после создания"
+    assert response.json()["revision"] == 3
+
+
+def test_create_tma_reminder_rejects_reused_key_for_different_payload(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.bot = object()
+
+    def fake_create_scheduled_reminder(**kwargs) -> int:
+        raise ReminderIdempotencyConflictError("Ключ уже использован.")
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+            "Idempotency-Key": "request-12345678",
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Ключ уже использован."}
+
+
+def test_create_tma_reminder_reports_idempotency_request_in_progress(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.bot = object()
+
+    def fake_create_scheduled_reminder(**kwargs) -> int:
+        raise ReminderIdempotencyPendingError("Создание ещё выполняется.")
+
+    monkeypatch.setattr(
+        api_module,
+        "create_scheduled_reminder",
+        fake_create_scheduled_reminder,
+    )
+
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+            "Idempotency-Key": "request-12345678",
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 425
+    assert response.json() == {"detail": "Создание ещё выполняется."}
+
+
+def test_create_tma_reminder_validates_idempotency_key_format(
+    authenticated_client: TestClient,
+) -> None:
+    response = authenticated_client.post(
+        "/api/tma/reminders",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+            "Idempotency-Key": "short",
+        },
+        json=build_create_reminder_request(),
+    )
+
+    assert response.status_code == 422
+
+
 def test_update_tma_reminder_endpoint_preserves_auto_delete_setting(
     authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -1063,7 +1399,15 @@ def test_update_tma_reminder_endpoint_preserves_auto_delete_setting(
         lambda **kwargs: current_reminder,
     )
 
-    def fake_update_active_reminder_for_chat(*, bot, reminder_id, chat_id, data):
+    def fake_update_active_reminder_for_chat(
+        *,
+        bot,
+        reminder_id,
+        chat_id,
+        data,
+        expected_revision,
+    ):
+        assert expected_revision == 1
         captured_data.append(data)
         return ReminderReadData(
             id=reminder_id,
@@ -1089,7 +1433,10 @@ def test_update_tma_reminder_endpoint_preserves_auto_delete_setting(
         headers={
             TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
         },
-        json=build_create_reminder_request(delete_after_two_days=True),
+        json=build_create_reminder_request(
+            delete_after_two_days=True,
+            expected_revision=1,
+        ),
     )
 
     assert response.status_code == 200
@@ -1135,13 +1482,109 @@ def test_update_tma_reminder_reports_rescheduling_failure(
         headers={
             TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
         },
-        json=build_create_reminder_request(),
+        json=build_create_reminder_request(expected_revision=1),
     )
 
     assert response.status_code == 503
     assert response.json() == {
         "detail": "Reminder was updated, but rescheduling failed.",
     }
+
+
+def test_update_tma_reminder_rejects_stale_revision(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.bot = object()
+    current_reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Уже изменено",
+        schedule_type="every_days",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+        interval_days=3,
+        revision=2,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        lambda **kwargs: current_reminder,
+    )
+
+    response = authenticated_client.put(
+        "/api/tma/reminders/42",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json=build_create_reminder_request(expected_revision=1),
+    )
+
+    assert response.status_code == 409
+    assert "changed" in response.json()["detail"]
+
+
+def test_preview_tma_reminder_rejects_stale_revision(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_reminder = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Уже изменено",
+        schedule_type="every_days",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+        interval_days=3,
+        revision=2,
+    )
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        lambda **kwargs: current_reminder,
+    )
+
+    response = authenticated_client.post(
+        "/api/tma/reminder-preview",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json={
+            **build_create_reminder_request(expected_revision=1),
+            "reminder_id": 42,
+        },
+    )
+
+    assert response.status_code == 409
+    assert "changed" in response.json()["detail"]
+
+
+def test_preview_tma_reminder_rejects_oversized_id_before_lookup(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lookup_calls: list[object] = []
+    monkeypatch.setattr(
+        api_module,
+        "get_active_reminder_for_chat",
+        lambda *args, **kwargs: lookup_calls.append((args, kwargs)),
+    )
+
+    response = authenticated_client.post(
+        "/api/tma/reminder-preview",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+        json={
+            **build_create_reminder_request(expected_revision=1),
+            "reminder_id": api_module.SQLITE_INT64_MAX + 1,
+        },
+    )
+
+    assert response.status_code == 422
+    assert lookup_calls == []
 
 
 def test_get_tma_timezone_endpoint_accepts_valid_tma_init_data(
@@ -1231,11 +1674,13 @@ def test_delete_tma_reminder_endpoint_accepts_valid_tma_init_data(
         *,
         reminder_id: int,
         chat_id: int,
+        expected_revision: int,
     ) -> bool:
         captured_calls.append(
             {
                 "reminder_id": reminder_id,
                 "chat_id": chat_id,
+                "expected_revision": expected_revision,
             }
         )
         return True
@@ -1247,7 +1692,7 @@ def test_delete_tma_reminder_endpoint_accepts_valid_tma_init_data(
     )
 
     response = authenticated_client.delete(
-        "/api/tma/reminders/42",
+        "/api/tma/reminders/42?expected_revision=1",
         headers={
             TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
         },
@@ -1258,6 +1703,7 @@ def test_delete_tma_reminder_endpoint_accepts_valid_tma_init_data(
         {
             "reminder_id": 42,
             "chat_id": 100,
+            "expected_revision": 1,
         }
     ]
     assert response.json() == {
@@ -1265,6 +1711,30 @@ def test_delete_tma_reminder_endpoint_accepts_valid_tma_init_data(
         "chat_id": 100,
         "deleted": True,
     }
+
+
+def test_delete_tma_reminder_rejects_stale_revision(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_delete(**kwargs) -> bool:
+        raise ReminderRevisionConflictError("stale revision")
+
+    monkeypatch.setattr(
+        api_module,
+        "delete_active_reminder_for_chat",
+        fail_delete,
+    )
+
+    response = authenticated_client.delete(
+        "/api/tma/reminders/42?expected_revision=1",
+        headers={
+            TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
+        },
+    )
+
+    assert response.status_code == 409
+    assert "changed" in response.json()["detail"]
 
 
 def test_create_tma_reminder_endpoint_requires_configured_bot(
@@ -1394,9 +1864,11 @@ def test_delete_tma_reminder_endpoint_rejects_unknown_reminder(
         *,
         reminder_id: int,
         chat_id: int,
+        expected_revision: int,
     ) -> bool:
         assert reminder_id == 42
         assert chat_id == 100
+        assert expected_revision == 1
         return False
 
     monkeypatch.setattr(
@@ -1406,7 +1878,7 @@ def test_delete_tma_reminder_endpoint_rejects_unknown_reminder(
     )
 
     response = authenticated_client.delete(
-        "/api/tma/reminders/42",
+        "/api/tma/reminders/42?expected_revision=1",
         headers={
             TMA_INIT_DATA_HEADER: build_signed_init_data_for_chat(chat_id=100),
         },
@@ -1635,3 +2107,150 @@ def test_non_tma_response_keeps_default_cache_headers() -> None:
     assert "cache-control" not in response.headers
     assert "pragma" not in response.headers
     assert "expires" not in response.headers
+
+
+def test_api_not_found_response_disables_private_cache() -> None:
+    response = TestClient(app).get("/api/does-not-exist")
+
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "private, no-store"
+    assert TMA_INIT_DATA_HEADER.casefold() in {
+        value.strip().casefold() for value in response.headers["vary"].split(",")
+    }
+
+
+def test_api_rejects_oversized_request_body_before_authentication() -> None:
+    response = TestClient(app).post(
+        "/api/tma/reminders",
+        content=b"x" * (api_module.MAX_API_REQUEST_BODY_BYTES + 1),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Request body is too large."}
+    assert response.headers["cache-control"] == "private, no-store"
+
+
+def test_api_body_limit_stops_reading_chunked_request_after_limit() -> None:
+    read_count = 0
+    downstream_called = False
+    sent_messages: list[dict[str, object]] = []
+
+    async def downstream(scope, receive, send) -> None:
+        nonlocal downstream_called
+        downstream_called = True
+
+    async def receive() -> dict[str, object]:
+        nonlocal read_count
+        read_count += 1
+        return {
+            "type": "http.request",
+            "body": b"x" * 8192,
+            "more_body": True,
+        }
+
+    async def send(message: dict[str, object]) -> None:
+        sent_messages.append(message)
+
+    middleware = api_module.ApiRequestBodyLimitMiddleware(
+        downstream,
+        max_body_bytes=api_module.MAX_API_REQUEST_BODY_BYTES,
+    )
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/api/tma/reminders",
+        "raw_path": b"/api/tma/reminders",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 443),
+    }
+
+    asyncio.run(middleware(scope, receive, send))
+
+    assert downstream_called is False
+    assert read_count == 3
+    assert sent_messages[0]["status"] == 413
+
+
+def test_api_body_limit_delegates_receive_after_replaying_buffer() -> None:
+    source_messages = [
+        {
+            "type": "http.request",
+            "body": b"small body",
+            "more_body": False,
+        },
+        {"type": "http.disconnect"},
+    ]
+    original_reads = 0
+    downstream_messages: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        nonlocal original_reads
+        message = source_messages[original_reads]
+        original_reads += 1
+        return message
+
+    async def downstream(scope, replay_receive, send) -> None:
+        downstream_messages.append(await replay_receive())
+        downstream_messages.append(await replay_receive())
+
+    async def send(message: dict[str, object]) -> None:
+        raise AssertionError("Downstream does not send a response in this unit test.")
+
+    middleware = api_module.ApiRequestBodyLimitMiddleware(
+        downstream,
+        max_body_bytes=api_module.MAX_API_REQUEST_BODY_BYTES,
+    )
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/test",
+        "headers": [],
+    }
+
+    asyncio.run(middleware(scope, receive, send))
+
+    assert original_reads == 2
+    assert downstream_messages == source_messages
+
+
+def test_unhandled_api_error_has_private_cache_and_allowed_cors_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_path = "/api/test-unhandled-audit-error"
+
+    if not any(getattr(route, "path", None) == test_path for route in app.routes):
+
+        @app.get(test_path)
+        def raise_unhandled_audit_error() -> None:
+            raise RuntimeError("sensitive internal detail")
+
+    monkeypatch.setattr(
+        api_module,
+        "API_ALLOWED_ORIGINS",
+        ["https://allowed.example"],
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get(
+        test_path,
+        headers={"Origin": "https://allowed.example"},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error."}
+    assert "sensitive internal detail" not in response.text
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["access-control-allow-origin"] == (
+        "https://allowed.example"
+    )
+    assert response.headers["access-control-allow-credentials"] == "true"
+    vary_values = {
+        value.strip().casefold() for value in response.headers["vary"].split(",")
+    }
+    assert {TMA_INIT_DATA_HEADER.casefold(), "origin"} <= vary_values

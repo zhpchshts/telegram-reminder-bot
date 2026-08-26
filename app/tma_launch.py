@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_TMA_LAUNCH_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+DEFAULT_TMA_LAUNCH_TOKEN_MAX_AGE_SECONDS = 24 * 60 * 60
 MAX_TMA_LAUNCH_TOKEN_LENGTH = 512
 TMA_LAUNCH_TOKEN_PATTERN = re.compile(r"^[A-Z2-7]+$")
 
@@ -21,6 +21,7 @@ class TmaLaunchTokenError(ValueError):
 class TmaLaunchContext:
     chat_id: int
     chat_type: str
+    user_id: int
     chat_title: str | None = None
 
 
@@ -28,6 +29,7 @@ def create_tma_launch_token(
     *,
     chat_id: int,
     chat_type: str,
+    user_id: int,
     secret: str,
     chat_title: str | None = None,
     now: int | None = None,
@@ -35,6 +37,9 @@ def create_tma_launch_token(
 ) -> str:
     if isinstance(chat_id, bool) or not isinstance(chat_id, int):
         raise TmaLaunchTokenError("chat_id must be an integer.")
+
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        raise TmaLaunchTokenError("user_id must be an integer.")
 
     if not chat_type:
         raise TmaLaunchTokenError("chat_type is required.")
@@ -47,23 +52,17 @@ def create_tma_launch_token(
         "chat_id": chat_id,
         "chat_type": chat_type,
         "expires_at": current_time + max_age_seconds,
+        "user_id": user_id,
     }
 
     if chat_title:
         payload["chat_title"] = chat_title
 
-    signature = _sign_payload(payload, secret=secret)
-    token = _base32_encode(
-        json.dumps(
-            {
-                "payload": payload,
-                "signature": signature,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode()
-    )
+    token = _encode_tma_launch_token(payload, secret=secret)
+
+    if len(token) > MAX_TMA_LAUNCH_TOKEN_LENGTH and "chat_title" in payload:
+        payload.pop("chat_title")
+        token = _encode_tma_launch_token(payload, secret=secret)
 
     if len(token) > MAX_TMA_LAUNCH_TOKEN_LENGTH:
         raise TmaLaunchTokenError("TMA launch token is too long.")
@@ -132,6 +131,10 @@ def _build_launch_context(payload: dict[str, Any]) -> TmaLaunchContext:
     if not isinstance(chat_type, str) or not chat_type:
         raise TmaLaunchTokenError("TMA launch token is invalid.")
 
+    user_id = payload.get("user_id")
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        raise TmaLaunchTokenError("TMA launch token is invalid.")
+
     chat_title = payload.get("chat_title")
     if chat_title is not None and not isinstance(chat_title, str):
         raise TmaLaunchTokenError("TMA launch token is invalid.")
@@ -139,7 +142,23 @@ def _build_launch_context(payload: dict[str, Any]) -> TmaLaunchContext:
     return TmaLaunchContext(
         chat_id=chat_id,
         chat_type=chat_type,
+        user_id=user_id,
         chat_title=chat_title,
+    )
+
+
+def _encode_tma_launch_token(payload: dict[str, object], *, secret: str) -> str:
+    signature = _sign_payload(payload, secret=secret)
+    return _base32_encode(
+        json.dumps(
+            {
+                "payload": payload,
+                "signature": signature,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
     )
 
 

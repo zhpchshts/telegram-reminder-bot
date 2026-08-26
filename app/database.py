@@ -4,6 +4,7 @@ from typing import Any
 
 from app.config import DB_PATH
 from app.constants import (
+    MAX_ACTIVE_REMINDERS_PER_CHAT,
     MESSAGE_DELETION_DELAY,
     REMINDER_COLUMNS,
     REMINDER_KIND_TEXT,
@@ -11,6 +12,15 @@ from app.constants import (
 )
 
 UTC = timezone.utc
+WEATHER_LOCATION_CACHE_RETENTION = timedelta(days=30)
+
+
+class ActiveReminderLimitError(ValueError):
+    pass
+
+
+class ReminderIdempotencyConflictError(ValueError):
+    pass
 
 
 def get_connection() -> sqlite3.Connection:
@@ -43,6 +53,9 @@ def init_db() -> None:
                 revision INTEGER NOT NULL DEFAULT 1,
                 delivery_tracking_started_at_utc TEXT,
                 last_handled_scheduled_for_utc TEXT,
+                client_request_id TEXT,
+                client_request_hash TEXT,
+                client_request_status TEXT,
                 created_at TEXT NOT NULL
             )
             """
@@ -75,6 +88,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS weather_report_cache (
                 reminder_id INTEGER NOT NULL,
+                reminder_revision INTEGER NOT NULL,
                 scheduled_for_utc TEXT NOT NULL,
                 reminder_text TEXT NOT NULL,
                 report_html TEXT NOT NULL,
@@ -137,6 +151,45 @@ def init_db() -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS reminder_delivery_occurrences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reminder_id INTEGER NOT NULL,
+                reminder_revision INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                scheduled_for_utc TEXT NOT NULL,
+                status TEXT NOT NULL,
+                delivery_attempts INTEGER NOT NULL DEFAULT 0,
+                claim_token TEXT,
+                claimed_at_utc TEXT,
+                next_attempt_at_utc TEXT,
+                last_error TEXT,
+                message_id INTEGER,
+                message_sent_at_utc TEXT,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                UNIQUE(reminder_id, reminder_revision, scheduled_for_utc)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_reminder_delivery_occurrences_due
+            ON reminder_delivery_occurrences(
+                status,
+                next_attempt_at_utc,
+                claimed_at_utc,
+                id
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_reminder_delivery_occurrences_retention
+            ON reminder_delivery_occurrences(status, updated_at_utc, id)
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS reminder_message_deletion_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 reminder_id INTEGER,
@@ -180,6 +233,27 @@ def init_db() -> None:
                 """
             )
             connection.execute("DELETE FROM weather_report_cache")
+
+        if "reminder_revision" not in weather_report_cache_columns:
+            connection.execute(
+                """
+                ALTER TABLE weather_report_cache
+                ADD COLUMN reminder_revision INTEGER NOT NULL DEFAULT 0
+                """
+            )
+            # Prepared reports are derived data. A legacy row cannot be tied
+            # safely to the current reminder revision, so invalidate it.
+            connection.execute("DELETE FROM weather_report_cache")
+
+        # Legacy cache timestamps were naive local times and cannot be compared
+        # safely with the UTC TTL. This table is derived data, so invalidate
+        # only those legacy rows during the additive migration.
+        connection.execute(
+            """
+            DELETE FROM weather_location_cache
+            WHERE length(updated_at) <= 19
+            """
+        )
         existing_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(reminders)").fetchall()
@@ -190,6 +264,20 @@ def init_db() -> None:
                 connection.execute(
                     f"ALTER TABLE reminders ADD COLUMN {column_definition}"
                 )
+
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_client_request
+            ON reminders(chat_id, client_request_id)
+            WHERE client_request_id IS NOT NULL
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_reminders_chat_status
+            ON reminders(chat_id, status, id)
+            """
+        )
 
         completion_occurrence_columns = {
             row["name"]
@@ -252,7 +340,35 @@ def init_db() -> None:
         )
 
 
-def create_reminder_in_db(
+def _cancel_pending_reminder_delivery_occurrences(
+    connection: sqlite3.Connection,
+    *,
+    reminder_id: int,
+    now_utc: str,
+) -> None:
+    connection.execute(
+        """
+        UPDATE reminder_delivery_occurrences
+        SET status = 'cancelled', claim_token = NULL, claimed_at_utc = NULL,
+            next_attempt_at_utc = NULL, updated_at_utc = ?
+        WHERE reminder_id = ? AND status = 'pending'
+        """,
+        (now_utc, reminder_id),
+    )
+
+
+def _delete_prepared_weather_reports_for_reminder(
+    connection: sqlite3.Connection,
+    *,
+    reminder_id: int,
+) -> None:
+    connection.execute(
+        "DELETE FROM weather_report_cache WHERE reminder_id = ?",
+        (reminder_id,),
+    )
+
+
+def _create_reminder_in_db(
     *,
     chat_id: int,
     reminder_text: str,
@@ -268,12 +384,52 @@ def create_reminder_in_db(
     delete_after_two_days: bool = False,
     requires_completion: bool = False,
     repeat_interval_minutes: int | None = None,
-) -> int:
+    client_request_id: str | None = None,
+    client_request_hash: str | None = None,
+) -> tuple[int, bool, str | None]:
     now = datetime.now().isoformat(timespec="seconds")
     delivery_tracking_started_at_utc = format_utc_datetime(datetime.now(UTC))
 
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+
+        if client_request_id is not None:
+            existing = connection.execute(
+                """
+                SELECT id, client_request_hash, client_request_status
+                FROM reminders
+                WHERE chat_id = ? AND client_request_id = ?
+                """,
+                (chat_id, client_request_id),
+            ).fetchone()
+            if existing is not None:
+                if existing["client_request_hash"] != client_request_hash:
+                    raise ReminderIdempotencyConflictError(
+                        "Ключ повторного запроса уже использован для других данных."
+                    )
+                return (
+                    int(existing["id"]),
+                    False,
+                    (
+                        str(existing["client_request_status"])
+                        if existing["client_request_status"] is not None
+                        else None
+                    ),
+                )
+
+        active_count = connection.execute(
+            """
+            SELECT COUNT(*) AS active_count
+            FROM reminders
+            WHERE chat_id = ? AND status = 'active'
+            """,
+            (chat_id,),
+        ).fetchone()
+        if int(active_count["active_count"]) >= MAX_ACTIVE_REMINDERS_PER_CHAT:
+            raise ActiveReminderLimitError(
+                "Достигнут лимит активных напоминаний для этого чата."
+            )
+
         cursor = connection.execute(
             """
             INSERT INTO reminders (
@@ -295,9 +451,15 @@ def create_reminder_in_db(
                 revision,
                 delivery_tracking_started_at_utc,
                 last_handled_scheduled_for_utc,
+                client_request_id,
+                client_request_hash,
+                client_request_status,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, ?)
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL,
+                ?, ?, ?, ?
+            )
             """,
             (
                 chat_id,
@@ -316,11 +478,170 @@ def create_reminder_in_db(
                 int(requires_completion),
                 repeat_interval_minutes if requires_completion else None,
                 delivery_tracking_started_at_utc,
+                client_request_id,
+                client_request_hash,
+                "pending" if client_request_id is not None else None,
                 now,
             ),
         )
 
-        return int(cursor.lastrowid)
+        return (
+            int(cursor.lastrowid),
+            True,
+            "pending" if client_request_id is not None else None,
+        )
+
+
+def create_reminder_in_db(
+    *,
+    chat_id: int,
+    reminder_text: str,
+    reminder_kind: str = REMINDER_KIND_TEXT,
+    schedule_type: str,
+    start_at: datetime,
+    interval_days: int | None = None,
+    interval_weeks: int | None = None,
+    day_of_week: str | None = None,
+    month_week_number: int | None = None,
+    month_day: int | None = None,
+    timezone: str | None = None,
+    delete_after_two_days: bool = False,
+    requires_completion: bool = False,
+    repeat_interval_minutes: int | None = None,
+) -> int:
+    reminder_id, _was_created, _request_status = _create_reminder_in_db(
+        chat_id=chat_id,
+        reminder_text=reminder_text,
+        reminder_kind=reminder_kind,
+        schedule_type=schedule_type,
+        start_at=start_at,
+        interval_days=interval_days,
+        interval_weeks=interval_weeks,
+        day_of_week=day_of_week,
+        month_week_number=month_week_number,
+        month_day=month_day,
+        timezone=timezone,
+        delete_after_two_days=delete_after_two_days,
+        requires_completion=requires_completion,
+        repeat_interval_minutes=repeat_interval_minutes,
+    )
+    return reminder_id
+
+
+def create_reminder_idempotently_in_db(
+    *,
+    chat_id: int,
+    reminder_text: str,
+    reminder_kind: str = REMINDER_KIND_TEXT,
+    schedule_type: str,
+    start_at: datetime,
+    client_request_id: str,
+    client_request_hash: str,
+    interval_days: int | None = None,
+    interval_weeks: int | None = None,
+    day_of_week: str | None = None,
+    month_week_number: int | None = None,
+    month_day: int | None = None,
+    timezone: str | None = None,
+    delete_after_two_days: bool = False,
+    requires_completion: bool = False,
+    repeat_interval_minutes: int | None = None,
+) -> tuple[int, bool, str | None]:
+    return _create_reminder_in_db(
+        chat_id=chat_id,
+        reminder_text=reminder_text,
+        reminder_kind=reminder_kind,
+        schedule_type=schedule_type,
+        start_at=start_at,
+        interval_days=interval_days,
+        interval_weeks=interval_weeks,
+        day_of_week=day_of_week,
+        month_week_number=month_week_number,
+        month_day=month_day,
+        timezone=timezone,
+        delete_after_two_days=delete_after_two_days,
+        requires_completion=requires_completion,
+        repeat_interval_minutes=repeat_interval_minutes,
+        client_request_id=client_request_id,
+        client_request_hash=client_request_hash,
+    )
+
+
+def get_reminder_idempotency_record(
+    *,
+    chat_id: int,
+    client_request_id: str,
+    client_request_hash: str,
+) -> dict[str, Any] | None:
+    with get_connection() as connection:
+        existing = connection.execute(
+            """
+            SELECT id, client_request_hash, client_request_status,
+                   status AS reminder_status, revision
+            FROM reminders
+            WHERE chat_id = ? AND client_request_id = ?
+            """,
+            (chat_id, client_request_id),
+        ).fetchone()
+
+    if existing is None:
+        return None
+    if existing["client_request_hash"] != client_request_hash:
+        raise ReminderIdempotencyConflictError(
+            "Ключ повторного запроса уже использован для других данных."
+        )
+    return {
+        "id": int(existing["id"]),
+        "client_request_status": existing["client_request_status"],
+        "reminder_status": str(existing["reminder_status"]),
+        "revision": int(existing["revision"]),
+    }
+
+
+def mark_reminder_idempotency_succeeded(
+    *,
+    reminder_id: int,
+    client_request_id: str,
+) -> bool:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE reminders
+            SET client_request_status = 'succeeded'
+            WHERE id = ? AND client_request_id = ?
+              AND status = 'active'
+              AND client_request_status = 'pending'
+            """,
+            (reminder_id, client_request_id),
+        )
+    return cursor.rowcount == 1
+
+
+def delete_terminal_reminder_delivery_occurrences(
+    *,
+    expired_before: datetime,
+    limit: int,
+) -> int:
+    if limit < 1:
+        raise ValueError("limit must be at least 1.")
+
+    expired_before_utc = format_utc_datetime(expired_before)
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            DELETE FROM reminder_delivery_occurrences
+            WHERE id IN (
+                SELECT id
+                FROM reminder_delivery_occurrences
+                WHERE status IN ('sent', 'skipped', 'failed', 'cancelled')
+                  AND updated_at_utc < ?
+                ORDER BY updated_at_utc, id
+                LIMIT ?
+            )
+            """,
+            (expired_before_utc, limit),
+        )
+    return cursor.rowcount
 
 
 def update_reminder_in_db(
@@ -340,6 +661,7 @@ def update_reminder_in_db(
     delete_after_two_days: bool = False,
     requires_completion: bool = False,
     repeat_interval_minutes: int | None = None,
+    expected_revision: int | None = None,
 ) -> bool:
     delivery_tracking_started_at_utc = format_utc_datetime(datetime.now(UTC))
 
@@ -366,6 +688,7 @@ def update_reminder_in_db(
                 delivery_tracking_started_at_utc = ?,
                 last_handled_scheduled_for_utc = NULL
             WHERE id = ? AND chat_id = ? AND status = 'active'
+              AND (? IS NULL OR revision = ?)
             """,
             (
                 reminder_text,
@@ -384,10 +707,21 @@ def update_reminder_in_db(
                 delivery_tracking_started_at_utc,
                 reminder_id,
                 chat_id,
+                expected_revision,
+                expected_revision,
             ),
         )
         if cursor.rowcount > 0:
             now_utc = format_utc_datetime(datetime.now(UTC))
+            _delete_prepared_weather_reports_for_reminder(
+                connection,
+                reminder_id=reminder_id,
+            )
+            _cancel_pending_reminder_delivery_occurrences(
+                connection,
+                reminder_id=reminder_id,
+                now_utc=now_utc,
+            )
             _enqueue_cancelled_completion_checkpoints(
                 connection,
                 reminder_id=reminder_id,
@@ -488,6 +822,20 @@ def mark_reminder_as_deleted(reminder_id: int) -> None:
     set_reminder_status(reminder_id, "deleted")
 
 
+def clear_reminder_idempotency_key(reminder_id: int) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE reminders
+            SET client_request_id = NULL,
+                client_request_hash = NULL,
+                client_request_status = NULL
+            WHERE id = ?
+            """,
+            (reminder_id,),
+        )
+
+
 def mark_reminder_as_missed(reminder_id: int) -> None:
     set_reminder_status(reminder_id, "missed")
 
@@ -497,15 +845,26 @@ def mark_reminder_occurrence_handled(
     scheduled_for_utc: datetime,
     *,
     final_status: str | None = None,
+    expected_revision: int | None = None,
 ) -> bool:
     if final_status not in {None, "sent", "missed"}:
         raise ValueError("final_status must be 'sent', 'missed', or None.")
 
     scheduled_for = format_utc_datetime(scheduled_for_utc)
 
+    revision_clause = "" if expected_revision is None else "AND revision = ?"
+    params: tuple[Any, ...] = (
+        scheduled_for,
+        final_status,
+        reminder_id,
+        scheduled_for,
+    )
+    if expected_revision is not None:
+        params += (expected_revision,)
+
     with get_connection() as connection:
         cursor = connection.execute(
-            """
+            f"""
             UPDATE reminders
             SET
                 last_handled_scheduled_for_utc = ?,
@@ -516,13 +875,9 @@ def mark_reminder_occurrence_handled(
                   last_handled_scheduled_for_utc IS NULL
                   OR last_handled_scheduled_for_utc < ?
               )
+              {revision_clause}
             """,
-            (
-                scheduled_for,
-                final_status,
-                reminder_id,
-                scheduled_for,
-            ),
+            params,
         )
 
     return cursor.rowcount > 0
@@ -609,14 +964,17 @@ def set_chat_timezone(chat_id: int, timezone: str) -> None:
 
 
 def get_cached_weather_location(location_key: str) -> dict[str, Any] | None:
+    fresh_since = format_utc_datetime(
+        datetime.now(UTC) - WEATHER_LOCATION_CACHE_RETENTION
+    )
     with get_connection() as connection:
         row = connection.execute(
             """
             SELECT name, admin1, country, latitude, longitude
             FROM weather_location_cache
-            WHERE location_key = ?
+            WHERE location_key = ? AND updated_at >= ?
             """,
-            (location_key,),
+            (location_key, fresh_since),
         ).fetchone()
 
     return dict(row) if row else None
@@ -626,7 +984,7 @@ def save_cached_weather_location(
     location_key: str,
     location: dict[str, Any],
 ) -> None:
-    now = datetime.now().isoformat(timespec="seconds")
+    now = format_utc_datetime(datetime.now(UTC))
 
     with get_connection() as connection:
         connection.execute(
@@ -663,6 +1021,7 @@ def save_cached_weather_location(
 
 def get_prepared_weather_report(
     reminder_id: int,
+    reminder_revision: int,
     reminder_text: str,
     earliest_scheduled_for: datetime,
     latest_scheduled_for: datetime,
@@ -673,17 +1032,23 @@ def get_prepared_weather_report(
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT scheduled_for_utc, report_html
-            FROM weather_report_cache
-            WHERE reminder_id = ?
-              AND reminder_text = ?
-              AND scheduled_for_utc >= ?
-              AND scheduled_for_utc <= ?
-            ORDER BY scheduled_for_utc DESC
+            SELECT cache.scheduled_for_utc, cache.report_html
+            FROM weather_report_cache AS cache
+            JOIN reminders AS reminder ON reminder.id = cache.reminder_id
+            WHERE cache.reminder_id = ?
+              AND cache.reminder_revision = ?
+              AND reminder.revision = ?
+              AND reminder.status = 'active'
+              AND cache.reminder_text = ?
+              AND cache.scheduled_for_utc >= ?
+              AND cache.scheduled_for_utc <= ?
+            ORDER BY cache.scheduled_for_utc DESC
             LIMIT 1
             """,
             (
                 reminder_id,
+                reminder_revision,
+                reminder_revision,
                 reminder_text,
                 earliest_scheduled_for_utc,
                 latest_scheduled_for_utc,
@@ -699,43 +1064,81 @@ def get_prepared_weather_report(
     }
 
 
+def delete_expired_weather_location_cache(
+    *,
+    expired_before: datetime,
+    limit: int,
+) -> int:
+    if limit < 1:
+        raise ValueError("limit must be at least 1.")
+
+    expired_before_utc = format_utc_datetime(expired_before)
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            DELETE FROM weather_location_cache
+            WHERE location_key IN (
+                SELECT location_key
+                FROM weather_location_cache
+                WHERE updated_at < ?
+                ORDER BY updated_at, location_key
+                LIMIT ?
+            )
+            """,
+            (expired_before_utc, limit),
+        )
+    return cursor.rowcount
+
+
 def save_prepared_weather_report(
     reminder_id: int,
+    reminder_revision: int,
     scheduled_for: datetime,
     reminder_text: str,
     report_html: str,
-) -> None:
+) -> bool:
     scheduled_for_utc = format_utc_datetime(scheduled_for)
     prepared_at_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     with get_connection() as connection:
-        connection.execute(
+        connection.execute("BEGIN IMMEDIATE")
+        cursor = connection.execute(
             """
             INSERT INTO weather_report_cache (
                 reminder_id,
+                reminder_revision,
                 scheduled_for_utc,
                 reminder_text,
                 report_html,
                 prepared_at_utc
             )
-            VALUES (?, ?, ?, ?, ?)
+            SELECT ?, ?, ?, ?, ?, ?
+            FROM reminders
+            WHERE id = ? AND status = 'active' AND revision = ?
             ON CONFLICT(reminder_id, scheduled_for_utc) DO UPDATE SET
+                reminder_revision = excluded.reminder_revision,
                 reminder_text = excluded.reminder_text,
                 report_html = excluded.report_html,
                 prepared_at_utc = excluded.prepared_at_utc
+            WHERE excluded.reminder_revision >= weather_report_cache.reminder_revision
             """,
             (
                 reminder_id,
+                reminder_revision,
                 scheduled_for_utc,
                 reminder_text,
                 report_html,
                 prepared_at_utc,
+                reminder_id,
+                reminder_revision,
             ),
         )
+        return cursor.rowcount == 1
 
 
 def delete_prepared_weather_report(
     reminder_id: int,
+    reminder_revision: int,
     scheduled_for_utc: str,
 ) -> None:
     with get_connection() as connection:
@@ -743,10 +1146,12 @@ def delete_prepared_weather_report(
             """
             DELETE FROM weather_report_cache
             WHERE reminder_id = ?
+              AND reminder_revision = ?
               AND scheduled_for_utc = ?
             """,
             (
                 reminder_id,
+                reminder_revision,
                 scheduled_for_utc,
             ),
         )
@@ -754,12 +1159,9 @@ def delete_prepared_weather_report(
 
 def delete_prepared_weather_reports_for_reminder(reminder_id: int) -> None:
     with get_connection() as connection:
-        connection.execute(
-            """
-            DELETE FROM weather_report_cache
-            WHERE reminder_id = ?
-            """,
-            (reminder_id,),
+        _delete_prepared_weather_reports_for_reminder(
+            connection,
+            reminder_id=reminder_id,
         )
 
 
@@ -781,6 +1183,389 @@ def format_utc_datetime(value: datetime) -> str:
         raise ValueError("Datetime must include a timezone.")
 
     return value.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+REMINDER_DELIVERY_OCCURRENCE_COLUMNS = """
+    id,
+    reminder_id,
+    reminder_revision,
+    chat_id,
+    scheduled_for_utc,
+    status,
+    delivery_attempts,
+    claim_token,
+    claimed_at_utc,
+    next_attempt_at_utc,
+    last_error,
+    message_id,
+    message_sent_at_utc,
+    created_at_utc,
+    updated_at_utc
+"""
+
+
+def claim_reminder_delivery_occurrence(
+    *,
+    reminder_id: int,
+    expected_revision: int,
+    scheduled_for_utc: datetime,
+    claim_token: str,
+    now: datetime,
+    stale_before: datetime,
+    max_attempts: int,
+    occurrence_id: int | None = None,
+) -> dict[str, Any]:
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be greater than or equal to 1.")
+
+    scheduled_for = format_utc_datetime(scheduled_for_utc)
+    now_utc = format_utc_datetime(now)
+    stale_before_utc = format_utc_datetime(stale_before)
+
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        reminder = connection.execute(
+            """
+            SELECT id, chat_id, status, schedule_type, requires_completion,
+                   revision, last_handled_scheduled_for_utc
+            FROM reminders
+            WHERE id = ?
+            """,
+            (reminder_id,),
+        ).fetchone()
+        occurrence_where = """
+            reminder_id = ? AND reminder_revision = ? AND scheduled_for_utc = ?
+        """
+        occurrence_params: tuple[Any, ...] = (
+            reminder_id,
+            expected_revision,
+            scheduled_for,
+        )
+        if occurrence_id is not None:
+            occurrence_where += " AND id = ?"
+            occurrence_params += (occurrence_id,)
+        occurrence = connection.execute(
+            f"""
+            SELECT {REMINDER_DELIVERY_OCCURRENCE_COLUMNS}
+            FROM reminder_delivery_occurrences
+            WHERE {occurrence_where}
+            """,
+            occurrence_params,
+        ).fetchone()
+
+        if reminder is None or int(reminder["revision"]) != expected_revision:
+            if occurrence is not None and occurrence["status"] == "pending":
+                connection.execute(
+                    """
+                    UPDATE reminder_delivery_occurrences
+                    SET status = 'cancelled', claim_token = NULL,
+                        claimed_at_utc = NULL, next_attempt_at_utc = NULL,
+                        updated_at_utc = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (now_utc, occurrence["id"]),
+                )
+            return {"outcome": "stale_revision"}
+
+        watermark = reminder["last_handled_scheduled_for_utc"]
+        if watermark is not None and str(watermark) >= scheduled_for:
+            if occurrence is not None and occurrence["status"] == "pending":
+                connection.execute(
+                    """
+                    UPDATE reminder_delivery_occurrences
+                    SET status = 'sent', claim_token = NULL,
+                        claimed_at_utc = NULL, next_attempt_at_utc = NULL,
+                        updated_at_utc = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (now_utc, occurrence["id"]),
+                )
+            return {"outcome": "already_handled"}
+
+        parent_is_active = bool(
+            reminder["status"] == "active"
+            and int(reminder["requires_completion"] or 0) == 0
+        )
+        if not parent_is_active:
+            if occurrence is not None and occurrence["status"] == "pending":
+                connection.execute(
+                    """
+                    UPDATE reminder_delivery_occurrences
+                    SET status = 'cancelled', claim_token = NULL,
+                        claimed_at_utc = NULL, next_attempt_at_utc = NULL,
+                        updated_at_utc = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (now_utc, occurrence["id"]),
+                )
+            return {"outcome": "inactive"}
+
+        if occurrence_id is not None and occurrence is None:
+            return {"outcome": "stale_occurrence"}
+
+        if occurrence is not None:
+            status = str(occurrence["status"])
+            if status in {"sent", "skipped", "failed"}:
+                return {"outcome": "already_handled", "occurrence": occurrence}
+            if status != "pending":
+                return {"outcome": "inactive", "occurrence": occurrence}
+
+            retry_at = occurrence["next_attempt_at_utc"]
+            if retry_at is not None and str(retry_at) > now_utc:
+                return {"outcome": "retry_scheduled", "occurrence": occurrence}
+
+            attempts = int(occurrence["delivery_attempts"] or 0)
+            retry_is_due = retry_at is not None and str(retry_at) <= now_utc
+            claim_is_fresh = bool(
+                occurrence["claim_token"]
+                and occurrence["claimed_at_utc"]
+                and str(occurrence["claimed_at_utc"]) > stale_before_utc
+            )
+            if claim_is_fresh and not retry_is_due:
+                return {"outcome": "delivery_in_progress", "occurrence": occurrence}
+
+            if attempts >= max_attempts:
+                connection.execute(
+                    """
+                    UPDATE reminder_delivery_occurrences
+                    SET status = 'failed', claim_token = NULL,
+                        claimed_at_utc = NULL, next_attempt_at_utc = NULL,
+                        last_error = COALESCE(last_error, 'delivery attempts exhausted'),
+                        updated_at_utc = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (now_utc, occurrence["id"]),
+                )
+                _advance_reminder_watermark(
+                    connection,
+                    reminder_id=reminder_id,
+                    scheduled_for_utc=scheduled_for,
+                    mark_once_sent=False,
+                    expected_revision=expected_revision,
+                    once_status="missed",
+                )
+                return {"outcome": "attempts_exhausted"}
+
+            cursor = connection.execute(
+                """
+                UPDATE reminder_delivery_occurrences
+                SET claim_token = ?, claimed_at_utc = ?,
+                    next_attempt_at_utc = NULL,
+                    delivery_attempts = delivery_attempts + 1,
+                    updated_at_utc = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (claim_token, now_utc, now_utc, occurrence["id"]),
+            )
+            if cursor.rowcount != 1:
+                return {"outcome": "inactive"}
+            return {
+                "outcome": "claimed",
+                "occurrence_id": int(occurrence["id"]),
+                "delivery_attempts": attempts + 1,
+                "is_recovery": bool(occurrence["claim_token"]),
+            }
+
+        cursor = connection.execute(
+            """
+            INSERT INTO reminder_delivery_occurrences (
+                reminder_id, reminder_revision, chat_id, scheduled_for_utc,
+                status, delivery_attempts, claim_token, claimed_at_utc,
+                created_at_utc, updated_at_utc
+            )
+            VALUES (?, ?, ?, ?, 'pending', 1, ?, ?, ?, ?)
+            """,
+            (
+                reminder_id,
+                expected_revision,
+                reminder["chat_id"],
+                scheduled_for,
+                claim_token,
+                now_utc,
+                now_utc,
+                now_utc,
+            ),
+        )
+        return {
+            "outcome": "claimed",
+            "occurrence_id": int(cursor.lastrowid),
+            "delivery_attempts": 1,
+            "is_recovery": False,
+        }
+
+
+def finalize_reminder_delivery_occurrence(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    outcome: str,
+    message_id: int | None = None,
+    message_sent_at: datetime | None = None,
+) -> bool:
+    if outcome not in {"sent", "skipped"}:
+        raise ValueError("outcome must be 'sent' or 'skipped'.")
+    if (message_id is None) != (message_sent_at is None):
+        raise ValueError("message_id and message_sent_at must be provided together.")
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE reminder_delivery_occurrences
+            SET status = ?, claim_token = NULL, claimed_at_utc = NULL,
+                next_attempt_at_utc = NULL, last_error = NULL,
+                message_id = ?, message_sent_at_utc = ?, updated_at_utc = ?
+            WHERE id = ? AND status = 'pending' AND claim_token = ?
+            """,
+            (
+                outcome,
+                message_id,
+                (
+                    format_utc_datetime(message_sent_at)
+                    if message_sent_at is not None
+                    else None
+                ),
+                format_utc_datetime(datetime.now(UTC)),
+                occurrence_id,
+                claim_token,
+            ),
+        )
+        return cursor.rowcount == 1
+
+
+def refresh_reminder_delivery_claim(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    now: datetime,
+) -> bool:
+    now_utc = format_utc_datetime(now)
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE reminder_delivery_occurrences
+            SET claimed_at_utc = ?, updated_at_utc = ?
+            WHERE id = ? AND status = 'pending' AND claim_token = ?
+            """,
+            (now_utc, now_utc, occurrence_id, claim_token),
+        )
+    return cursor.rowcount == 1
+
+
+def reschedule_reminder_delivery_occurrence(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    next_attempt_at: datetime,
+    last_error: str,
+) -> bool:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE reminder_delivery_occurrences
+            SET claim_token = NULL, claimed_at_utc = NULL,
+                next_attempt_at_utc = ?, last_error = ?, updated_at_utc = ?
+            WHERE id = ? AND status = 'pending' AND claim_token = ?
+            """,
+            (
+                format_utc_datetime(next_attempt_at),
+                last_error[:1000],
+                format_utc_datetime(datetime.now(UTC)),
+                occurrence_id,
+                claim_token,
+            ),
+        )
+        return cursor.rowcount == 1
+
+
+def fail_reminder_delivery_occurrence(
+    *,
+    occurrence_id: int,
+    claim_token: str,
+    last_error: str,
+) -> bool:
+    now_utc = format_utc_datetime(datetime.now(UTC))
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        occurrence = connection.execute(
+            f"""
+            SELECT {REMINDER_DELIVERY_OCCURRENCE_COLUMNS}
+            FROM reminder_delivery_occurrences
+            WHERE id = ?
+            """,
+            (occurrence_id,),
+        ).fetchone()
+        if occurrence is None:
+            return False
+        cursor = connection.execute(
+            """
+            UPDATE reminder_delivery_occurrences
+            SET status = 'failed', claim_token = NULL, claimed_at_utc = NULL,
+                next_attempt_at_utc = NULL, last_error = ?, updated_at_utc = ?
+            WHERE id = ? AND status = 'pending' AND claim_token = ?
+            """,
+            (last_error[:1000], now_utc, occurrence_id, claim_token),
+        )
+        if cursor.rowcount != 1:
+            return False
+        _advance_reminder_watermark(
+            connection,
+            reminder_id=int(occurrence["reminder_id"]),
+            scheduled_for_utc=str(occurrence["scheduled_for_utc"]),
+            mark_once_sent=False,
+            expected_revision=int(occurrence["reminder_revision"]),
+            once_status="missed",
+        )
+        return True
+
+
+def cancel_reminder_delivery_occurrence(occurrence_id: int) -> bool:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE reminder_delivery_occurrences
+            SET status = 'cancelled', claim_token = NULL, claimed_at_utc = NULL,
+                next_attempt_at_utc = NULL, updated_at_utc = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (format_utc_datetime(datetime.now(UTC)), occurrence_id),
+        )
+        return cursor.rowcount == 1
+
+
+def get_due_reminder_delivery_occurrences(
+    *,
+    now: datetime,
+    stale_before: datetime,
+    limit: int,
+) -> list[sqlite3.Row]:
+    now_utc = format_utc_datetime(now)
+    stale_before_utc = format_utc_datetime(stale_before)
+    with get_connection() as connection:
+        return connection.execute(
+            f"""
+            SELECT {REMINDER_DELIVERY_OCCURRENCE_COLUMNS}
+            FROM reminder_delivery_occurrences
+            WHERE status = 'pending' AND (
+                (next_attempt_at_utc IS NOT NULL AND next_attempt_at_utc <= ?)
+                OR (
+                    next_attempt_at_utc IS NULL
+                    AND claim_token IS NULL
+                )
+                OR (
+                    next_attempt_at_utc IS NULL
+                    AND claim_token IS NOT NULL
+                    AND (claimed_at_utc IS NULL OR claimed_at_utc <= ?)
+                )
+            )
+            ORDER BY COALESCE(
+                next_attempt_at_utc,
+                claimed_at_utc,
+                created_at_utc
+            ), id
+            LIMIT ?
+            """,
+            (now_utc, stale_before_utc, limit),
+        ).fetchall()
 
 
 def _enqueue_reminder_message_deletion(
@@ -984,9 +1769,26 @@ def _advance_reminder_watermark(
     reminder_id: int,
     scheduled_for_utc: str,
     mark_once_sent: bool = False,
-) -> None:
-    connection.execute(
-        """
+    expected_revision: int | None = None,
+    once_status: str | None = None,
+) -> bool:
+    if once_status not in {None, "sent", "missed"}:
+        raise ValueError("once_status must be 'sent', 'missed', or None.")
+
+    revision_clause = "" if expected_revision is None else "AND revision = ?"
+    params: tuple[Any, ...] = (
+        scheduled_for_utc,
+        scheduled_for_utc,
+        once_status,
+        once_status,
+        int(mark_once_sent),
+        reminder_id,
+    )
+    if expected_revision is not None:
+        params += (expected_revision,)
+
+    cursor = connection.execute(
+        f"""
         UPDATE reminders
         SET
             last_handled_scheduled_for_utc = CASE
@@ -996,18 +1798,16 @@ def _advance_reminder_watermark(
                 ELSE last_handled_scheduled_for_utc
             END,
             status = CASE
+                WHEN schedule_type = 'once' AND ? IS NOT NULL THEN ?
                 WHEN ? AND schedule_type = 'once' THEN 'sent'
                 ELSE status
             END
         WHERE id = ?
+          {revision_clause}
         """,
-        (
-            scheduled_for_utc,
-            scheduled_for_utc,
-            int(mark_once_sent),
-            reminder_id,
-        ),
+        params,
     )
+    return cursor.rowcount == 1
 
 
 def _is_completion_occurrence_obsolete(
@@ -2190,7 +2990,12 @@ def fail_completion_occurrence(
         return True
 
 
-def delete_active_reminder_for_chat_in_db(reminder_id: int, chat_id: int) -> bool:
+def delete_active_reminder_for_chat_in_db(
+    reminder_id: int,
+    chat_id: int,
+    *,
+    expected_revision: int | None = None,
+) -> bool:
     now_utc = format_utc_datetime(datetime.now(UTC))
     with get_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -2198,11 +3003,21 @@ def delete_active_reminder_for_chat_in_db(reminder_id: int, chat_id: int) -> boo
             """
             UPDATE reminders SET status = 'deleted'
             WHERE id = ? AND chat_id = ? AND status = 'active'
+              AND (? IS NULL OR revision = ?)
             """,
-            (reminder_id, chat_id),
+            (reminder_id, chat_id, expected_revision, expected_revision),
         )
         if cursor.rowcount != 1:
             return False
+        _delete_prepared_weather_reports_for_reminder(
+            connection,
+            reminder_id=reminder_id,
+        )
+        _cancel_pending_reminder_delivery_occurrences(
+            connection,
+            reminder_id=reminder_id,
+            now_utc=now_utc,
+        )
         _enqueue_cancelled_completion_checkpoints(
             connection,
             reminder_id=reminder_id,

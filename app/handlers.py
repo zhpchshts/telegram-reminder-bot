@@ -31,6 +31,7 @@ from app.reminder_parsing import (
     parse_timezone_command,
 )
 from app.reminder_service import (
+    ActiveReminderLimitError,
     build_active_reminders_list_text_for_chat,
     build_created_reminder_text,
     create_scheduled_reminder,
@@ -69,11 +70,13 @@ def build_tma_launch_url(
     *,
     chat_id: int,
     chat_type: str,
+    user_id: int,
     chat_title: str | None,
 ) -> str:
     token = create_tma_launch_token(
         chat_id=chat_id,
         chat_type=chat_type,
+        user_id=user_id,
         chat_title=chat_title,
         secret=BOT_TOKEN,
     )
@@ -81,12 +84,13 @@ def build_tma_launch_url(
 
 
 def build_tma_keyboard_for_message(message: Message) -> InlineKeyboardMarkup | None:
-    if not TMA_DIRECT_URL:
+    if not TMA_DIRECT_URL or message.from_user is None:
         return None
 
     launch_url = build_tma_launch_url(
         chat_id=message.chat.id,
         chat_type=message.chat.type,
+        user_id=message.from_user.id,
         chat_title=message.chat.title,
     )
     return build_tma_keyboard(launch_url)
@@ -128,11 +132,15 @@ async def create_schedule_and_confirm(
     *,
     data: ReminderCreateData,
 ) -> None:
-    reminder_id = create_scheduled_reminder(
-        bot=bot,
-        chat_id=message.chat.id,
-        data=data,
-    )
+    try:
+        reminder_id = create_scheduled_reminder(
+            bot=bot,
+            chat_id=message.chat.id,
+            data=data,
+        )
+    except ActiveReminderLimitError as error:
+        await message.answer(str(error))
+        return
     answer_text = build_created_reminder_text(
         reminder_id=reminder_id,
         data=data,
@@ -244,6 +252,13 @@ async def app_command(message: Message) -> None:
     reply_markup = build_tma_keyboard_for_message(message)
 
     if reply_markup is None:
+        if message.from_user is None:
+            await message.answer(
+                "Не удалось определить пользователя Telegram. "
+                "Отправь команду /app от своего имени."
+            )
+            return
+
         await message.answer(
             "Mini App пока не настроен.\n\n"
             "Администратору нужно задать переменную окружения TMA_DIRECT_URL."

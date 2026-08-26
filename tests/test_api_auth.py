@@ -56,11 +56,13 @@ def make_launch_token(
     *,
     chat_id: int = -100,
     chat_type: str = "supergroup",
+    user_id: int = 123,
     chat_title: str | None = "Home",
 ) -> str:
     return create_tma_launch_token(
         chat_id=chat_id,
         chat_type=chat_type,
+        user_id=user_id,
         chat_title=chat_title,
         secret=BOT_TOKEN,
         now=1_700_000_000,
@@ -292,6 +294,7 @@ def test_matching_chat_id_dependency_returns_authorized_chat_id(
     patch_validated_init_data(
         monkeypatch,
         make_init_data(
+            user={"id": 123},
             chat=None,
             chat_type="group",
             start_param=make_launch_token(
@@ -318,6 +321,7 @@ def test_matching_chat_id_dependency_rejects_different_chat_id(
     patch_validated_init_data(
         monkeypatch,
         make_init_data(
+            user={"id": 123},
             chat=None,
             chat_type="group",
             start_param=make_launch_token(
@@ -408,3 +412,80 @@ def test_get_tma_chat_rejects_invalid_launch_token() -> None:
 
     assert error.value.status_code == 401
     assert error.value.detail == "TMA launch token is invalid."
+
+
+def test_get_tma_chat_requires_signed_user() -> None:
+    init_data = make_init_data(
+        start_param=make_launch_token(),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        get_tma_chat(init_data=init_data)
+
+    assert error.value.status_code == 401
+    assert error.value.detail == "Telegram init data user is required."
+
+
+def test_get_tma_chat_rejects_different_signed_user() -> None:
+    init_data = make_init_data(
+        user={"id": 456},
+        start_param=make_launch_token(user_id=123),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        get_tma_chat(init_data=init_data)
+
+    assert error.value.status_code == 403
+    assert error.value.detail == (
+        "Telegram init data user.id does not match TMA launch token user_id."
+    )
+
+
+def test_get_tma_chat_accepts_matching_signed_chat_context() -> None:
+    init_data = make_init_data(
+        user={"id": 123},
+        chat={"id": -100, "type": "supergroup", "title": "Signed title"},
+        start_param=make_launch_token(
+            chat_id=-100,
+            chat_type="supergroup",
+            chat_title="Launch title",
+        ),
+    )
+
+    assert get_tma_chat(init_data=init_data) == {
+        "id": -100,
+        "type": "supergroup",
+        "title": "Launch title",
+    }
+
+
+def test_get_tma_chat_rejects_different_signed_chat_id() -> None:
+    init_data = make_init_data(
+        user={"id": 123},
+        chat={"id": -200, "type": "supergroup"},
+        start_param=make_launch_token(chat_id=-100, chat_type="supergroup"),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        get_tma_chat(init_data=init_data)
+
+    assert error.value.status_code == 403
+    assert error.value.detail == (
+        "Telegram init data chat.id does not match TMA launch token chat_id."
+    )
+
+
+def test_get_tma_chat_rejects_different_signed_chat_type() -> None:
+    init_data = make_init_data(
+        user={"id": 123},
+        chat={"id": -100, "type": "group"},
+        start_param=make_launch_token(chat_id=-100, chat_type="supergroup"),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        get_tma_chat(init_data=init_data)
+
+    assert error.value.status_code == 403
+    assert error.value.detail == (
+        "Telegram init data chat.type does not match TMA launch token chat_type."
+    )

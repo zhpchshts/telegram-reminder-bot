@@ -20,7 +20,6 @@ HEALTHCHECK_CHAT_ID = (
 
 API_HOST = os.getenv("API_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("API_PORT", "8000"))
-TMA_URL = os.getenv("TMA_URL")
 TMA_BOT_USERNAME = os.getenv("TMA_BOT_USERNAME", "ZhpchshtsReminderBot")
 TMA_DIRECT_URL = os.getenv(
     "TMA_DIRECT_URL",

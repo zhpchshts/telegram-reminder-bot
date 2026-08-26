@@ -1,15 +1,23 @@
 from datetime import datetime
+from typing import Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-from app.formatting import format_period_line
 from app.constants import (
     COMPLETION_REMINDER_TEXT_MAX_LENGTH,
     COMPLETION_REPEAT_INTERVAL_OPTIONS,
     LAST_DAY_OF_MONTH,
+    MAX_INTERVAL_DAYS,
+    MAX_INTERVAL_WEEKS,
+    MAX_WEATHER_LOCATIONS,
     REMINDER_KIND_TEXT,
+    REMINDER_TEXT_MAX_LENGTH,
+    SQLITE_INT64_MAX,
+    WEATHER_LOCATION_MAX_LENGTH,
+    WEATHER_REMINDER_TEXT_MAX_LENGTH,
 )
+from app.formatting import format_period_line
 from app.reminder_models import ReminderCreateData, ReminderReadData
 from app.schedule_calculations import get_schedule_start_at_on_or_after
 
@@ -34,26 +42,66 @@ class ReminderResponse(BaseModel):
     day_of_week: str | None = None
     month_week_number: int | None = None
     month_day: int | None = None
+    revision: int = 1
 
 
-class ReminderCreateRequest(BaseModel):
-    reminder_text: str
-    reminder_kind: str = REMINDER_KIND_TEXT
+class StrictRequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ReminderCreateRequest(StrictRequestModel):
+    reminder_text: str = Field(
+        min_length=1,
+        max_length=REMINDER_TEXT_MAX_LENGTH,
+    )
+    reminder_kind: Literal["text", "weather"] = REMINDER_KIND_TEXT
     delete_after_two_days: StrictBool = False
     requires_completion: StrictBool = False
-    repeat_interval_minutes: int | None = None
-    schedule_type: str
+    repeat_interval_minutes: int | None = Field(default=None, strict=True, ge=1)
+    schedule_type: Literal[
+        "once",
+        "yearly_date",
+        "every_days",
+        "every_week",
+        "monthly_weekday",
+        "monthly_day",
+    ]
     start_at: datetime
-    timezone_name: str
-    interval_days: int | None = None
-    interval_weeks: int | None = None
-    day_of_week: str | None = None
-    month_week_number: int | None = None
-    month_day: int | None = None
+    timezone_name: str = Field(min_length=1, max_length=128)
+    interval_days: int | None = Field(
+        default=None,
+        strict=True,
+        ge=1,
+        le=MAX_INTERVAL_DAYS,
+    )
+    interval_weeks: int | None = Field(
+        default=None,
+        strict=True,
+        ge=1,
+        le=MAX_INTERVAL_WEEKS,
+    )
+    day_of_week: Literal["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] | None = None
+    month_week_number: int | None = Field(default=None, strict=True, ge=1, le=5)
+    month_day: int | None = Field(default=None, strict=True, ge=0, le=31)
+
+
+class ReminderUpdateRequest(ReminderCreateRequest):
+    expected_revision: int = Field(strict=True, ge=1, le=SQLITE_INT64_MAX)
 
 
 class ReminderPreviewRequest(ReminderCreateRequest):
-    reminder_id: int | None = None
+    reminder_id: int | None = Field(
+        default=None,
+        strict=True,
+        ge=1,
+        le=SQLITE_INT64_MAX,
+    )
+    expected_revision: int | None = Field(
+        default=None,
+        strict=True,
+        ge=1,
+        le=SQLITE_INT64_MAX,
+    )
 
 
 class ReminderPreviewResponse(BaseModel):
@@ -75,8 +123,8 @@ class ChatTimezoneResponse(BaseModel):
     timezone_name: str
 
 
-class ChatTimezoneUpdateRequest(BaseModel):
-    timezone_name: str
+class ChatTimezoneUpdateRequest(StrictRequestModel):
+    timezone_name: str = Field(min_length=1, max_length=128)
 
 
 class DeleteReminderResponse(BaseModel):
@@ -118,6 +166,10 @@ class ReminderFormOptionsResponse(BaseModel):
     month_days: list[int]
     completion_repeat_intervals: list[CompletionRepeatIntervalOption]
     completion_reminder_text_max_length: int
+    reminder_text_max_length: int
+    weather_reminder_text_max_length: int
+    weather_location_max_length: int
+    weather_location_max_count: int
 
 
 class TmaBootstrapResponse(BaseModel):
@@ -173,6 +225,7 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
         "day_of_week": reminder.day_of_week,
         "month_week_number": reminder.month_week_number,
         "month_day": reminder.month_day,
+        "revision": reminder.revision,
     }
 
     next_run_at = get_reminder_next_run_at(reminder.id)
@@ -309,6 +362,7 @@ def build_created_reminder_response(
         "day_of_week": data.day_of_week,
         "month_week_number": data.month_week_number,
         "month_day": data.month_day,
+        "revision": 1,
     }
 
     next_run_at = get_reminder_next_run_at(reminder_id)
@@ -389,6 +443,10 @@ def build_reminder_form_options_response() -> ReminderFormOptionsResponse:
             for value, label in COMPLETION_REPEAT_INTERVAL_OPTIONS
         ],
         completion_reminder_text_max_length=COMPLETION_REMINDER_TEXT_MAX_LENGTH,
+        reminder_text_max_length=REMINDER_TEXT_MAX_LENGTH,
+        weather_reminder_text_max_length=WEATHER_REMINDER_TEXT_MAX_LENGTH,
+        weather_location_max_length=WEATHER_LOCATION_MAX_LENGTH,
+        weather_location_max_count=MAX_WEATHER_LOCATIONS,
     )
 
 

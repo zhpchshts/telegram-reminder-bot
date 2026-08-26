@@ -1,10 +1,16 @@
-from zoneinfo import ZoneInfoNotFoundError
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Event, Lock
+from zoneinfo import ZoneInfoNotFoundError
+
 import pytest
 
+from app import database as database_module
 from app import reminder_service as reminder_service_module
+from app import scheduler as scheduler_module
 from app.constants import REMINDER_KIND_TEXT, REMINDER_KIND_WEATHER
 from app.reminder_service import (
+    ReminderIdempotencyPendingError,
     ReminderSchedulingError,
     build_active_reminders_list_text_for_chat,
     build_created_reminder_text,
@@ -43,6 +49,8 @@ def patch_reminder_lookup(
     def fake_delete_active_reminder_for_chat_in_db(
         reminder_id: int,
         chat_id: int,
+        *,
+        expected_revision: int | None = None,
     ) -> bool:
         if reminder is None:
             return False
@@ -720,6 +728,453 @@ def test_create_scheduled_reminder_validates_data_before_db_write(
                 start_at=datetime(2099, 6, 10, 12, 12),
                 timezone_name="Asia/Yekaterinburg",
             ),
+        )
+
+
+def test_create_scheduled_reminder_deactivates_row_when_scheduling_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deactivated_ids: list[int] = []
+    monkeypatch.setattr(
+        reminder_service_module,
+        "create_reminder_in_db",
+        lambda **kwargs: 42,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("scheduler down")),
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "mark_reminder_as_deleted",
+        deactivated_ids.append,
+    )
+
+    with pytest.raises(ReminderSchedulingError, match="could not be scheduled"):
+        create_scheduled_reminder(
+            bot=object(),
+            chat_id=100,
+            data=ReminderCreateData(
+                reminder_text="Проверить релиз",
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+        )
+
+    assert deactivated_ids == [42]
+
+
+def test_create_scheduled_reminder_replays_idempotency_without_rescheduling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduled: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        reminder_service_module,
+        "get_reminder_idempotency_record",
+        lambda **kwargs: {
+            "id": 42,
+            "client_request_status": "succeeded",
+            "reminder_status": "active",
+            "revision": 1,
+        },
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "create_reminder_idempotently_in_db",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("Replay must not create another database row.")
+        ),
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        lambda **kwargs: scheduled.append(kwargs),
+    )
+
+    reminder_id = create_scheduled_reminder(
+        bot=object(),
+        chat_id=100,
+        data=ReminderCreateData(
+            reminder_text="Уже создано",
+            schedule_type="once",
+            start_at=datetime(2020, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+        ),
+        idempotency_key="request-12345678",
+    )
+
+    assert reminder_id == 42
+    assert scheduled == []
+
+
+def test_create_scheduled_reminder_schedules_new_idempotent_request_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_calls: list[dict[str, object]] = []
+    schedule_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        reminder_service_module,
+        "get_reminder_idempotency_record",
+        lambda **kwargs: None,
+    )
+
+    def fake_create(**kwargs: object) -> tuple[int, bool, str]:
+        create_calls.append(kwargs)
+        return 42, True, "pending"
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "create_reminder_idempotently_in_db",
+        fake_create,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        lambda **kwargs: schedule_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "mark_reminder_idempotency_succeeded",
+        lambda **kwargs: True,
+    )
+
+    reminder_id = create_scheduled_reminder(
+        bot=object(),
+        chat_id=100,
+        data=ReminderCreateData(
+            reminder_text="Создать один раз",
+            schedule_type="once",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+        ),
+        idempotency_key="request-12345678",
+    )
+
+    assert reminder_id == 42
+    assert create_calls[0]["client_request_id"] == "request-12345678"
+    assert len(str(create_calls[0]["client_request_hash"])) == 64
+    assert len(schedule_calls) == 1
+
+
+def test_concurrent_idempotent_replay_is_pending_when_scheduling_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "idempotency.db")
+    database_module.init_db()
+    scheduling_started = Event()
+    release_scheduling = Event()
+    monkeypatch.setattr(
+        reminder_service_module,
+        "scheduler",
+        FakeScheduler(job=None),
+    )
+
+    def fail_schedule(**kwargs: object) -> None:
+        scheduling_started.set()
+        assert release_scheduling.wait(timeout=2)
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        fail_schedule,
+    )
+    data = ReminderCreateData(
+        reminder_text="Не возвращать ложный успех",
+        schedule_type="once",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            create_scheduled_reminder,
+            bot=object(),
+            chat_id=100,
+            data=data,
+            idempotency_key="request-concurrent-123",
+        )
+        assert scheduling_started.wait(timeout=2)
+        replay = executor.submit(
+            create_scheduled_reminder,
+            bot=object(),
+            chat_id=100,
+            data=data,
+            idempotency_key="request-concurrent-123",
+        )
+
+        with pytest.raises(ReminderIdempotencyPendingError):
+            replay.result(timeout=2)
+        release_scheduling.set()
+        with pytest.raises(ReminderSchedulingError):
+            first.result(timeout=2)
+
+    with database_module.get_connection() as connection:
+        stored = connection.execute(
+            """
+            SELECT status, client_request_id, client_request_status
+            FROM reminders
+            """
+        ).fetchone()
+    assert stored["status"] == "deleted"
+    assert stored["client_request_id"] is None
+    assert stored["client_request_status"] is None
+
+
+def test_update_reschedules_canonical_revision_after_concurrent_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision_one = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Исходное",
+        schedule_type="once",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+        revision=1,
+    )
+    revision_three = ReminderReadData(
+        id=42,
+        chat_id=100,
+        reminder_text="Каноническая ревизия",
+        schedule_type="once",
+        start_at=datetime(2099, 6, 12, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+        revision=3,
+    )
+    reminder_states = iter([revision_one, revision_three, revision_three])
+    scheduled_revisions: list[int] = []
+    monkeypatch.setattr(
+        reminder_service_module,
+        "get_active_reminder_for_chat",
+        lambda **kwargs: next(reminder_states),
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "update_reminder_in_db",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        lambda **kwargs: scheduled_revisions.append(kwargs["reminder_revision"]),
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder_data",
+        lambda bot, reminder: scheduled_revisions.append(reminder.revision),
+    )
+
+    updated = update_active_reminder_for_chat(
+        bot=object(),
+        reminder_id=42,
+        chat_id=100,
+        data=ReminderCreateData(
+            reminder_text="Промежуточная ревизия",
+            schedule_type="once",
+            start_at=datetime(2099, 6, 11, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+        ),
+        expected_revision=1,
+    )
+
+    assert updated == revision_three
+    assert scheduled_revisions == [2, 3]
+
+
+def test_concurrent_updates_are_serialized_through_scheduler_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_lock = Lock()
+    state = {
+        "revision": 1,
+        "reminder_text": "Исходное",
+        "start_at": datetime(2099, 6, 10, 12, 12),
+    }
+    scheduled_revision = {"value": 1}
+    first_schedule_started = Event()
+    release_first_schedule = Event()
+    second_call_started = Event()
+    second_database_update = Event()
+
+    def fake_get_active_reminder_for_chat(
+        *,
+        reminder_id: int,
+        chat_id: int,
+    ) -> ReminderReadData:
+        assert reminder_id == 42
+        assert chat_id == 100
+        with state_lock:
+            return ReminderReadData(
+                id=reminder_id,
+                chat_id=chat_id,
+                reminder_text=str(state["reminder_text"]),
+                schedule_type="once",
+                start_at=state["start_at"],
+                timezone_name="Asia/Yekaterinburg",
+                delivery_tracking_started_at_utc=(TEST_DELIVERY_TRACKING_STARTED_AT),
+                revision=int(state["revision"]),
+            )
+
+    def fake_update_reminder_in_db(**kwargs: object) -> bool:
+        expected_revision = int(kwargs["expected_revision"])
+        with state_lock:
+            assert state["revision"] == expected_revision
+            state["revision"] = expected_revision + 1
+            state["reminder_text"] = kwargs["reminder_text"]
+            state["start_at"] = kwargs["start_at"]
+        if expected_revision == 2:
+            second_database_update.set()
+        return True
+
+    def fake_schedule_reminder(**kwargs: object) -> None:
+        revision = int(kwargs["reminder_revision"])
+        if revision == 2:
+            first_schedule_started.set()
+            assert release_first_schedule.wait(timeout=2)
+        with state_lock:
+            scheduled_revision["value"] = revision
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "get_active_reminder_for_chat",
+        fake_get_active_reminder_for_chat,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "update_reminder_in_db",
+        fake_update_reminder_in_db,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        fake_schedule_reminder,
+    )
+
+    def update(reminder_text: str, expected_revision: int) -> ReminderReadData | None:
+        return update_active_reminder_for_chat(
+            bot=object(),
+            reminder_id=42,
+            chat_id=100,
+            data=ReminderCreateData(
+                reminder_text=reminder_text,
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10 + expected_revision, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+            expected_revision=expected_revision,
+        )
+
+    def run_second_update() -> ReminderReadData | None:
+        second_call_started.set()
+        return update("Второе изменение", 2)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(update, "Первое изменение", 1)
+        assert first_schedule_started.wait(timeout=2)
+        second = executor.submit(run_second_update)
+        assert second_call_started.wait(timeout=2)
+        assert not second_database_update.wait(timeout=0.1)
+        release_first_schedule.set()
+        first_result = first.result(timeout=2)
+        second_result = second.result(timeout=2)
+
+    assert first_result is not None
+    assert first_result.revision == 2
+    assert second_result is not None
+    assert second_result.revision == 3
+    assert second_database_update.is_set()
+    assert scheduled_revision["value"] == 3
+
+
+def test_delete_waits_for_same_reminder_mutation_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reminder_id = 42
+    delete_call_started = Event()
+    delete_database_call = Event()
+    monkeypatch.setattr(
+        reminder_service_module,
+        "delete_active_reminder_for_chat_in_db",
+        lambda *args, **kwargs: delete_database_call.set() or True,
+    )
+    monkeypatch.setattr(reminder_service_module, "scheduler", FakeScheduler(None))
+
+    def delete_reminder() -> bool:
+        delete_call_started.set()
+        return delete_active_reminder_for_chat(
+            reminder_id,
+            100,
+            expected_revision=1,
+        )
+
+    mutation_lock = scheduler_module.get_reminder_mutation_lock(reminder_id)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with mutation_lock:
+            deletion = executor.submit(delete_reminder)
+            assert delete_call_started.wait(timeout=2)
+            assert not delete_database_call.wait(timeout=0.1)
+        assert deletion.result(timeout=2) is True
+
+    assert delete_database_call.is_set()
+    assert mutation_lock is scheduler_module.get_reminder_mutation_lock(
+        reminder_id + scheduler_module.REMINDER_MUTATION_LOCK_STRIPES
+    )
+
+
+def test_validate_reminder_create_data_rejects_oversized_plain_text() -> None:
+    with pytest.raises(ValueError, match="must not exceed 3900"):
+        validate_reminder_create_data(
+            ReminderCreateData(
+                reminder_text="x" * 3901,
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            )
+        )
+
+
+def test_validate_reminder_create_data_validates_weather_locations() -> None:
+    with pytest.raises(ValueError, match="не больше 5"):
+        validate_reminder_create_data(
+            ReminderCreateData(
+                reminder_text="Один; Два; Три; Четыре; Пять; Шесть",
+                reminder_kind=REMINDER_KIND_WEATHER,
+                schedule_type="once",
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("schedule_type", "field_name", "field_value"),
+    [
+        ("every_days", "interval_days", 36_501),
+        ("every_week", "interval_weeks", 5_201),
+    ],
+)
+def test_validate_reminder_create_data_rejects_excessive_intervals(
+    schedule_type: str,
+    field_name: str,
+    field_value: int,
+) -> None:
+    kwargs = {field_name: field_value}
+
+    with pytest.raises(ValueError, match="must be less than or equal"):
+        validate_reminder_create_data(
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                schedule_type=schedule_type,
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+                **kwargs,
+            )
         )
 
 

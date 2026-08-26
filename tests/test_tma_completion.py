@@ -23,7 +23,8 @@ def test_tma_completion_request_edit_reset_and_card_use_backend_contract() -> No
     javascript = read_tma_asset("app.js")
 
     assert "state.reminderOptions.completion_repeat_intervals || []" in javascript
-    assert "state.reminderOptions?.completion_reminder_text_max_length" in javascript
+    assert '"completion_reminder_text_max_length"' in javascript
+    assert "getReminderTextMaxLength" in javascript
     assert (
         "requires_completion: Boolean(elements.requiresCompletion?.checked)"
         in javascript

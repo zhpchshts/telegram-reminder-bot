@@ -56,7 +56,7 @@ def get_tma_launch_context(
         )
 
     try:
-        return validate_tma_launch_token(
+        launch_context = validate_tma_launch_token(
             init_data.start_param,
             secret=BOT_TOKEN,
         )
@@ -65,6 +65,75 @@ def get_tma_launch_context(
             status_code=401,
             detail=str(error),
         ) from error
+
+    user_id = _get_required_tma_user_id(init_data)
+    if launch_context.user_id != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Telegram init data user.id does not match TMA launch token user_id."
+            ),
+        )
+
+    _validate_signed_tma_chat(init_data, launch_context)
+    return launch_context
+
+
+def _get_required_tma_user_id(init_data: TelegramInitData) -> int:
+    if init_data.user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Telegram init data user is required.",
+        )
+
+    user_id = init_data.user.get("id")
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        raise HTTPException(
+            status_code=401,
+            detail="Telegram init data user.id must be an integer.",
+        )
+
+    return user_id
+
+
+def _validate_signed_tma_chat(
+    init_data: TelegramInitData,
+    launch_context: TmaLaunchContext,
+) -> None:
+    if init_data.chat is None:
+        return
+
+    if "id" in init_data.chat:
+        chat_id = init_data.chat["id"]
+        if isinstance(chat_id, bool) or not isinstance(chat_id, int):
+            raise HTTPException(
+                status_code=401,
+                detail="Telegram init data chat.id must be an integer.",
+            )
+        if chat_id != launch_context.chat_id:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Telegram init data chat.id does not match "
+                    "TMA launch token chat_id."
+                ),
+            )
+
+    if "type" in init_data.chat:
+        chat_type = init_data.chat["type"]
+        if not isinstance(chat_type, str) or not chat_type:
+            raise HTTPException(
+                status_code=401,
+                detail="Telegram init data chat.type must be a non-empty string.",
+            )
+        if chat_type != launch_context.chat_type:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Telegram init data chat.type does not match "
+                    "TMA launch token chat_type."
+                ),
+            )
 
 
 def build_tma_chat_from_launch_context(

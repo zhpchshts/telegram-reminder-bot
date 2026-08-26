@@ -1,17 +1,26 @@
-import importlib.metadata
-
 from datetime import datetime
+import logging
 from pathlib import Path
+import sqlite3
+from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 from aiogram import Bot
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Path as FastApiPath,
+    Query,
+    Request,
+)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-import tzdata
-
 from app.api_auth import (
+    TMA_INIT_DATA_HEADER,
     get_tma_chat,
     get_tma_chat_id,
     get_tma_init_data,
@@ -22,6 +31,7 @@ from app.api_models import (
     ChatTimezoneUpdateRequest,
     DeleteReminderResponse,
     ReminderCreateRequest,
+    ReminderUpdateRequest,
     ReminderPreviewRequest,
     ReminderFormOptionsResponse,
     ReminderPreviewResponse,
@@ -38,9 +48,13 @@ from app.api_models import (
     build_tma_context_response,
 )
 from app.config import API_ALLOWED_ORIGINS
-from app.database import count_active_chats
+from app.constants import SQLITE_INT64_MAX
+from app.database import get_connection
 from app.reminder_models import ReminderCreateData, ReminderReadData
 from app.reminder_service import (
+    ReminderIdempotencyConflictError,
+    ReminderIdempotencyPendingError,
+    ReminderRevisionConflictError,
     ReminderSchedulingError,
     create_scheduled_reminder,
     delete_active_reminder_for_chat,
@@ -52,10 +66,14 @@ from app.reminder_service import (
     validate_reminder_create_data,
 )
 from app.schedule_calculations import get_yearly_datetime_on_or_after
-from app.scheduler import get_next_run_at_for_schedule
+from app.scheduler import (
+    get_missing_required_scheduler_job_ids,
+    get_next_run_at_for_schedule,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TMA_STATIC_DIR = PROJECT_ROOT / "tma"
+LOGGER = logging.getLogger(__name__)
 
 
 app = FastAPI(
@@ -68,15 +86,153 @@ TMA_NO_CACHE_HEADERS = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+API_PRIVATE_NO_CACHE_CONTROL = "private, no-store"
+MAX_API_REQUEST_BODY_BYTES = 16 * 1024
+IDEMPOTENCY_KEY_PATTERN = r"^[A-Za-z0-9._:-]+$"
+ReminderIdPath = Annotated[int, FastApiPath(ge=1, le=SQLITE_INT64_MAX)]
+ReminderRevisionQuery = Annotated[int, Query(ge=1, le=SQLITE_INT64_MAX)]
+IdempotencyKeyHeader = Annotated[
+    str | None,
+    Header(
+        alias="Idempotency-Key",
+        min_length=8,
+        max_length=128,
+        pattern=IDEMPOTENCY_KEY_PATTERN,
+    ),
+]
+
+
+def add_private_api_cache_headers(response) -> None:
+    response.headers["Cache-Control"] = API_PRIVATE_NO_CACHE_CONTROL
+    vary_header = response.headers.get("Vary")
+    vary_values = {value.strip().casefold() for value in (vary_header or "").split(",")}
+    if TMA_INIT_DATA_HEADER.casefold() not in vary_values:
+        response.headers["Vary"] = (
+            f"{vary_header}, {TMA_INIT_DATA_HEADER}"
+            if vary_header
+            else TMA_INIT_DATA_HEADER
+        )
+
+
+class ApiRequestBodyLimitMiddleware:
+    def __init__(self, app, *, max_body_bytes: int) -> None:
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope, receive, send) -> None:
+        path = str(scope.get("path", ""))
+        method = str(scope.get("method", "GET")).upper()
+        is_limited_request = (
+            scope.get("type") == "http"
+            and (path == "/api" or path.startswith("/api/"))
+            and method in {"POST", "PUT", "PATCH"}
+        )
+        if not is_limited_request:
+            await self.app(scope, receive, send)
+            return
+
+        headers = {
+            key.decode("latin-1").casefold(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        content_length = headers.get("content-length")
+        try:
+            declared_size = int(content_length) if content_length is not None else None
+        except ValueError:
+            declared_size = None
+
+        if declared_size is not None and declared_size > self.max_body_bytes:
+            await self._send_too_large(scope, receive, send)
+            return
+
+        buffered_messages: list[dict[str, object]] = []
+        received_size = 0
+        while True:
+            message = await receive()
+            if message.get("type") != "http.request":
+                buffered_messages.append(message)
+                break
+
+            body = message.get("body", b"")
+            if isinstance(body, bytes):
+                received_size += len(body)
+            if received_size > self.max_body_bytes:
+                await self._send_too_large(scope, receive, send)
+                return
+
+            buffered_messages.append(message)
+            if not message.get("more_body", False):
+                break
+
+        message_index = 0
+
+        async def replay_receive():
+            nonlocal message_index
+            if message_index < len(buffered_messages):
+                message = buffered_messages[message_index]
+                message_index += 1
+                return message
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+    async def _send_too_large(self, scope, receive, send) -> None:
+        response = JSONResponse(
+            status_code=413,
+            content={"detail": "Request body is too large."},
+        )
+        add_private_api_cache_headers(response)
+        await response(scope, receive, send)
 
 
 @app.middleware("http")
 async def add_no_cache_headers_for_tma(request, call_next):
+    is_api_request = request.url.path == "/api" or request.url.path.startswith("/api/")
     response = await call_next(request)
 
     if request.url.path == "/tma" or request.url.path.startswith("/tma/"):
         response.headers.update(TMA_NO_CACHE_HEADERS)
 
+    if is_api_request:
+        add_private_api_cache_headers(response)
+
+    return response
+
+
+app.add_middleware(
+    ApiRequestBodyLimitMiddleware,
+    max_body_bytes=MAX_API_REQUEST_BODY_BYTES,
+)
+
+
+def add_allowed_origin_headers(request: Request, response) -> None:
+    origin = request.headers.get("origin")
+    if not origin or not (origin in API_ALLOWED_ORIGINS or "*" in API_ALLOWED_ORIGINS):
+        return
+
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    vary_header = response.headers.get("Vary")
+    vary_values = {value.strip().casefold() for value in (vary_header or "").split(",")}
+    if "origin" not in vary_values:
+        response.headers["Vary"] = f"{vary_header}, Origin" if vary_header else "Origin"
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, error: Exception):
+    LOGGER.error(
+        "Unhandled request error: method=%s path=%s",
+        request.method,
+        request.url.path,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    response = JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error."},
+    )
+    if request.url.path == "/api" or request.url.path.startswith("/api/"):
+        add_private_api_cache_headers(response)
+        add_allowed_origin_headers(request, response)
     return response
 
 
@@ -214,7 +370,7 @@ def build_validated_reminder_update_data(
             current_reminder=current_reminder,
             request=request,
         )
-    except ZoneInfoNotFoundError as error:
+    except (ZoneInfoNotFoundError, ValueError) as error:
         raise HTTPException(
             status_code=400,
             detail="Invalid timezone name.",
@@ -252,21 +408,39 @@ def get_tma_chat_type(
     return fallback_chat_type
 
 
-def get_timezone_database_info() -> dict[str, str]:
-    return {
-        "tzdata_package_version": importlib.metadata.version("tzdata"),
-        "tzdata_iana_version": tzdata.IANA_VERSION,
-    }
-
-
 @app.head("/health", include_in_schema=False)
 @app.get("/health")
-def health() -> dict[str, str | int]:
-    return {
-        "status": "ok",
-        "active_chats_count": count_active_chats(),
-        **get_timezone_database_info(),
-    }
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.head("/ready", include_in_schema=False)
+@app.get("/ready")
+def readiness(request: Request) -> dict[str, str]:
+    runtime_scheduler = getattr(request.app.state, "scheduler", None)
+    is_restored = getattr(request.app.state, "reminders_restored", False)
+    bot = getattr(request.app.state, "bot", None)
+
+    if bot is None or runtime_scheduler is None or not runtime_scheduler.running:
+        raise HTTPException(status_code=503, detail="Service is not ready.")
+    if not is_restored:
+        raise HTTPException(status_code=503, detail="Service is not ready.")
+
+    try:
+        missing_job_ids = get_missing_required_scheduler_job_ids(runtime_scheduler)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Service is not ready.") from error
+    if missing_job_ids:
+        raise HTTPException(status_code=503, detail="Service is not ready.")
+
+    try:
+        with get_connection() as connection:
+            connection.execute("SELECT 1 FROM reminders LIMIT 1").fetchone()
+            connection.execute("SELECT 1 FROM chat_settings LIMIT 1").fetchone()
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="Service is not ready.") from error
+
+    return {"status": "ready"}
 
 
 @app.get(
@@ -346,6 +520,14 @@ def preview_tma_reminder(
             status_code=404,
             detail="Reminder not found.",
         )
+    if (
+        request.expected_revision is None
+        or request.expected_revision != current_reminder.revision
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Reminder was changed. Refresh it and try again.",
+        )
 
     data = build_validated_reminder_update_data(
         current_reminder=current_reminder,
@@ -381,11 +563,13 @@ def create_tma_reminder(
     request: ReminderCreateRequest,
     chat_id: int = Depends(get_tma_chat_id),
     bot: Bot = Depends(get_bot_from_app_state),
+    idempotency_key: IdempotencyKeyHeader = None,
 ) -> ReminderResponse:
     return create_reminder_for_chat(
         request=request,
         chat_id=chat_id,
         bot=bot,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -395,8 +579,8 @@ def create_tma_reminder(
     response_model_exclude_unset=True,
 )
 def update_tma_reminder(
-    reminder_id: int,
-    request: ReminderCreateRequest,
+    reminder_id: ReminderIdPath,
+    request: ReminderUpdateRequest,
     chat_id: int = Depends(get_tma_chat_id),
     bot: Bot = Depends(get_bot_from_app_state),
 ) -> ReminderResponse:
@@ -440,12 +624,14 @@ def update_tma_timezone(
     response_model=DeleteReminderResponse,
 )
 def delete_tma_reminder(
-    reminder_id: int,
+    reminder_id: ReminderIdPath,
+    expected_revision: ReminderRevisionQuery,
     chat_id: int = Depends(get_tma_chat_id),
 ) -> DeleteReminderResponse:
     return delete_reminder_for_chat(
         reminder_id=reminder_id,
         chat_id=chat_id,
+        expected_revision=expected_revision,
     )
 
 
@@ -473,11 +659,13 @@ def create_chat_reminder(
     request: ReminderCreateRequest,
     authorized_chat_id: int = Depends(require_matching_chat_id),
     bot: Bot = Depends(get_bot_from_app_state),
+    idempotency_key: IdempotencyKeyHeader = None,
 ) -> ReminderResponse:
     return create_reminder_for_chat(
         request=request,
         chat_id=authorized_chat_id,
         bot=bot,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -487,8 +675,8 @@ def create_chat_reminder(
     response_model_exclude_unset=True,
 )
 def update_chat_reminder(
-    reminder_id: int,
-    request: ReminderCreateRequest,
+    reminder_id: ReminderIdPath,
+    request: ReminderUpdateRequest,
     authorized_chat_id: int = Depends(require_matching_chat_id),
     bot: Bot = Depends(get_bot_from_app_state),
 ) -> ReminderResponse:
@@ -532,12 +720,14 @@ def update_chat_timezone(
     response_model=DeleteReminderResponse,
 )
 def delete_chat_reminder(
-    reminder_id: int,
+    reminder_id: ReminderIdPath,
+    expected_revision: ReminderRevisionQuery,
     authorized_chat_id: int = Depends(require_matching_chat_id),
 ) -> DeleteReminderResponse:
     return delete_reminder_for_chat(
         reminder_id=reminder_id,
         chat_id=authorized_chat_id,
+        expected_revision=expected_revision,
     )
 
 
@@ -548,7 +738,7 @@ def build_validated_reminder_create_data(
 ) -> ReminderCreateData:
     try:
         data = build_reminder_create_data(request)
-    except ZoneInfoNotFoundError as error:
+    except (ZoneInfoNotFoundError, ValueError) as error:
         raise HTTPException(
             status_code=400,
             detail="Invalid timezone name.",
@@ -575,20 +765,55 @@ def create_reminder_for_chat(
     request: ReminderCreateRequest,
     chat_id: int,
     bot: Bot,
+    idempotency_key: str | None = None,
 ) -> ReminderResponse:
-    data = build_validated_reminder_create_data(request)
+    data = build_validated_reminder_create_data(
+        request,
+        allow_past_start_at=idempotency_key is not None,
+    )
 
     try:
-        reminder_id = create_scheduled_reminder(
-            bot=bot,
-            chat_id=chat_id,
-            data=data,
-        )
+        if idempotency_key is None:
+            reminder_id = create_scheduled_reminder(
+                bot=bot,
+                chat_id=chat_id,
+                data=data,
+            )
+        else:
+            reminder_id = create_scheduled_reminder(
+                bot=bot,
+                chat_id=chat_id,
+                data=data,
+                idempotency_key=idempotency_key,
+            )
+    except ReminderIdempotencyConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+    except ReminderIdempotencyPendingError as error:
+        raise HTTPException(
+            status_code=425,
+            detail=str(error),
+        ) from error
     except ValueError as error:
         raise HTTPException(
             status_code=400,
             detail=str(error),
         ) from error
+    except ReminderSchedulingError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Reminder was not created because scheduling failed.",
+        ) from error
+
+    if idempotency_key is not None:
+        stored_reminder = get_active_reminder_for_chat(
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+        )
+        if stored_reminder is not None:
+            return build_reminder_response(stored_reminder)
 
     return build_created_reminder_response(
         reminder_id=reminder_id,
@@ -600,7 +825,7 @@ def create_reminder_for_chat(
 def update_reminder_for_chat(
     *,
     reminder_id: int,
-    request: ReminderCreateRequest,
+    request: ReminderUpdateRequest,
     chat_id: int,
     bot: Bot,
 ) -> ReminderResponse:
@@ -612,6 +837,16 @@ def update_reminder_for_chat(
         raise HTTPException(
             status_code=404,
             detail="Reminder not found.",
+        )
+    expected_revision = getattr(
+        request,
+        "expected_revision",
+        current_reminder.revision,
+    )
+    if current_reminder.revision != expected_revision:
+        raise HTTPException(
+            status_code=409,
+            detail="Reminder was changed. Refresh it and try again.",
         )
 
     data = build_validated_reminder_update_data(
@@ -625,11 +860,17 @@ def update_reminder_for_chat(
             reminder_id=reminder_id,
             chat_id=chat_id,
             data=data,
+            expected_revision=expected_revision,
         )
     except ValueError as error:
         raise HTTPException(
             status_code=400,
             detail=str(error),
+        ) from error
+    except ReminderRevisionConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Reminder was changed. Refresh it and try again.",
         ) from error
     except ReminderSchedulingError as error:
         raise HTTPException(
@@ -671,11 +912,19 @@ def delete_reminder_for_chat(
     *,
     reminder_id: int,
     chat_id: int,
+    expected_revision: int | None = None,
 ) -> DeleteReminderResponse:
-    was_deleted = delete_active_reminder_for_chat(
-        reminder_id=reminder_id,
-        chat_id=chat_id,
-    )
+    try:
+        was_deleted = delete_active_reminder_for_chat(
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+            expected_revision=expected_revision,
+        )
+    except ReminderRevisionConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Reminder was changed. Refresh it and try again.",
+        ) from error
     if not was_deleted:
         raise HTTPException(
             status_code=404,

@@ -1,6 +1,8 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -10,9 +12,10 @@ from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
 )
-from aiogram.methods import DeleteMessage
+from aiogram.methods import DeleteMessage, SendMessage
 
 from app import database as database_module
+from app import reminder_service as reminder_service_module
 from app import scheduler as scheduler_module
 from app.constants import REMINDER_KIND_TEXT, REMINDER_KIND_WEATHER
 from app.scheduler import (
@@ -22,7 +25,7 @@ from app.scheduler import (
     schedule_reminder,
     send_healthcheck,
 )
-from app.reminder_models import ReminderReadData
+from app.reminder_models import ReminderCreateData, ReminderReadData
 
 
 class FakeScheduler:
@@ -66,6 +69,7 @@ class FakeBot:
         chat_id: int,
         text: str,
         parse_mode: str | None = None,
+        reply_markup=None,
     ):
         self.messages.append(
             {
@@ -91,6 +95,11 @@ class FakeBot:
         return True
 
 
+def use_scheduler_test_db(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(database_module, "DB_PATH", tmp_path / "scheduler.db")
+    database_module.init_db()
+
+
 def build_reminder_data(
     *,
     reminder_id: int = 1,
@@ -108,6 +117,7 @@ def build_reminder_data(
     day_of_week: str | None = None,
     month_week_number: int | None = None,
     month_day: int | None = None,
+    revision: int = 1,
 ) -> ReminderReadData:
     actual_start_at = start_at or datetime(2026, 7, 1, 10, 0)
     actual_tracking_started_at = tracking_started_at or datetime(
@@ -129,6 +139,7 @@ def build_reminder_data(
         day_of_week=day_of_week,
         month_week_number=month_week_number,
         month_day=month_day,
+        revision=revision,
     )
 
 
@@ -159,6 +170,31 @@ def test_schedule_once_reminder_adds_date_job(monkeypatch) -> None:
     assert job["args"][1:] == [1]
     assert job["max_instances"] == 1
     assert job["coalesce"] is True
+    assert job["misfire_grace_time"] == int(
+        scheduler_module.WEATHER_CATCHUP_MAX_AGE.total_seconds()
+    )
+    assert job["name"] == "reminder-revision:1"
+
+
+def test_schedule_reminder_does_not_replace_higher_revision_job(monkeypatch) -> None:
+    class SchedulerWithNewerJob(FakeScheduler):
+        def get_job(self, job_id: str):
+            return SimpleNamespace(name="reminder-revision:3")
+
+    fake_scheduler = SchedulerWithNewerJob()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+
+    schedule_reminder(
+        bot=FakeBot(),
+        reminder_id=1,
+        chat_id=100,
+        reminder_text="Устаревшая ревизия",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 12),
+        reminder_revision=2,
+    )
+
+    assert fake_scheduler.jobs == []
 
 
 def test_schedule_every_days_reminder_adds_interval_job(monkeypatch) -> None:
@@ -183,6 +219,232 @@ def test_schedule_every_days_reminder_adds_interval_job(monkeypatch) -> None:
     assert job["days"] == 3
     assert job["start_date"] == start_at
     assert job["id"] == "2"
+
+
+def test_reconciler_only_replaces_missing_or_stale_revision_job(monkeypatch) -> None:
+    class ReconcileScheduler(FakeScheduler):
+        current_job = SimpleNamespace(name="reminder-revision:1")
+
+        def get_job(self, job_id: str):
+            return self.current_job
+
+    fake_scheduler = ReconcileScheduler()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+    reminder = build_reminder_data(
+        reminder_id=2,
+        revision=2,
+        start_at=datetime(2026, 7, 2, 10, 0),
+    )
+    now = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_active_reminder_from_db",
+        lambda reminder_id: reminder,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_reminder_read_data",
+        lambda reminder_row: reminder_row,
+    )
+
+    assert scheduler_module.reconcile_reminder_job(FakeBot(), reminder, now=now)
+    assert len(fake_scheduler.jobs) == 1
+    assert fake_scheduler.jobs[0]["name"] == "reminder-revision:2"
+
+    fake_scheduler.current_job = SimpleNamespace(name="reminder-revision:2")
+    assert not scheduler_module.reconcile_reminder_job(
+        FakeBot(),
+        reminder,
+        now=now,
+    )
+    assert len(fake_scheduler.jobs) == 1
+
+    fake_scheduler.current_job = SimpleNamespace(name="reminder-revision:3")
+    assert not scheduler_module.reconcile_reminder_job(
+        FakeBot(),
+        reminder,
+        now=now,
+    )
+    assert len(fake_scheduler.jobs) == 1
+
+
+def test_stale_reconciler_waits_for_update_and_reloads_canonical_revision(
+    monkeypatch,
+) -> None:
+    class ReconcileScheduler(FakeScheduler):
+        current_job = SimpleNamespace(name="reminder-revision:1")
+
+        def get_job(self, job_id: str):
+            return self.current_job
+
+    reminder_id = 42
+    stale_reminder = build_reminder_data(reminder_id=reminder_id, revision=1)
+    canonical_reminder = build_reminder_data(reminder_id=reminder_id, revision=2)
+    fake_scheduler = ReconcileScheduler()
+    canonical_read = Event()
+    reconcile_call_started = Event()
+    update_schedule_started = Event()
+    release_update_schedule = Event()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+    monkeypatch.setattr(reminder_service_module, "scheduler", fake_scheduler)
+
+    reminder_state = {"value": stale_reminder}
+    monkeypatch.setattr(
+        reminder_service_module,
+        "get_active_reminder_for_chat",
+        lambda **kwargs: reminder_state["value"],
+    )
+
+    def update_reminder_in_db(**kwargs: object) -> bool:
+        assert kwargs["expected_revision"] == 1
+        reminder_state["value"] = canonical_reminder
+        return True
+
+    def schedule_updated_reminder(**kwargs: object) -> None:
+        assert kwargs["reminder_revision"] == 2
+        update_schedule_started.set()
+        assert release_update_schedule.wait(timeout=2)
+        fake_scheduler.current_job = SimpleNamespace(name="reminder-revision:2")
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "update_reminder_in_db",
+        update_reminder_in_db,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        schedule_updated_reminder,
+    )
+
+    def get_canonical_reminder(requested_reminder_id: int):
+        assert requested_reminder_id == reminder_id
+        canonical_read.set()
+        return reminder_state["value"]
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_active_reminder_from_db",
+        get_canonical_reminder,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_reminder_read_data",
+        lambda reminder_row: reminder_row,
+    )
+
+    def reconcile() -> bool:
+        reconcile_call_started.set()
+        return scheduler_module.reconcile_reminder_job(
+            FakeBot(),
+            stale_reminder,
+            now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        update = executor.submit(
+            reminder_service_module.update_active_reminder_for_chat,
+            bot=FakeBot(),
+            reminder_id=reminder_id,
+            chat_id=100,
+            data=ReminderCreateData(
+                reminder_text="Обновлённое напоминание",
+                schedule_type="once",
+                start_at=datetime(2099, 7, 2, 10, 0),
+                timezone_name="UTC",
+            ),
+            expected_revision=1,
+        )
+        assert update_schedule_started.wait(timeout=2)
+        reconciliation = executor.submit(reconcile)
+        assert reconcile_call_started.wait(timeout=2)
+        assert not canonical_read.wait(timeout=0.1)
+        release_update_schedule.set()
+        updated_reminder = update.result(timeout=2)
+        assert reconciliation.result(timeout=2) is False
+
+    assert updated_reminder == canonical_reminder
+    assert canonical_read.is_set()
+    assert fake_scheduler.jobs == []
+
+
+def test_stale_reconciler_after_delete_removes_zombie_job(monkeypatch) -> None:
+    delete_cleanup_started = Event()
+    release_delete_cleanup = Event()
+
+    class ReconcileScheduler(FakeScheduler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.current_job = SimpleNamespace(name="reminder-revision:1")
+            self.removed_job_ids: list[str] = []
+
+        def get_job(self, job_id: str):
+            return self.current_job
+
+        def remove_job(self, job_id: str) -> None:
+            self.removed_job_ids.append(job_id)
+            if len(self.removed_job_ids) == 1:
+                delete_cleanup_started.set()
+                assert release_delete_cleanup.wait(timeout=2)
+                raise RuntimeError("simulated scheduler cleanup race")
+            self.current_job = None
+
+    reminder_id = 42
+    stale_reminder = build_reminder_data(reminder_id=reminder_id, revision=1)
+    fake_scheduler = ReconcileScheduler()
+    canonical_read = Event()
+    reconcile_call_started = Event()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+    monkeypatch.setattr(reminder_service_module, "scheduler", fake_scheduler)
+
+    reminder_state = {"value": stale_reminder}
+
+    def delete_reminder_in_db(*args, **kwargs) -> bool:
+        reminder_state["value"] = None
+        return True
+
+    monkeypatch.setattr(
+        reminder_service_module,
+        "delete_active_reminder_for_chat_in_db",
+        delete_reminder_in_db,
+    )
+
+    def get_deleted_reminder(requested_reminder_id: int):
+        assert requested_reminder_id == reminder_id
+        canonical_read.set()
+        return reminder_state["value"]
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_active_reminder_from_db",
+        get_deleted_reminder,
+    )
+
+    def reconcile() -> bool:
+        reconcile_call_started.set()
+        return scheduler_module.reconcile_reminder_job(
+            FakeBot(),
+            stale_reminder,
+            now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        deletion = executor.submit(
+            reminder_service_module.delete_active_reminder_for_chat,
+            reminder_id,
+            100,
+            expected_revision=1,
+        )
+        assert delete_cleanup_started.wait(timeout=2)
+        reconciliation = executor.submit(reconcile)
+        assert reconcile_call_started.wait(timeout=2)
+        assert not canonical_read.wait(timeout=0.1)
+        release_delete_cleanup.set()
+        assert deletion.result(timeout=2) is True
+        assert reconciliation.result(timeout=2) is True
+
+    assert canonical_read.is_set()
+    assert fake_scheduler.removed_job_ids == [str(reminder_id), str(reminder_id)]
 
 
 def test_schedule_every_week_reminder_adds_interval_job(monkeypatch) -> None:
@@ -686,6 +948,477 @@ def test_sent_occurrence_with_unrecorded_watermark_is_not_resent(
     assert "database_state=missing" in caplog.text
 
 
+def test_lost_revision_cas_deletes_stale_sent_message(
+    monkeypatch,
+) -> None:
+    bot = FakeBot()
+    scheduled_for = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        scheduler_module,
+        "mark_reminder_occurrence_handled",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_reminder_occurrence_handling_state",
+        lambda *args: "unhandled",
+    )
+
+    outcome = asyncio.run(
+        scheduler_module.deliver_reminder_occurrence(
+            bot,
+            build_reminder_data(reminder_id=77),
+            scheduled_for,
+            is_catchup=False,
+            expected_revision=3,
+        )
+    )
+
+    assert outcome == scheduler_module.DELIVERY_OUTCOME_SENT_UNRECORDED
+    assert bot.deleted_messages == [{"chat_id": 100, "message_id": 1}]
+
+
+def test_stale_message_delete_failure_uses_persistent_queue(monkeypatch) -> None:
+    class DeleteFailureBot(FakeBot):
+        async def delete_message(self, chat_id: int, message_id: int) -> bool:
+            raise TelegramNetworkError(
+                method=DeleteMessage(chat_id=chat_id, message_id=message_id),
+                message="network unavailable",
+            )
+
+    queued = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "mark_reminder_occurrence_handled",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_reminder_occurrence_handling_state",
+        lambda *args: "unhandled",
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "enqueue_reminder_message_deletion",
+        lambda **kwargs: queued.append(kwargs) or True,
+    )
+
+    bot = DeleteFailureBot()
+    before = datetime.now(timezone.utc)
+    outcome = asyncio.run(
+        scheduler_module.deliver_reminder_occurrence(
+            bot,
+            build_reminder_data(reminder_id=77),
+            before,
+            is_catchup=False,
+            expected_revision=3,
+        )
+    )
+
+    assert outcome == scheduler_module.DELIVERY_OUTCOME_SENT_UNRECORDED
+    assert len(queued) == 1
+    assert queued[0]["reminder_id"] == 77
+    assert queued[0]["message_id"] == 1
+    assert before <= queued[0]["delete_at"] <= datetime.now(timezone.utc)
+
+
+def test_revision_change_during_send_cannot_close_new_revision(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_scheduler_test_db(monkeypatch, tmp_path)
+    reminder_id = database_module.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Старая ревизия",
+        schedule_type="once",
+        start_at=datetime(2026, 9, 1, 10, 0),
+    )
+    reminder = scheduler_module.build_reminder_read_data(
+        database_module.get_active_reminder_from_db(reminder_id)
+    )
+    scheduled_for = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+
+    class UpdatingBot(FakeBot):
+        async def send_message(self, **kwargs):
+            message = await super().send_message(**kwargs)
+            assert database_module.update_reminder_in_db(
+                reminder_id=reminder_id,
+                chat_id=100,
+                reminder_text="Новая ревизия",
+                schedule_type="once",
+                start_at=datetime(2026, 9, 2, 10, 0),
+                expected_revision=1,
+            )
+            return message
+
+    bot = UpdatingBot()
+    outcome = asyncio.run(
+        scheduler_module.deliver_persisted_reminder_occurrence(
+            bot,
+            reminder,
+            scheduled_for,
+            is_catchup=False,
+        )
+    )
+
+    current = database_module.get_active_reminder_from_db(reminder_id)
+    assert outcome == scheduler_module.DELIVERY_OUTCOME_SENT_UNRECORDED
+    assert current is not None
+    assert current["revision"] == 2
+    assert current["last_handled_scheduled_for_utc"] is None
+    assert bot.deleted_messages == [{"chat_id": 100, "message_id": 1}]
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT status FROM reminder_delivery_occurrences"
+        ).fetchone()
+    assert occurrence["status"] == "cancelled"
+
+
+def test_retry_after_is_persisted_and_worker_retries_delivery(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fixed_now = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        current = fixed_now
+
+        @classmethod
+        def now(cls, tz=None):
+            value = cls.current
+            return value if tz is not None else value.replace(tzinfo=None)
+
+    class RetryOnceBot(FakeBot):
+        attempts = 0
+
+        async def send_message(self, **kwargs):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise TelegramRetryAfter(
+                    method=SendMessage(chat_id=kwargs["chat_id"], text=kwargs["text"]),
+                    message="Too Many Requests",
+                    retry_after=120,
+                )
+            return await super().send_message(**kwargs)
+
+    use_scheduler_test_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(scheduler_module, "datetime", FrozenDateTime)
+    reminder_id = database_module.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Повторить после RetryAfter",
+        schedule_type="once",
+        start_at=fixed_now.replace(tzinfo=None),
+    )
+    reminder = scheduler_module.build_reminder_read_data(
+        database_module.get_active_reminder_from_db(reminder_id)
+    )
+    bot = RetryOnceBot()
+
+    first_outcome = asyncio.run(
+        scheduler_module.deliver_persisted_reminder_occurrence(
+            bot,
+            reminder,
+            fixed_now,
+            is_catchup=False,
+        )
+    )
+    with database_module.get_connection() as connection:
+        pending = connection.execute(
+            "SELECT * FROM reminder_delivery_occurrences"
+        ).fetchone()
+
+    assert first_outcome == scheduler_module.DELIVERY_OUTCOME_RETRY_SCHEDULED
+    assert pending["status"] == "pending"
+    assert pending["delivery_attempts"] == 1
+    assert datetime.fromisoformat(pending["next_attempt_at_utc"]) == (
+        fixed_now + timedelta(seconds=120)
+    )
+
+    FrozenDateTime.current = fixed_now + timedelta(seconds=121)
+    asyncio.run(scheduler_module.process_due_reminder_deliveries(bot))
+
+    with database_module.get_connection() as connection:
+        delivered = connection.execute(
+            "SELECT * FROM reminder_delivery_occurrences"
+        ).fetchone()
+        stored_reminder = connection.execute(
+            "SELECT status FROM reminders WHERE id = ?",
+            (reminder_id,),
+        ).fetchone()
+    assert bot.attempts == 2
+    assert delivered["status"] == "sent"
+    assert delivered["delivery_attempts"] == 2
+    assert stored_reminder["status"] == "sent"
+
+
+def test_delivery_worker_catches_up_missing_due_completion_job_once(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_scheduler_test_db(monkeypatch, tmp_path)
+    scheduled_for = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
+        minutes=1
+    )
+    reminder_id = database_module.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Подтвердить выполнение",
+        schedule_type="once",
+        start_at=scheduled_for.replace(tzinfo=None),
+        timezone="UTC",
+        requires_completion=True,
+        repeat_interval_minutes=60,
+    )
+    with database_module.get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE reminders
+            SET delivery_tracking_started_at_utc = ?
+            WHERE id = ?
+            """,
+            (
+                database_module.format_utc_datetime(
+                    scheduled_for - timedelta(minutes=1)
+                ),
+                reminder_id,
+            ),
+        )
+
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+    bot = FakeBot()
+    bot.sent_at = datetime.now(timezone.utc)
+
+    asyncio.run(scheduler_module.process_due_reminder_deliveries(bot))
+    asyncio.run(scheduler_module.process_due_reminder_deliveries(bot))
+
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            """
+            SELECT status
+            FROM reminder_completion_occurrences
+            WHERE reminder_id = ?
+            """,
+            (reminder_id,),
+        ).fetchone()
+        reminder = connection.execute(
+            """
+            SELECT status, last_handled_scheduled_for_utc
+            FROM reminders
+            WHERE id = ?
+            """,
+            (reminder_id,),
+        ).fetchone()
+
+    assert len(bot.messages) == 1
+    assert occurrence["status"] == "active"
+    assert reminder["status"] == "active"
+    assert reminder["last_handled_scheduled_for_utc"] == (
+        database_module.format_utc_datetime(scheduled_for)
+    )
+
+
+def test_persistent_claim_prevents_parallel_physical_send(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_scheduler_test_db(monkeypatch, tmp_path)
+    scheduled_for = datetime.now(timezone.utc)
+    reminder_id = database_module.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Не отправлять параллельно",
+        schedule_type="every_days",
+        start_at=scheduled_for.replace(tzinfo=None),
+        interval_days=1,
+    )
+    reminder = scheduler_module.build_reminder_read_data(
+        database_module.get_active_reminder_from_db(reminder_id)
+    )
+
+    async def run_parallel_delivery():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingBot(FakeBot):
+            async def send_message(self, **kwargs):
+                started.set()
+                await release.wait()
+                return await super().send_message(**kwargs)
+
+        bot = BlockingBot()
+        first = asyncio.create_task(
+            scheduler_module.deliver_persisted_reminder_occurrence(
+                bot,
+                reminder,
+                scheduled_for,
+                is_catchup=False,
+            )
+        )
+        await started.wait()
+        second_outcome = await scheduler_module.deliver_persisted_reminder_occurrence(
+            bot,
+            reminder,
+            scheduled_for,
+            is_catchup=False,
+        )
+        release.set()
+        first_outcome = await first
+        return bot, first_outcome, second_outcome
+
+    bot, first_outcome, second_outcome = asyncio.run(run_parallel_delivery())
+
+    assert first_outcome == scheduler_module.DELIVERY_OUTCOME_SENT
+    assert second_outcome == scheduler_module.DELIVERY_OUTCOME_RETRY_SCHEDULED
+    assert len(bot.messages) == 1
+
+
+def test_delivery_claim_is_checked_immediately_before_telegram_send(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_scheduler_test_db(monkeypatch, tmp_path)
+    scheduled_for = datetime.now(timezone.utc)
+    reminder_id = database_module.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Не отправлять после потери claim",
+        schedule_type="every_days",
+        start_at=scheduled_for.replace(tzinfo=None),
+        interval_days=1,
+    )
+    reminder = scheduler_module.build_reminder_read_data(
+        database_module.get_active_reminder_from_db(reminder_id)
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "refresh_reminder_delivery_claim",
+        lambda **kwargs: False,
+    )
+    bot = FakeBot()
+
+    outcome = asyncio.run(
+        scheduler_module.deliver_persisted_reminder_occurrence(
+            bot,
+            reminder,
+            scheduled_for,
+            is_catchup=False,
+        )
+    )
+
+    assert outcome == scheduler_module.DELIVERY_OUTCOME_RETRY_SCHEDULED
+    assert bot.messages == []
+
+
+def test_long_delivery_refreshes_claim_until_pre_send_guard(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_scheduler_test_db(monkeypatch, tmp_path)
+    scheduled_for = datetime.now(timezone.utc)
+    reminder_id = database_module.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Долгая подготовка",
+        schedule_type="every_days",
+        start_at=scheduled_for.replace(tzinfo=None),
+        interval_days=1,
+    )
+    reminder = scheduler_module.build_reminder_read_data(
+        database_module.get_active_reminder_from_db(reminder_id)
+    )
+    refresh_calls: list[dict[str, object]] = []
+    real_refresh = database_module.refresh_reminder_delivery_claim
+
+    def tracking_refresh(**kwargs) -> bool:
+        refresh_calls.append(kwargs)
+        return real_refresh(**kwargs)
+
+    async def slow_delivery(
+        bot,
+        received_reminder,
+        received_scheduled_for,
+        *,
+        is_catchup,
+        expected_revision,
+    ) -> str:
+        await asyncio.sleep(0.04)
+        guard = scheduler_module.CURRENT_DELIVERY_CLAIM_GUARD.get()
+        assert guard is not None
+        await guard()
+        return scheduler_module.DELIVERY_OUTCOME_SENT
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "REMINDER_DELIVERY_CLAIM_HEARTBEAT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "refresh_reminder_delivery_claim",
+        tracking_refresh,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "deliver_reminder_occurrence",
+        slow_delivery,
+    )
+
+    outcome = asyncio.run(
+        scheduler_module.deliver_persisted_reminder_occurrence(
+            FakeBot(),
+            reminder,
+            scheduled_for,
+            is_catchup=False,
+        )
+    )
+
+    assert outcome == scheduler_module.DELIVERY_OUTCOME_SENT
+    assert len(refresh_calls) >= 3
+
+
+def test_database_error_after_send_is_persisted_for_retry(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_scheduler_test_db(monkeypatch, tmp_path)
+    scheduled_for = datetime.now(timezone.utc)
+    reminder_id = database_module.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Повторить после ошибки SQLite",
+        schedule_type="every_days",
+        start_at=scheduled_for.replace(tzinfo=None),
+        interval_days=1,
+    )
+    reminder = scheduler_module.build_reminder_read_data(
+        database_module.get_active_reminder_from_db(reminder_id)
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "mark_reminder_occurrence_handled",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            sqlite3.OperationalError("database is locked")
+        ),
+    )
+    bot = FakeBot()
+
+    outcome = asyncio.run(
+        scheduler_module.deliver_persisted_reminder_occurrence(
+            bot,
+            reminder,
+            scheduled_for,
+            is_catchup=False,
+        )
+    )
+
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT * FROM reminder_delivery_occurrences"
+        ).fetchone()
+    assert outcome == scheduler_module.DELIVERY_OUTCOME_RETRY_SCHEDULED
+    assert len(bot.messages) == 1
+    assert occurrence["status"] == "pending"
+    assert occurrence["delivery_attempts"] == 1
+    assert occurrence["next_attempt_at_utc"] is not None
+    assert "database is locked" in occurrence["last_error"]
+
+
 @pytest.mark.parametrize(
     ("database_state", "expected_outcome"),
     [
@@ -744,7 +1477,7 @@ def test_run_scheduled_reminder_reloads_row_and_skips_handled_occurrence(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         lambda *args, **kwargs: delivered.append((args, kwargs)),
     )
 
@@ -762,7 +1495,7 @@ def test_old_scheduled_job_does_nothing_after_reminder_deletion(monkeypatch) -> 
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         lambda *args, **kwargs: delivered.append((args, kwargs)),
     )
 
@@ -797,7 +1530,7 @@ def test_run_scheduled_reminder_delivers_exact_latest_occurrence(monkeypatch) ->
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         fake_deliver,
     )
 
@@ -873,7 +1606,7 @@ def test_restore_catches_up_last_runs_and_continues_after_error(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         fake_deliver,
     )
     monkeypatch.setattr(
@@ -969,7 +1702,7 @@ def test_restore_waits_for_catchup_before_registering_close_future_run(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         delayed_deliver,
     )
     monkeypatch.setattr(
@@ -1061,7 +1794,7 @@ def test_restore_reloads_regular_reminder_after_recorded_catchup(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         fake_deliver,
     )
     monkeypatch.setattr(
@@ -1120,7 +1853,7 @@ def test_restore_does_not_schedule_regular_reminder_that_became_inactive(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         fake_deliver,
     )
     monkeypatch.setattr(
@@ -1166,7 +1899,7 @@ def test_restore_sent_unrecorded_does_not_repeat_catchup(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         fake_deliver,
     )
     monkeypatch.setattr(
@@ -1231,7 +1964,7 @@ def test_restore_catchup_limit_stops_pathological_cycle(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         fake_deliver,
     )
     monkeypatch.setattr(
@@ -1304,7 +2037,7 @@ def test_restore_catches_iteration_created_during_repeated_catchup(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         fake_deliver,
     )
     monkeypatch.setattr(
@@ -1504,7 +2237,7 @@ def test_future_once_becomes_catchup_while_previous_reminder_is_processed(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "deliver_reminder_occurrence",
+        "deliver_persisted_reminder_occurrence",
         fake_deliver,
     )
     monkeypatch.setattr(
@@ -1618,6 +2351,32 @@ def test_build_reminder_message_returns_readable_weather_service_error(
         == "Не смог получить прогноз погоды.\n"
         "Погодный сервис временно недоступен."
     )
+
+
+def test_build_reminder_message_propagates_retryable_weather_failure(
+    monkeypatch,
+) -> None:
+    retryable_error = scheduler_module.WeatherServiceError(
+        "Погодный сервис временно недоступен.",
+        retryable=True,
+        retry_after_seconds=17,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_weather_report",
+        lambda raw_locations: (_ for _ in ()).throw(retryable_error),
+    )
+
+    with pytest.raises(scheduler_module.WeatherServiceError) as captured:
+        build_reminder_message(
+            reminder_text="Екатеринбург",
+            reminder_kind=REMINDER_KIND_WEATHER,
+        )
+
+    assert captured.value is retryable_error
+    assert scheduler_module.get_reminder_delivery_retry_delay(
+        captured.value
+    ) == timedelta(seconds=17)
 
 
 def test_schedule_monthly_day_reminder_adds_cron_job(monkeypatch) -> None:
@@ -1757,6 +2516,7 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
     scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=4)
     reminder_data = SimpleNamespace(
         id=12,
+        revision=4,
         reminder_kind=REMINDER_KIND_WEATHER,
         reminder_text="Екатеринбург; Хургада",
     )
@@ -1808,18 +2568,21 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
 
     def fake_save_prepared_weather_report(
         reminder_id: int,
+        reminder_revision: int,
         report_scheduled_for: datetime,
         reminder_text: str,
         report_html: str,
-    ) -> None:
+    ) -> bool:
         saved_reports.append(
             {
                 "reminder_id": reminder_id,
+                "reminder_revision": reminder_revision,
                 "scheduled_for": report_scheduled_for,
                 "reminder_text": reminder_text,
                 "report_html": report_html,
             }
         )
+        return True
 
     monkeypatch.setattr(
         scheduler_module,
@@ -1845,6 +2608,7 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
     assert saved_reports == [
         {
             "reminder_id": 12,
+            "reminder_revision": 4,
             "scheduled_for": scheduled_for,
             "reminder_text": "Екатеринбург; Хургада",
             "report_html": "Подготовленный прогноз",
@@ -1856,6 +2620,7 @@ def test_prefetch_weather_reports_does_not_save_failed_report(monkeypatch) -> No
     scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=4)
     reminder_data = SimpleNamespace(
         id=12,
+        revision=4,
         reminder_kind=REMINDER_KIND_WEATHER,
         reminder_text="Екатеринбург",
     )
@@ -1911,6 +2676,7 @@ def test_prefetch_weather_reports_continues_when_cache_is_unavailable(
     scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=4)
     reminder_data = SimpleNamespace(
         id=12,
+        revision=4,
         reminder_kind=REMINDER_KIND_WEATHER,
         reminder_text="Екатеринбург",
     )
@@ -1994,11 +2760,14 @@ def test_send_repeating_weather_reminder_uses_prepared_report_and_deletes_it(
     monkeypatch.setattr(
         scheduler_module,
         "delete_prepared_weather_report",
-        lambda reminder_id, scheduled_for_utc: deleted_reports.append(
-            {
-                "reminder_id": reminder_id,
-                "scheduled_for_utc": scheduled_for_utc,
-            }
+        lambda reminder_id, reminder_revision, scheduled_for_utc: (
+            deleted_reports.append(
+                {
+                    "reminder_id": reminder_id,
+                    "reminder_revision": reminder_revision,
+                    "scheduled_for_utc": scheduled_for_utc,
+                }
+            )
         ),
     )
     monkeypatch.setattr(
@@ -2030,6 +2799,7 @@ def test_send_repeating_weather_reminder_uses_prepared_report_and_deletes_it(
     assert deleted_reports == [
         {
             "reminder_id": 12,
+            "reminder_revision": 1,
             "scheduled_for_utc": "2026-07-07T04:30:00+00:00",
         }
     ]
@@ -2585,6 +3355,96 @@ def test_schedule_reminder_message_deletion_cleanup_adds_minutely_job(
     assert job["max_instances"] == 1
     assert job["coalesce"] is True
     assert "next_run_time" in job
+
+
+def test_schedule_reminder_delivery_worker_has_explicit_misfire_grace(
+    monkeypatch,
+) -> None:
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+    bot = FakeBot()
+
+    scheduler_module.schedule_reminder_delivery_worker(bot)
+
+    assert len(fake_scheduler.jobs) == 1
+    job = fake_scheduler.jobs[0]
+    assert job["func"] == scheduler_module.process_due_reminder_deliveries
+    assert job["id"] == "reminder-delivery-worker"
+    assert job["minutes"] == 1
+    assert job["max_instances"] == 1
+    assert job["coalesce"] is True
+    assert job["misfire_grace_time"] == 60
+
+
+def test_schedule_reminder_delivery_retention_cleanup_adds_bounded_job(
+    monkeypatch,
+) -> None:
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
+
+    scheduler_module.schedule_reminder_delivery_retention_cleanup()
+
+    assert len(fake_scheduler.jobs) == 1
+    job = fake_scheduler.jobs[0]
+    assert job["func"] == scheduler_module.cleanup_terminal_reminder_deliveries
+    assert job["id"] == "reminder-delivery-retention-cleanup"
+    assert job["hours"] == 6
+    assert job["max_instances"] == 1
+    assert job["coalesce"] is True
+    assert job["misfire_grace_time"] == 60
+
+
+def test_cleanup_terminal_reminder_deliveries_uses_retention_and_batch(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_delete(**kwargs) -> int:
+        calls.append(kwargs)
+        return 3
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_terminal_reminder_delivery_occurrences",
+        fake_delete,
+    )
+
+    asyncio.run(scheduler_module.cleanup_terminal_reminder_deliveries())
+
+    assert len(calls) == 1
+    assert calls[0]["limit"] == 1000
+    expired_before = calls[0]["expired_before"]
+    assert isinstance(expired_before, datetime)
+    assert datetime.now(timezone.utc) - expired_before >= timedelta(days=7)
+
+
+def test_cleanup_terminal_reminder_deliveries_drains_backlog_in_yielding_batches(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    deleted_batches = iter((1000, 1000, 3))
+    yielded_delays: list[float] = []
+
+    def fake_delete(**kwargs) -> int:
+        calls.append(kwargs)
+        return next(deleted_batches)
+
+    async def fake_sleep(delay: float) -> None:
+        yielded_delays.append(delay)
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_terminal_reminder_delivery_occurrences",
+        fake_delete,
+    )
+    monkeypatch.setattr(scheduler_module.asyncio, "sleep", fake_sleep)
+
+    asyncio.run(scheduler_module.cleanup_terminal_reminder_deliveries())
+
+    assert len(calls) == 3
+    assert {call["limit"] for call in calls} == {1000}
+    assert len({call["expired_before"] for call in calls}) == 1
+    assert yielded_delays == [0, 0]
 
 
 def test_cleanup_with_empty_persistent_queue_does_nothing(monkeypatch) -> None:

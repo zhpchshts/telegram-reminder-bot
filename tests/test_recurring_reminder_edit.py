@@ -166,6 +166,7 @@ def test_repeating_edit_preview_returns_calculated_next_run_at(
     result = preview_tma_reminder(
         request=ReminderPreviewRequest(
             reminder_id=42,
+            expected_revision=current_reminder.revision,
             reminder_text="Проверить релиз",
             schedule_type="every_days",
             start_at=datetime(2099, 12, 31, 9, 30),

@@ -15,11 +15,12 @@ scheduler jobs.
 X-Telegram-Init-Data: <Telegram WebApp initData>
 ```
 
-Backend проверяет подпись Telegram Mini App `initData`, срок `auth_date` и
-`user.id`. Контекст чата берётся из подписанного launch token, созданного ботом
-для конкретного пользователя; `chat_id` из frontend не считается доверенным.
+Backend проверяет подпись Telegram Mini App `initData` и срок `auth_date`.
+Контекст чата берётся из подписанного launch token, созданного ботом;
+`chat_id` из frontend не считается доверенным.
 Если Telegram передал signed `chat`, его id/type также должны совпасть с launch
-context. Ссылка `/app` действует 24 часа и не работает у другого пользователя.
+context. Ссылка `/app` действует 30 дней и не привязана к конкретному
+пользователю, поэтому одну кнопку могут открыть разные пользователи.
 
 Для endpoints вида `/api/chats/{chat_id}/...` backend дополнительно проверяет,
 что подписанный chat совпадает с `chat_id` в path. Mini App должна использовать
@@ -28,7 +29,7 @@ context. Ссылка `/app` действует 24 часа и не работа
 Ошибки авторизации:
 
 - `401` — initData отсутствует, устарел или невалиден;
-- `403` — пользователь или signed chat не совпадает с launch context/path.
+- `403` — signed chat не совпадает с launch context/path.
 
 Все ответы `/api/...`, включая ошибки, возвращаются с
 `Cache-Control: private, no-store` и `Vary: X-Telegram-Init-Data`.

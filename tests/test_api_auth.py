@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app import api_auth as api_auth_module
+from app import tma_launch as tma_launch_module
 from app.api_auth import (
     TMA_INIT_DATA_HEADER,
     get_tma_chat,
@@ -56,13 +57,11 @@ def make_launch_token(
     *,
     chat_id: int = -100,
     chat_type: str = "supergroup",
-    user_id: int = 123,
     chat_title: str | None = "Home",
 ) -> str:
     return create_tma_launch_token(
         chat_id=chat_id,
         chat_type=chat_type,
-        user_id=user_id,
         chat_title=chat_title,
         secret=BOT_TOKEN,
         now=1_700_000_000,
@@ -414,31 +413,37 @@ def test_get_tma_chat_rejects_invalid_launch_token() -> None:
     assert error.value.detail == "TMA launch token is invalid."
 
 
-def test_get_tma_chat_requires_signed_user() -> None:
+def test_get_tma_chat_does_not_require_user_binding() -> None:
     init_data = make_init_data(
         start_param=make_launch_token(),
     )
 
-    with pytest.raises(HTTPException) as error:
-        get_tma_chat(init_data=init_data)
+    assert get_tma_chat(init_data=init_data) == {
+        "id": -100,
+        "type": "supergroup",
+        "title": "Home",
+    }
 
-    assert error.value.status_code == 401
-    assert error.value.detail == "Telegram init data user is required."
 
-
-def test_get_tma_chat_rejects_different_signed_user() -> None:
+def test_get_tma_chat_accepts_previous_token_for_another_user() -> None:
+    previous_token = tma_launch_module._encode_tma_launch_token(
+        {
+            "chat_id": -100,
+            "chat_type": "supergroup",
+            "expires_at": 2_700_000_000,
+            "user_id": 123,
+        },
+        secret=BOT_TOKEN,
+    )
     init_data = make_init_data(
         user={"id": 456},
-        start_param=make_launch_token(user_id=123),
+        start_param=previous_token,
     )
 
-    with pytest.raises(HTTPException) as error:
-        get_tma_chat(init_data=init_data)
-
-    assert error.value.status_code == 403
-    assert error.value.detail == (
-        "Telegram init data user.id does not match TMA launch token user_id."
-    )
+    assert get_tma_chat(init_data=init_data) == {
+        "id": -100,
+        "type": "supergroup",
+    }
 
 
 def test_get_tma_chat_accepts_matching_signed_chat_context() -> None:

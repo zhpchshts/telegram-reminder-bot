@@ -466,7 +466,6 @@ def test_app_command_sends_direct_link_button(
         *,
         chat_id: int,
         chat_type: str,
-        user_id: int,
         secret: str,
         chat_title: str | None = None,
     ) -> str:
@@ -474,7 +473,6 @@ def test_app_command_sends_direct_link_button(
             {
                 "chat_id": chat_id,
                 "chat_type": chat_type,
-                "user_id": user_id,
                 "chat_title": chat_title,
                 "secret": secret,
             }
@@ -505,7 +503,6 @@ def test_app_command_sends_direct_link_button(
         {
             "chat_id": CHAT_ID,
             "chat_type": "supergroup",
-            "user_id": USER_ID,
             "chat_title": "Home",
             "secret": "test-bot-token",
         }
@@ -513,7 +510,10 @@ def test_app_command_sends_direct_link_button(
     assert len(message.answers) == 1
 
     answer_text, kwargs = message.answers[0]
-    assert answer_text == "Открой Незабудку для управления напоминаниями:"
+    assert answer_text == (
+        "Открой Незабудку для управления напоминаниями:\n\n"
+        "Ссылка в кнопке действует 30 дней с момента отправки."
+    )
 
     reply_markup = kwargs["reply_markup"]
     button = reply_markup.inline_keyboard[0][0]
@@ -522,34 +522,29 @@ def test_app_command_sends_direct_link_button(
     assert button.web_app is None
 
 
-def test_app_command_does_not_issue_button_without_sender(
+def test_app_command_issues_button_without_sender(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    direct_url = "https://t.me/ZhpchshtsReminderBot?startapp="
     monkeypatch.setattr(
         handlers,
         "TMA_DIRECT_URL",
-        "https://t.me/ZhpchshtsReminderBot?startapp=",
+        direct_url,
     )
-
-    def fail_create_tma_launch_token(**kwargs: object) -> str:
-        pytest.fail(f"Launch token must not be created: {kwargs}")
-
-    monkeypatch.setattr(
-        handlers,
-        "create_tma_launch_token",
-        fail_create_tma_launch_token,
-    )
+    monkeypatch.setattr(handlers, "BOT_TOKEN", "test-bot-token")
     message = FakeMessage("/app", from_user_id=None)
 
     asyncio.run(handlers.app_command(message))
 
-    assert message.answers == [
-        (
-            "Не удалось определить пользователя Telegram. "
-            "Отправь команду /app от своего имени.",
-            {},
-        )
-    ]
+    answer_text, kwargs = message.answers[0]
+    assert handlers.TMA_LAUNCH_LINK_NOTICE in answer_text
+    launch_url = kwargs["reply_markup"].inline_keyboard[0][0].url
+    assert launch_url is not None
+    context = validate_tma_launch_token(
+        launch_url.removeprefix(direct_url),
+        secret="test-bot-token",
+    )
+    assert context.chat_id == CHAT_ID
 
 
 def test_app_command_handles_max_length_emoji_chat_title(
@@ -575,7 +570,6 @@ def test_app_command_handles_max_length_emoji_chat_title(
     )
     assert context.chat_id == CHAT_ID
     assert context.chat_type == "supergroup"
-    assert context.user_id == USER_ID
     assert context.chat_title is None
 
 
@@ -618,7 +612,6 @@ def test_mini_app_first_commands_send_direct_link_button(
         *,
         chat_id: int,
         chat_type: str,
-        user_id: int,
         secret: str,
         chat_title: str | None = None,
     ) -> str:
@@ -626,7 +619,6 @@ def test_mini_app_first_commands_send_direct_link_button(
             {
                 "chat_id": chat_id,
                 "chat_type": chat_type,
-                "user_id": user_id,
                 "chat_title": chat_title,
                 "secret": secret,
             }
@@ -659,7 +651,6 @@ def test_mini_app_first_commands_send_direct_link_button(
         {
             "chat_id": CHAT_ID,
             "chat_type": "supergroup",
-            "user_id": USER_ID,
             "chat_title": "Home",
             "secret": "test-bot-token",
         }
@@ -670,6 +661,7 @@ def test_mini_app_first_commands_send_direct_link_button(
 
     for expected_text_part in expected_text_parts:
         assert expected_text_part in answer_text
+    assert handlers.TMA_LAUNCH_LINK_NOTICE in answer_text
 
     reply_markup = kwargs["reply_markup"]
     button = reply_markup.inline_keyboard[0][0]
@@ -764,7 +756,6 @@ def test_unknown_message_sends_direct_link_button(
         *,
         chat_id: int,
         chat_type: str,
-        user_id: int,
         secret: str,
         chat_title: str | None = None,
     ) -> str:
@@ -772,7 +763,6 @@ def test_unknown_message_sends_direct_link_button(
             {
                 "chat_id": chat_id,
                 "chat_type": chat_type,
-                "user_id": user_id,
                 "chat_title": chat_title,
                 "secret": secret,
             }
@@ -803,7 +793,6 @@ def test_unknown_message_sends_direct_link_button(
         {
             "chat_id": CHAT_ID,
             "chat_type": "supergroup",
-            "user_id": USER_ID,
             "chat_title": "Home",
             "secret": "test-bot-token",
         }
@@ -814,6 +803,7 @@ def test_unknown_message_sends_direct_link_button(
 
     for expected_text_part in expected_text_parts:
         assert expected_text_part in answer_text
+    assert handlers.TMA_LAUNCH_LINK_NOTICE in answer_text
 
     reply_markup = kwargs["reply_markup"]
     button = reply_markup.inline_keyboard[0][0]

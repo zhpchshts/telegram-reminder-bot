@@ -66,34 +66,8 @@ def get_tma_launch_context(
             detail=str(error),
         ) from error
 
-    user_id = _get_required_tma_user_id(init_data)
-    if launch_context.user_id != user_id:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Telegram init data user.id does not match TMA launch token user_id."
-            ),
-        )
-
     _validate_signed_tma_chat(init_data, launch_context)
     return launch_context
-
-
-def _get_required_tma_user_id(init_data: TelegramInitData) -> int:
-    if init_data.user is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Telegram init data user is required.",
-        )
-
-    user_id = init_data.user.get("id")
-    if isinstance(user_id, bool) or not isinstance(user_id, int):
-        raise HTTPException(
-            status_code=401,
-            detail="Telegram init data user.id must be an integer.",
-        )
-
-    return user_id
 
 
 def _validate_signed_tma_chat(

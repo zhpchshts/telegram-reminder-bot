@@ -43,6 +43,7 @@ from app.tma_launch import create_tma_launch_token
 
 router = Router()
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
+TMA_LAUNCH_LINK_NOTICE = "Ссылка в кнопке действует 30 дней с момента отправки."
 ParseCommand = Callable[[str | None, str], ReminderParseResult]
 
 
@@ -66,17 +67,25 @@ def build_tma_keyboard(launch_url: str) -> InlineKeyboardMarkup:
     )
 
 
+def add_tma_launch_link_notice(
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> str:
+    if reply_markup is None:
+        return text
+
+    return f"{text}\n\n{TMA_LAUNCH_LINK_NOTICE}"
+
+
 def build_tma_launch_url(
     *,
     chat_id: int,
     chat_type: str,
-    user_id: int,
     chat_title: str | None,
 ) -> str:
     token = create_tma_launch_token(
         chat_id=chat_id,
         chat_type=chat_type,
-        user_id=user_id,
         chat_title=chat_title,
         secret=BOT_TOKEN,
     )
@@ -84,13 +93,12 @@ def build_tma_launch_url(
 
 
 def build_tma_keyboard_for_message(message: Message) -> InlineKeyboardMarkup | None:
-    if not TMA_DIRECT_URL or message.from_user is None:
+    if not TMA_DIRECT_URL:
         return None
 
     launch_url = build_tma_launch_url(
         chat_id=message.chat.id,
         chat_type=message.chat.type,
-        user_id=message.from_user.id,
         chat_title=message.chat.title,
     )
     return build_tma_keyboard(launch_url)
@@ -234,7 +242,8 @@ async def handle_create_command(
 
 @router.message(Command("start"))
 async def start(message: Message) -> None:
-    await message.answer(
+    reply_markup = build_tma_keyboard_for_message(message)
+    text = (
         "Привет.\n"
         "Я Незабудка — бот для напоминаний в Telegram-чатах.\n\n"
         "Основной сценарий теперь в Mini App: там можно создать, посмотреть "
@@ -242,8 +251,11 @@ async def start(message: Message) -> None:
         "Текстовые команды остаются как запасной способ управления:\n"
         "/help — справка\n"
         "/examples — примеры команд\n"
-        "/timezone — таймзона чата",
-        reply_markup=build_tma_keyboard_for_message(message),
+        "/timezone — таймзона чата"
+    )
+    await message.answer(
+        add_tma_launch_link_notice(text, reply_markup),
+        reply_markup=reply_markup,
     )
 
 
@@ -252,13 +264,6 @@ async def app_command(message: Message) -> None:
     reply_markup = build_tma_keyboard_for_message(message)
 
     if reply_markup is None:
-        if message.from_user is None:
-            await message.answer(
-                "Не удалось определить пользователя Telegram. "
-                "Отправь команду /app от своего имени."
-            )
-            return
-
         await message.answer(
             "Mini App пока не настроен.\n\n"
             "Администратору нужно задать переменную окружения TMA_DIRECT_URL."
@@ -266,14 +271,18 @@ async def app_command(message: Message) -> None:
         return
 
     await message.answer(
-        "Открой Незабудку для управления напоминаниями:",
+        add_tma_launch_link_notice(
+            "Открой Незабудку для управления напоминаниями:",
+            reply_markup,
+        ),
         reply_markup=reply_markup,
     )
 
 
 @router.message(Command("help"))
 async def help_command(message: Message) -> None:
-    await message.answer(
+    reply_markup = build_tma_keyboard_for_message(message)
+    text = (
         "Незабудка — бот для напоминаний в Telegram-чатах.\n\n"
         "Основной сценарий — Mini App: создать, посмотреть и удалить "
         "напоминания можно через интерфейс.\n\n"
@@ -301,8 +310,11 @@ async def help_command(message: Message) -> None:
         "Узнать и скопировать свою таймзону можно здесь:\n"
         f"{TIMEZONE_LOOKUP_URL}\n\n"
         "Чтобы посмотреть готовые примеры команд, отправь:\n"
-        "/examples",
-        reply_markup=build_tma_keyboard_for_message(message),
+        "/examples"
+    )
+    await message.answer(
+        add_tma_launch_link_notice(text, reply_markup),
+        reply_markup=reply_markup,
         link_preview_options=NO_LINK_PREVIEW,
     )
 
@@ -582,18 +594,25 @@ async def unknown_message(message: Message) -> None:
 
     if message.text.startswith("/"):
         await message.answer(
-            "Не знаю такую команду.\n\n"
-            "Открыть интерфейс управления напоминаниями можно через кнопку ниже.\n\n"
-            "Доступные команды можно посмотреть через /help.\n"
-            "Примеры создания напоминаний — через /examples.",
+            add_tma_launch_link_notice(
+                "Не знаю такую команду.\n\n"
+                "Открыть интерфейс управления напоминаниями можно через кнопку "
+                "ниже.\n\n"
+                "Доступные команды можно посмотреть через /help.\n"
+                "Примеры создания напоминаний — через /examples.",
+                reply_markup,
+            ),
             reply_markup=reply_markup,
         )
         return
 
     await message.answer(
-        "Я пока понимаю только команды.\n\n"
-        "Открыть интерфейс управления напоминаниями можно через кнопку ниже.\n\n"
-        "Доступные команды можно посмотреть через /help.\n"
-        "Примеры создания напоминаний — через /examples.",
+        add_tma_launch_link_notice(
+            "Я пока понимаю только команды.\n\n"
+            "Открыть интерфейс управления напоминаниями можно через кнопку ниже.\n\n"
+            "Доступные команды можно посмотреть через /help.\n"
+            "Примеры создания напоминаний — через /examples.",
+            reply_markup,
+        ),
         reply_markup=reply_markup,
     )

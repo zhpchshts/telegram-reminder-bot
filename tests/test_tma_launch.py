@@ -17,7 +17,6 @@ def test_create_and_validate_tma_launch_token() -> None:
     token = create_tma_launch_token(
         chat_id=-100,
         chat_type="supergroup",
-        user_id=123,
         chat_title="Home",
         secret=SECRET,
         now=1_700_000_000,
@@ -33,7 +32,6 @@ def test_create_and_validate_tma_launch_token() -> None:
     assert context == TmaLaunchContext(
         chat_id=-100,
         chat_type="supergroup",
-        user_id=123,
         chat_title="Home",
     )
 
@@ -42,7 +40,6 @@ def test_create_tma_launch_token_uses_safe_base32_alphabet() -> None:
     token = create_tma_launch_token(
         chat_id=-100,
         chat_type="supergroup",
-        user_id=123,
         chat_title="Home",
         secret=SECRET,
         now=1_700_000_000,
@@ -69,7 +66,6 @@ def test_create_tma_launch_token_without_chat_title() -> None:
     token = create_tma_launch_token(
         chat_id=123,
         chat_type="private",
-        user_id=123,
         secret=SECRET,
         now=1_700_000_000,
         max_age_seconds=60,
@@ -84,7 +80,6 @@ def test_create_tma_launch_token_without_chat_title() -> None:
     assert context == TmaLaunchContext(
         chat_id=123,
         chat_type="private",
-        user_id=123,
         chat_title=None,
     )
 
@@ -93,7 +88,6 @@ def test_validate_tma_launch_token_rejects_tampered_token() -> None:
     token = create_tma_launch_token(
         chat_id=-100,
         chat_type="supergroup",
-        user_id=123,
         secret=SECRET,
         now=1_700_000_000,
         max_age_seconds=60,
@@ -114,7 +108,6 @@ def test_validate_tma_launch_token_rejects_expired_token() -> None:
     token = create_tma_launch_token(
         chat_id=-100,
         chat_type="supergroup",
-        user_id=123,
         secret=SECRET,
         now=1_700_000_000,
         max_age_seconds=60,
@@ -135,42 +128,28 @@ def test_create_tma_launch_token_rejects_invalid_chat_id() -> None:
         create_tma_launch_token(
             chat_id=True,
             chat_type="private",
-            user_id=123,
             secret=SECRET,
         )
 
     assert str(error.value) == "chat_id must be an integer."
 
 
-def test_create_tma_launch_token_rejects_invalid_user_id() -> None:
-    with pytest.raises(TmaLaunchTokenError) as error:
-        create_tma_launch_token(
-            chat_id=123,
-            chat_type="private",
-            user_id=True,
-            secret=SECRET,
-        )
-
-    assert str(error.value) == "user_id must be an integer."
-
-
-def test_tma_launch_token_default_lifetime_is_24_hours() -> None:
+def test_tma_launch_token_default_lifetime_is_30_days() -> None:
     now = 1_700_000_000
     token = create_tma_launch_token(
         chat_id=123,
         chat_type="private",
-        user_id=123,
         secret=SECRET,
         now=now,
     )
 
-    validate_tma_launch_token(token, secret=SECRET, now=now + 24 * 60 * 60)
+    validate_tma_launch_token(token, secret=SECRET, now=now + 30 * 24 * 60 * 60)
 
     with pytest.raises(TmaLaunchTokenError) as error:
         validate_tma_launch_token(
             token,
             secret=SECRET,
-            now=now + 24 * 60 * 60 + 1,
+            now=now + 30 * 24 * 60 * 60 + 1,
         )
 
     assert str(error.value) == "TMA launch token is expired."
@@ -183,7 +162,6 @@ def test_create_tma_launch_token_drops_oversized_display_title(
     token = create_tma_launch_token(
         chat_id=-100,
         chat_type="supergroup",
-        user_id=123,
         chat_title=chat_title,
         secret=SECRET,
         now=1_700_000_000,
@@ -200,16 +178,16 @@ def test_create_tma_launch_token_drops_oversized_display_title(
     assert context == TmaLaunchContext(
         chat_id=-100,
         chat_type="supergroup",
-        user_id=123,
         chat_title=None,
     )
 
 
-def test_validate_tma_launch_token_rejects_legacy_unbound_token() -> None:
+def test_validate_tma_launch_token_accepts_previous_user_bound_token() -> None:
     payload = {
         "chat_id": -100,
         "chat_type": "supergroup",
         "expires_at": 1_700_000_060,
+        "user_id": 123,
     }
     token = tma_launch_module._base32_encode(
         json.dumps(
@@ -226,11 +204,14 @@ def test_validate_tma_launch_token_rejects_legacy_unbound_token() -> None:
         ).encode()
     )
 
-    with pytest.raises(TmaLaunchTokenError) as error:
-        validate_tma_launch_token(
-            token,
-            secret=SECRET,
-            now=1_700_000_030,
-        )
+    context = validate_tma_launch_token(
+        token,
+        secret=SECRET,
+        now=1_700_000_030,
+    )
 
-    assert str(error.value) == "TMA launch token is invalid."
+    assert context == TmaLaunchContext(
+        chat_id=-100,
+        chat_type="supergroup",
+        chat_title=None,
+    )

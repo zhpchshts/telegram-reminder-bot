@@ -808,7 +808,7 @@ function buildExpiredSessionMessage() {
 
 function buildLaunchContextMismatchMessage() {
   return [
-    "Этот запуск Mini App предназначен для другого пользователя или чата.",
+    "Этот запуск Mini App предназначен для другого чата.",
     "",
     "Открой Незабудку заново: отправь /app в нужном Telegram-чате и нажми свежую кнопку.",
   ].join("\n");

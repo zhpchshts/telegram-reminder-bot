@@ -32,7 +32,6 @@ def build_launch_token_for_chat(chat_id: int) -> str:
     return create_tma_launch_token(
         chat_id=chat_id,
         chat_type="group",
-        user_id=123,
         chat_title="Home",
         secret=BOT_TOKEN,
         now=1_700_000_000,

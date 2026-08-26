@@ -36,10 +36,7 @@ def test_tma_requests_have_timeout_no_store_and_friendly_error_mapping() -> None
     assert "isPotentiallyStateChangingRequest" in javascript
     assert "Изменение могло сохраниться." in javascript
     assert "isTelegramLaunchContextError" in javascript
-    assert (
-        "Этот запуск Mini App предназначен для другого пользователя или чата."
-        in javascript
-    )
+    assert "Этот запуск Mini App предназначен для другого чата." in javascript
     assert (
         "shouldShowTechnicalDetails = !isTelegramLaunchContextError(error)"
         in javascript

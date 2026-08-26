@@ -6,6 +6,27 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_gitignore_excludes_secret_and_database_backup_artifacts() -> None:
+    gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+    ignored_paths = {
+        line.strip().rstrip("/")
+        for line in gitignore.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+    assert {
+        ".env.*",
+        "*.db.*",
+        "*.sqlite.*",
+        "*.sqlite3.*",
+        "*.bak",
+        "*.backup",
+        "backup",
+        "backups",
+        "review-diff.txt",
+    } <= ignored_paths
+
+
 def test_tma_is_served_from_the_same_image_as_backend() -> None:
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")

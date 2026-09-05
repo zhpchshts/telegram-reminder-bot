@@ -57,9 +57,10 @@ def test_tma_is_served_from_the_same_image_as_backend() -> None:
 
 
 def test_backend_workflow_watches_repository_control_files() -> None:
-    backend_workflow = (
-        PROJECT_ROOT / ".github" / "workflows" / "backend.yml"
-    ).read_text(encoding="utf-8")
+    backend_workflow_path = PROJECT_ROOT / ".github" / "workflows" / "backend.yml"
+    if not backend_workflow_path.is_file():
+        pytest.skip("The runtime image intentionally excludes source-only workflows.")
+    backend_workflow = backend_workflow_path.read_text(encoding="utf-8")
 
     assert backend_workflow.count('- ".gitignore"') == 2
     assert backend_workflow.count('- ".gitattributes"') == 2

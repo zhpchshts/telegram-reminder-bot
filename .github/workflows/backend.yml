@@ -17,6 +17,8 @@ on:
       - "Dockerfile"
       - "docker-compose.yml"
       - ".dockerignore"
+      - ".gitignore"
+      - ".gitattributes"
       - "scripts/**"
       - ".github/workflows/**"
   pull_request:
@@ -29,6 +31,8 @@ on:
       - "Dockerfile"
       - "docker-compose.yml"
       - ".dockerignore"
+      - ".gitignore"
+      - ".gitattributes"
       - "scripts/**"
       - ".github/workflows/**"
 

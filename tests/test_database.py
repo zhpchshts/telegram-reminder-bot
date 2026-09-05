@@ -14,6 +14,144 @@ def use_test_db(monkeypatch, tmp_path):
     return test_db_path
 
 
+def test_get_connection_commits_transaction_and_closes_connection(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    test_db_path = tmp_path / "connection-commit.db"
+    monkeypatch.setattr(database, "DB_PATH", test_db_path)
+
+    with database.get_connection() as connection:
+        managed_connection = connection
+        connection.execute("CREATE TABLE sample (value INTEGER NOT NULL)")
+        connection.execute("INSERT INTO sample (value) VALUES (1)")
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        managed_connection.execute("SELECT 1")
+
+    verification_connection = sqlite3.connect(test_db_path)
+    try:
+        stored_value = verification_connection.execute(
+            "SELECT value FROM sample"
+        ).fetchone()[0]
+    finally:
+        verification_connection.close()
+
+    assert stored_value == 1
+
+
+def test_get_connection_rolls_back_transaction_and_closes_connection(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    test_db_path = tmp_path / "connection-rollback.db"
+    monkeypatch.setattr(database, "DB_PATH", test_db_path)
+    with database.get_connection() as connection:
+        connection.execute("CREATE TABLE sample (value INTEGER NOT NULL)")
+
+    with pytest.raises(RuntimeError, match="rollback"):
+        with database.get_connection() as connection:
+            failed_connection = connection
+            connection.execute("INSERT INTO sample (value) VALUES (1)")
+            raise RuntimeError("rollback")
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        failed_connection.execute("SELECT 1")
+
+    verification_connection = sqlite3.connect(test_db_path)
+    try:
+        stored_count = verification_connection.execute(
+            "SELECT COUNT(*) FROM sample"
+        ).fetchone()[0]
+    finally:
+        verification_connection.close()
+
+    assert stored_count == 0
+
+
+def test_init_db_owns_connection_and_passes_explicit_migration_timestamp(
+    monkeypatch,
+) -> None:
+    fixed_now = datetime(2026, 9, 2, 8, 30, 45, tzinfo=timezone.utc)
+    fake_connection = object()
+    events = []
+    schema_call = {}
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is not None else fixed_now.replace(tzinfo=None)
+
+    class FakeConnectionContext:
+        def __enter__(self):
+            events.append("enter")
+            return fake_connection
+
+        def __exit__(self, exc_type, exc_value, traceback) -> bool:
+            events.append("exit")
+            return False
+
+    def fake_initialize_database_schema(
+        connection,
+        *,
+        migration_now_utc: str,
+    ) -> None:
+        schema_call["connection"] = connection
+        schema_call["migration_now_utc"] = migration_now_utc
+
+    monkeypatch.setattr(database, "datetime", FrozenDateTime)
+    monkeypatch.setattr(database, "get_connection", FakeConnectionContext)
+    monkeypatch.setattr(
+        database,
+        "initialize_database_schema",
+        fake_initialize_database_schema,
+    )
+
+    database.init_db()
+
+    assert events == ["enter", "exit"]
+    assert schema_call == {
+        "connection": fake_connection,
+        "migration_now_utc": "2026-09-02T08:30:45+00:00",
+    }
+
+
+@pytest.mark.parametrize(
+    "missing_table",
+    (
+        "reminders",
+        "chat_settings",
+        "reminder_completion_occurrences",
+        "reminder_delivery_occurrences",
+    ),
+)
+def test_required_database_schema_rejects_missing_core_table(
+    monkeypatch,
+    tmp_path,
+    missing_table: str,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    with database.get_connection() as connection:
+        connection.execute(f"DROP TABLE {missing_table}")
+
+    with pytest.raises(
+        sqlite3.OperationalError, match=f"no such table: {missing_table}"
+    ):
+        database.check_required_database_schema()
+
+
+def test_required_database_schema_does_not_require_derived_cache_tables(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    with database.get_connection() as connection:
+        connection.execute("DROP TABLE weather_location_cache")
+        connection.execute("DROP TABLE weather_report_cache")
+
+    database.check_required_database_schema()
+
+
 def test_init_db_creates_database_file(monkeypatch, tmp_path) -> None:
     test_db_path = use_test_db(monkeypatch, tmp_path)
 
@@ -63,6 +201,7 @@ def test_init_db_creates_database_file(monkeypatch, tmp_path) -> None:
     assert "client_request_status" in reminder_columns
     assert "idx_reminders_client_request" in reminder_indexes
     assert "idx_reminders_chat_status" in reminder_indexes
+    assert "idx_reminders_active_weather" in reminder_indexes
     assert {
         "delivery_claim_token",
         "delivery_claimed_at_utc",
@@ -415,15 +554,28 @@ def test_init_db_migrates_existing_reminders_without_losing_data(
 
     monkeypatch.setattr(database, "DB_PATH", test_db_path)
     database.init_db()
+    database.init_db()
 
     with database.get_connection() as connection:
         reminder = connection.execute(
             """
-            SELECT text, requires_completion, repeat_interval_minutes, revision
+            SELECT text, reminder_kind, requires_completion,
+                   repeat_interval_minutes, revision
             FROM reminders WHERE id = 1
             """
         ).fetchone()
-    assert tuple(reminder) == ("Сохранить меня", 0, None, 1)
+        weather_index_sql = connection.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'index' AND name = 'idx_reminders_active_weather'
+            """
+        ).fetchone()["sql"]
+
+    assert tuple(reminder) == ("Сохранить меня", "text", 0, None, 1)
+    assert " ".join(weather_index_sql.split()).endswith(
+        "WHERE status = 'active' AND reminder_kind = 'weather'"
+    )
 
 
 def test_create_reminder_in_db_returns_id(monkeypatch, tmp_path) -> None:
@@ -1001,6 +1153,39 @@ def test_get_all_active_reminders_returns_all_active(monkeypatch, tmp_path) -> N
     assert len(reminders) == 2
     assert reminders[0]["text"] == "Первое"
     assert reminders[1]["text"] == "Второе"
+
+
+def test_get_all_active_weather_reminders_filters_in_database(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Текстовое",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 12),
+    )
+    active_weather_id = database.create_reminder_in_db(
+        chat_id=200,
+        reminder_text="Екатеринбург",
+        reminder_kind="weather",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 13),
+    )
+    inactive_weather_id = database.create_reminder_in_db(
+        chat_id=300,
+        reminder_text="Москва",
+        reminder_kind="weather",
+        schedule_type="once",
+        start_at=datetime(2026, 6, 8, 12, 14),
+    )
+    database.set_reminder_status(inactive_weather_id, "sent")
+
+    reminders = database.get_all_active_weather_reminders()
+
+    assert [reminder["id"] for reminder in reminders] == [active_weather_id]
+    assert reminders[0]["reminder_kind"] == "weather"
 
 
 def test_count_active_chats_counts_unique_chats_with_active_reminders(

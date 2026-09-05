@@ -1,10 +1,11 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import logging
 import sqlite3
 from threading import RLock
-from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -51,6 +52,7 @@ from app.database import (
     finalize_reminder_delivery_occurrence,
     get_active_reminder_from_db,
     get_all_active_reminders,
+    get_all_active_weather_reminders,
     get_due_reminder_delivery_occurrences,
     get_due_reminder_message_deletions,
     get_prepared_weather_report,
@@ -266,7 +268,7 @@ async def prefetch_weather_reports() -> None:
     )
 
     try:
-        active_reminders = await asyncio.to_thread(get_all_active_reminders)
+        active_reminders = await asyncio.to_thread(get_all_active_weather_reminders)
     except sqlite3.Error:
         LOGGER.exception("Could not load reminders for weather report prefetch.")
         return
@@ -277,9 +279,6 @@ async def prefetch_weather_reports() -> None:
             reminder_data = build_reminder_read_data(reminder)
         except (KeyError, TypeError, ValueError):
             LOGGER.exception("Could not map reminder for weather report prefetch.")
-            continue
-
-        if reminder_data.reminder_kind != REMINDER_KIND_WEATHER:
             continue
 
         next_run_at = get_next_run_at(reminder_data.id)
@@ -1852,15 +1851,35 @@ async def deliver_restored_occurrence(
         return "error"
 
 
-async def restore_active_reminders(bot: Bot) -> None:
-    restored_jobs = 0
-    catchup_sent = 0
-    stale_weather_skipped = 0
-    catchup_unrecorded = 0
-    legacy_once_missed = 0
-    catchup_errors = 0
-    without_missed_occurrences = 0
+@dataclass
+class _RestorationStats:
+    restored_jobs: int = 0
+    catchup_sent: int = 0
+    stale_weather_skipped: int = 0
+    catchup_unrecorded: int = 0
+    legacy_once_missed: int = 0
+    catchup_errors: int = 0
+    without_missed_occurrences: int = 0
 
+    def record_delivery_outcome(self, outcome: str) -> None:
+        if outcome == DELIVERY_OUTCOME_SENT:
+            self.catchup_sent += 1
+        elif outcome == DELIVERY_OUTCOME_STALE_WEATHER_SKIPPED:
+            self.stale_weather_skipped += 1
+        elif outcome == "error":
+            self.catchup_errors += 1
+        else:
+            self.catchup_unrecorded += 1
+
+
+@dataclass
+class _RestorationContext:
+    reminder_id: object
+    chat_id: object
+    stage: str = "mapping"
+
+
+def _schedule_restoration_maintenance_jobs(bot: Bot) -> None:
     for stage, schedule_maintenance_job in (
         ("weather_prefetch_scheduling", schedule_weather_report_prefetch),
         (
@@ -1886,6 +1905,237 @@ async def restore_active_reminders(bot: Bot) -> None:
                 error=error,
             )
 
+
+def _schedule_future_restored_reminder(
+    bot: Bot,
+    reminder: ReminderReadData,
+    *,
+    now: datetime,
+    context: _RestorationContext,
+    stats: _RestorationStats,
+    calculation_stage: str,
+    scheduling_stage: str,
+) -> bool:
+    context.stage = calculation_stage
+    next_run_time = get_next_run_at_for_schedule(
+        schedule_type=reminder.schedule_type,
+        start_at=reminder.start_at,
+        interval_days=reminder.interval_days,
+        interval_weeks=reminder.interval_weeks,
+        day_of_week=reminder.day_of_week,
+        month_week_number=reminder.month_week_number,
+        month_day=reminder.month_day,
+        timezone_name=reminder.timezone_name,
+        now=now + timedelta(microseconds=1),
+    )
+    if next_run_time is None:
+        return False
+
+    context.stage = scheduling_stage
+    schedule_reminder_data(
+        bot,
+        reminder,
+        next_run_time=next_run_time,
+    )
+    stats.restored_jobs += 1
+    return True
+
+
+async def _restore_repeating_reminder(
+    bot: Bot,
+    reminder: ReminderReadData,
+    *,
+    context: _RestorationContext,
+    stats: _RestorationStats,
+) -> None:
+    catchup_delivery_count = 0
+
+    while True:
+        context.stage = "catchup_calculation"
+        evaluation_now = datetime.now(timezone.utc)
+        scheduled_for = get_latest_unhandled_run_at(
+            reminder,
+            now=evaluation_now,
+        )
+
+        if scheduled_for is None:
+            if catchup_delivery_count == 0:
+                stats.without_missed_occurrences += 1
+            _schedule_future_restored_reminder(
+                bot,
+                reminder,
+                now=evaluation_now,
+                context=context,
+                stats=stats,
+                calculation_stage="future_run_calculation",
+                scheduling_stage="future_job_scheduling",
+            )
+            return
+
+        if catchup_delivery_count >= REMINDER_RESTORE_CATCHUP_LIMIT:
+            stats.catchup_errors += 1
+            LOGGER.error(
+                (
+                    "Reminder restoration catch-up limit exceeded: "
+                    "reminder_id=%s chat_id=%s stage=catchup_limit "
+                    "limit=%s"
+                ),
+                reminder.id,
+                reminder.chat_id,
+                REMINDER_RESTORE_CATCHUP_LIMIT,
+            )
+            return
+
+        outcome = await deliver_restored_occurrence(
+            bot,
+            reminder,
+            scheduled_for,
+        )
+        catchup_delivery_count += 1
+        stats.record_delivery_outcome(outcome)
+
+        if outcome == DELIVERY_OUTCOME_SENT:
+            LOGGER.info(
+                ("Reminder catch-up sent: reminder_id=%s chat_id=%s scheduled_for=%s"),
+                reminder.id,
+                reminder.chat_id,
+                scheduled_for.isoformat(timespec="seconds"),
+            )
+
+        if outcome not in {
+            DELIVERY_OUTCOME_SENT,
+            DELIVERY_OUTCOME_STALE_WEATHER_SKIPPED,
+        }:
+            _schedule_future_restored_reminder(
+                bot,
+                reminder,
+                now=datetime.now(timezone.utc),
+                context=context,
+                stats=stats,
+                calculation_stage="future_run_calculation_after_unrecorded_catchup",
+                scheduling_stage="future_job_scheduling_after_unrecorded_catchup",
+            )
+            return
+
+        context.stage = "post_catchup_reload"
+        reloaded_row = await asyncio.to_thread(
+            get_active_reminder_from_db,
+            reminder.id,
+        )
+        if reloaded_row is None:
+            return
+
+        context.stage = "post_catchup_mapping"
+        reminder = build_reminder_read_data(reloaded_row)
+        context.reminder_id = reminder.id
+        context.chat_id = reminder.chat_id
+
+
+async def _restore_once_reminder(
+    bot: Bot,
+    reminder: ReminderReadData,
+    *,
+    context: _RestorationContext,
+    stats: _RestorationStats,
+) -> None:
+    context.stage = "catchup_calculation"
+    evaluation_now = datetime.now(timezone.utc)
+    scheduled_for = get_latest_unhandled_run_at(
+        reminder,
+        now=evaluation_now,
+    )
+    if scheduled_for is not None:
+        outcome = await deliver_restored_occurrence(
+            bot,
+            reminder,
+            scheduled_for,
+        )
+        stats.record_delivery_outcome(outcome)
+        return
+
+    context.stage = "once_due_recheck"
+    fresh_now = datetime.now(timezone.utc)
+    scheduled_for = get_latest_unhandled_run_at(
+        reminder,
+        now=fresh_now,
+    )
+    if scheduled_for is not None:
+        outcome = await deliver_restored_occurrence(
+            bot,
+            reminder,
+            scheduled_for,
+        )
+        stats.record_delivery_outcome(outcome)
+        return
+
+    start_at_utc = ensure_timezone_aware(
+        reminder.start_at,
+        reminder.timezone_name,
+    ).astimezone(timezone.utc)
+    if start_at_utc <= fresh_now:
+        if start_at_utc < reminder.delivery_tracking_started_at_utc:
+            context.stage = "legacy_once_missed"
+            mark_reminder_as_missed(reminder.id)
+            stats.legacy_once_missed += 1
+        else:
+            stats.without_missed_occurrences += 1
+        return
+
+    if _schedule_future_restored_reminder(
+        bot,
+        reminder,
+        now=fresh_now,
+        context=context,
+        stats=stats,
+        calculation_stage="future_run_calculation",
+        scheduling_stage="future_job_scheduling",
+    ):
+        stats.without_missed_occurrences += 1
+
+
+async def _restore_reminder_row(
+    bot: Bot,
+    reminder_row: object,
+    *,
+    stats: _RestorationStats,
+) -> None:
+    context = _RestorationContext(
+        reminder_id=get_restore_row_value(reminder_row, "id"),
+        chat_id=get_restore_row_value(reminder_row, "chat_id"),
+    )
+
+    try:
+        reminder = build_reminder_read_data(reminder_row)
+        context.reminder_id = reminder.id
+        context.chat_id = reminder.chat_id
+
+        if reminder.schedule_type == "once":
+            await _restore_once_reminder(
+                bot,
+                reminder,
+                context=context,
+                stats=stats,
+            )
+        else:
+            await _restore_repeating_reminder(
+                bot,
+                reminder,
+                context=context,
+                stats=stats,
+            )
+    except Exception as error:
+        log_restoration_error(
+            reminder_id=context.reminder_id,
+            chat_id=context.chat_id,
+            stage=context.stage,
+            error=error,
+        )
+
+
+async def restore_active_reminders(bot: Bot) -> None:
+    stats = _RestorationStats()
+    _schedule_restoration_maintenance_jobs(bot)
+
     try:
         active_reminders = get_all_active_reminders()
     except Exception as error:
@@ -1898,222 +2148,11 @@ async def restore_active_reminders(bot: Bot) -> None:
         active_reminders = []
 
     for reminder_row in active_reminders:
-        reminder_id = get_restore_row_value(reminder_row, "id")
-        chat_id = get_restore_row_value(reminder_row, "chat_id")
-        stage = "mapping"
-
-        try:
-            reminder = build_reminder_read_data(reminder_row)
-            reminder_id = reminder.id
-            chat_id = reminder.chat_id
-
-            if reminder.schedule_type != "once":
-                catchup_delivery_count = 0
-
-                while True:
-                    stage = "catchup_calculation"
-                    evaluation_now = datetime.now(timezone.utc)
-                    scheduled_for = get_latest_unhandled_run_at(
-                        reminder,
-                        now=evaluation_now,
-                    )
-
-                    if scheduled_for is None:
-                        if catchup_delivery_count == 0:
-                            without_missed_occurrences += 1
-
-                        stage = "future_run_calculation"
-                        next_run_time = get_next_run_at_for_schedule(
-                            schedule_type=reminder.schedule_type,
-                            start_at=reminder.start_at,
-                            interval_days=reminder.interval_days,
-                            interval_weeks=reminder.interval_weeks,
-                            day_of_week=reminder.day_of_week,
-                            month_week_number=reminder.month_week_number,
-                            month_day=reminder.month_day,
-                            timezone_name=reminder.timezone_name,
-                            now=evaluation_now + timedelta(microseconds=1),
-                        )
-                        if next_run_time is not None:
-                            stage = "future_job_scheduling"
-                            schedule_reminder_data(
-                                bot,
-                                reminder,
-                                next_run_time=next_run_time,
-                            )
-                            restored_jobs += 1
-                        break
-
-                    if catchup_delivery_count >= REMINDER_RESTORE_CATCHUP_LIMIT:
-                        catchup_errors += 1
-                        LOGGER.error(
-                            (
-                                "Reminder restoration catch-up limit exceeded: "
-                                "reminder_id=%s chat_id=%s stage=catchup_limit "
-                                "limit=%s"
-                            ),
-                            reminder.id,
-                            reminder.chat_id,
-                            REMINDER_RESTORE_CATCHUP_LIMIT,
-                        )
-                        break
-
-                    outcome = await deliver_restored_occurrence(
-                        bot,
-                        reminder,
-                        scheduled_for,
-                    )
-                    catchup_delivery_count += 1
-
-                    if outcome == DELIVERY_OUTCOME_SENT:
-                        catchup_sent += 1
-                        LOGGER.info(
-                            (
-                                "Reminder catch-up sent: reminder_id=%s chat_id=%s "
-                                "scheduled_for=%s"
-                            ),
-                            reminder.id,
-                            reminder.chat_id,
-                            scheduled_for.isoformat(timespec="seconds"),
-                        )
-                    elif outcome == DELIVERY_OUTCOME_STALE_WEATHER_SKIPPED:
-                        stale_weather_skipped += 1
-                    elif outcome == "error":
-                        catchup_errors += 1
-                    else:
-                        catchup_unrecorded += 1
-
-                    if outcome not in {
-                        DELIVERY_OUTCOME_SENT,
-                        DELIVERY_OUTCOME_STALE_WEATHER_SKIPPED,
-                    }:
-                        fresh_now = datetime.now(timezone.utc)
-                        stage = "future_run_calculation_after_unrecorded_catchup"
-                        next_run_time = get_next_run_at_for_schedule(
-                            schedule_type=reminder.schedule_type,
-                            start_at=reminder.start_at,
-                            interval_days=reminder.interval_days,
-                            interval_weeks=reminder.interval_weeks,
-                            day_of_week=reminder.day_of_week,
-                            month_week_number=reminder.month_week_number,
-                            month_day=reminder.month_day,
-                            timezone_name=reminder.timezone_name,
-                            now=fresh_now + timedelta(microseconds=1),
-                        )
-                        if next_run_time is not None:
-                            stage = "future_job_scheduling_after_unrecorded_catchup"
-                            schedule_reminder_data(
-                                bot,
-                                reminder,
-                                next_run_time=next_run_time,
-                            )
-                            restored_jobs += 1
-                        break
-
-                    stage = "post_catchup_reload"
-                    reloaded_row = await asyncio.to_thread(
-                        get_active_reminder_from_db,
-                        reminder.id,
-                    )
-                    if reloaded_row is None:
-                        break
-
-                    stage = "post_catchup_mapping"
-                    reminder = build_reminder_read_data(reloaded_row)
-                    reminder_id = reminder.id
-                    chat_id = reminder.chat_id
-
-                continue
-
-            stage = "catchup_calculation"
-            evaluation_now = datetime.now(timezone.utc)
-            scheduled_for = get_latest_unhandled_run_at(
-                reminder,
-                now=evaluation_now,
-            )
-
-            if scheduled_for is not None:
-                outcome = await deliver_restored_occurrence(
-                    bot,
-                    reminder,
-                    scheduled_for,
-                )
-                if outcome == DELIVERY_OUTCOME_SENT:
-                    catchup_sent += 1
-                elif outcome == DELIVERY_OUTCOME_STALE_WEATHER_SKIPPED:
-                    stale_weather_skipped += 1
-                elif outcome == "error":
-                    catchup_errors += 1
-                else:
-                    catchup_unrecorded += 1
-                continue
-
-            if reminder.schedule_type == "once":
-                stage = "once_due_recheck"
-                fresh_now = datetime.now(timezone.utc)
-                scheduled_for = get_latest_unhandled_run_at(
-                    reminder,
-                    now=fresh_now,
-                )
-                if scheduled_for is not None:
-                    outcome = await deliver_restored_occurrence(
-                        bot,
-                        reminder,
-                        scheduled_for,
-                    )
-                    if outcome == DELIVERY_OUTCOME_SENT:
-                        catchup_sent += 1
-                    elif outcome == DELIVERY_OUTCOME_STALE_WEATHER_SKIPPED:
-                        stale_weather_skipped += 1
-                    elif outcome == "error":
-                        catchup_errors += 1
-                    else:
-                        catchup_unrecorded += 1
-                    continue
-
-                start_at_utc = ensure_timezone_aware(
-                    reminder.start_at,
-                    reminder.timezone_name,
-                ).astimezone(timezone.utc)
-                if start_at_utc <= fresh_now:
-                    if start_at_utc < reminder.delivery_tracking_started_at_utc:
-                        stage = "legacy_once_missed"
-                        mark_reminder_as_missed(reminder.id)
-                        legacy_once_missed += 1
-                    else:
-                        without_missed_occurrences += 1
-                    continue
-
-            stage = "future_run_calculation"
-            next_run_time = get_next_run_at_for_schedule(
-                schedule_type=reminder.schedule_type,
-                start_at=reminder.start_at,
-                interval_days=reminder.interval_days,
-                interval_weeks=reminder.interval_weeks,
-                day_of_week=reminder.day_of_week,
-                month_week_number=reminder.month_week_number,
-                month_day=reminder.month_day,
-                timezone_name=reminder.timezone_name,
-                now=fresh_now + timedelta(microseconds=1),
-            )
-            if next_run_time is not None:
-                stage = "future_job_scheduling"
-                schedule_reminder_data(
-                    bot,
-                    reminder,
-                    next_run_time=next_run_time,
-                )
-                restored_jobs += 1
-                if reminder.schedule_type == "once":
-                    without_missed_occurrences += 1
-        except Exception as error:
-            log_restoration_error(
-                reminder_id=reminder_id,
-                chat_id=chat_id,
-                stage=stage,
-                error=error,
-            )
-            continue
+        await _restore_reminder_row(
+            bot,
+            reminder_row,
+            stats=stats,
+        )
 
     try:
         schedule_completion_occurrence_worker(bot)
@@ -2131,11 +2170,11 @@ async def restore_active_reminders(bot: Bot) -> None:
             "stale_weather_skipped=%s catchup_unrecorded=%s legacy_once_missed=%s "
             "catchup_errors=%s without_missed_occurrences=%s"
         ),
-        restored_jobs,
-        catchup_sent,
-        stale_weather_skipped,
-        catchup_unrecorded,
-        legacy_once_missed,
-        catchup_errors,
-        without_missed_occurrences,
+        stats.restored_jobs,
+        stats.catchup_sent,
+        stats.stale_weather_skipped,
+        stats.catchup_unrecorded,
+        stats.legacy_once_missed,
+        stats.catchup_errors,
+        stats.without_missed_occurrences,
     )

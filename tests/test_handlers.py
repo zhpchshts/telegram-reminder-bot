@@ -35,6 +35,7 @@ class FakeMessage:
         chat_title: str | None = None,
         from_user_id: int | None = USER_ID,
         reply_to_message: object | None = None,
+        bot_token: str | None = "test-bot-token",
     ) -> None:
         self.text = text
         self.chat = SimpleNamespace(
@@ -46,6 +47,7 @@ class FakeMessage:
         self.from_user = (
             None if from_user_id is None else SimpleNamespace(id=from_user_id)
         )
+        self.bot = SimpleNamespace(token=bot_token)
         self.answers: list[tuple[str, dict[str, object]]] = []
 
     async def answer(self, text: str, **kwargs: object) -> None:
@@ -352,6 +354,86 @@ def test_create_command_answers_parse_error(
     ]
 
 
+def test_create_schedule_and_confirm_sends_all_confirmation_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = FakeMessage("/remind")
+    reminder_data = ReminderCreateData(
+        reminder_text="Проверить релиз",
+        schedule_type="once",
+        start_at=make_datetime(2099, 6, 10),
+        timezone_name=TIMEZONE_NAME,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "create_scheduled_reminder",
+        lambda **kwargs: 42,
+    )
+
+    def fake_build_created_reminder_messages(
+        *,
+        reminder_id: int,
+        data: ReminderCreateData,
+    ) -> tuple[str, ...]:
+        assert reminder_id == 42
+        assert data is reminder_data
+        return "Напоминание создано.", "Текст: полный текст"
+
+    monkeypatch.setattr(
+        handlers,
+        "build_created_reminder_messages",
+        fake_build_created_reminder_messages,
+    )
+
+    asyncio.run(handlers.create_schedule_and_confirm(message, BOT, data=reminder_data))
+
+    assert message.answers == [
+        ("Напоминание создано.", {}),
+        ("Текст: полный текст", {}),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_answer"),
+    [
+        (
+            ValueError("start_at must be in the future."),
+            "Не удалось создать напоминание. Проверь дату, время и параметры.",
+        ),
+        (
+            handlers.ReminderSchedulingError("scheduler unavailable"),
+            "Не удалось запланировать напоминание. Попробуй ещё раз чуть позже.",
+        ),
+    ],
+)
+def test_create_schedule_and_confirm_answers_expected_service_error(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    expected_answer: str,
+) -> None:
+    message = FakeMessage("/remind")
+    data = ReminderCreateData(
+        reminder_text="Проверить релиз",
+        schedule_type="once",
+        start_at=make_datetime(2099, 6, 10),
+        timezone_name=TIMEZONE_NAME,
+    )
+
+    def fail_create(**kwargs: object) -> int:
+        raise error
+
+    monkeypatch.setattr(handlers, "create_scheduled_reminder", fail_create)
+    monkeypatch.setattr(
+        handlers,
+        "build_created_reminder_messages",
+        lambda **kwargs: pytest.fail("Confirmation must not be built after an error."),
+    )
+
+    asyncio.run(handlers.create_schedule_and_confirm(message, BOT, data=data))
+
+    assert message.answers == [(expected_answer, {})]
+
+
 def test_timezone_command_answers_current_timezone() -> None:
     message = FakeMessage("/timezone")
 
@@ -451,7 +533,28 @@ def test_app_command_answers_not_configured(
     assert message.answers == [
         (
             "Mini App пока не настроен.\n\n"
-            "Администратору нужно задать переменную окружения TMA_DIRECT_URL.",
+            "Администратору нужно проверить BOT_TOKEN и TMA_DIRECT_URL.",
+            {},
+        )
+    ]
+
+
+def test_app_command_has_no_launch_button_without_bot_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        handlers,
+        "TMA_DIRECT_URL",
+        "https://t.me/ZhpchshtsReminderBot?startapp=",
+    )
+    message = FakeMessage("/app", bot_token=None)
+
+    asyncio.run(handlers.app_command(message))
+
+    assert message.answers == [
+        (
+            "Mini App пока не настроен.\n\n"
+            "Администратору нужно проверить BOT_TOKEN и TMA_DIRECT_URL.",
             {},
         )
     ]
@@ -484,7 +587,6 @@ def test_app_command_sends_direct_link_button(
         "TMA_DIRECT_URL",
         "https://t.me/ZhpchshtsReminderBot?startapp=",
     )
-    monkeypatch.setattr(handlers, "BOT_TOKEN", "test-bot-token")
     monkeypatch.setattr(
         handlers,
         "create_tma_launch_token",
@@ -531,7 +633,6 @@ def test_app_command_issues_button_without_sender(
         "TMA_DIRECT_URL",
         direct_url,
     )
-    monkeypatch.setattr(handlers, "BOT_TOKEN", "test-bot-token")
     message = FakeMessage("/app", from_user_id=None)
 
     asyncio.run(handlers.app_command(message))
@@ -552,7 +653,6 @@ def test_app_command_handles_max_length_emoji_chat_title(
 ) -> None:
     direct_url = "https://t.me/ZhpchshtsReminderBot?startapp="
     monkeypatch.setattr(handlers, "TMA_DIRECT_URL", direct_url)
-    monkeypatch.setattr(handlers, "BOT_TOKEN", "test-bot-token")
     message = FakeMessage(
         "/app",
         chat_type="supergroup",
@@ -630,7 +730,6 @@ def test_mini_app_first_commands_send_direct_link_button(
         "TMA_DIRECT_URL",
         "https://t.me/ZhpchshtsReminderBot?startapp=",
     )
-    monkeypatch.setattr(handlers, "BOT_TOKEN", "test-bot-token")
     monkeypatch.setattr(
         handlers,
         "create_tma_launch_token",
@@ -774,7 +873,6 @@ def test_unknown_message_sends_direct_link_button(
         "TMA_DIRECT_URL",
         "https://t.me/ZhpchshtsReminderBot?startapp=",
     )
-    monkeypatch.setattr(handlers, "BOT_TOKEN", "test-bot-token")
     monkeypatch.setattr(
         handlers,
         "create_tma_launch_token",
@@ -810,6 +908,33 @@ def test_unknown_message_sends_direct_link_button(
     assert button.text == "Открыть Незабудку"
     assert button.url == "https://t.me/ZhpchshtsReminderBot?startapp=SIGNEDTOKEN"
     assert button.web_app is None
+
+
+def test_list_reminders_sends_each_html_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_chat_ids: list[int] = []
+
+    def fake_build_active_reminders_list_messages_for_chat(
+        chat_id: int,
+    ) -> tuple[str, ...]:
+        requested_chat_ids.append(chat_id)
+        return "<b>Первая страница</b>", "<b>Вторая страница</b>"
+
+    monkeypatch.setattr(
+        handlers,
+        "build_active_reminders_list_messages_for_chat",
+        fake_build_active_reminders_list_messages_for_chat,
+    )
+    message = FakeMessage("/list")
+
+    asyncio.run(handlers.list_reminders(message))
+
+    assert requested_chat_ids == [CHAT_ID]
+    assert message.answers == [
+        ("<b>Первая страница</b>", {"parse_mode": "HTML"}),
+        ("<b>Вторая страница</b>", {"parse_mode": "HTML"}),
+    ]
 
 
 def test_delete_reminder_deletes_active_reminder_for_chat(

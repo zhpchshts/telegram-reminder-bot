@@ -13,6 +13,7 @@ from app.config import (
     API_PORT,
     BOT_TOKEN,
     HEALTHCHECK_CHAT_ID,
+    require_bot_token,
 )
 from app.completion_handlers import router as completion_router
 from app.database import init_db
@@ -43,23 +44,36 @@ class BotRuntime:
     api_app: FastAPI
 
 
-def bind_api_runtime(fastapi_app: FastAPI, *, bot: Bot) -> None:
+def bind_api_runtime(
+    fastapi_app: FastAPI,
+    *,
+    bot: Bot,
+    bot_token: str,
+) -> None:
     fastapi_app.state.bot = bot
+    fastapi_app.state.bot_token = bot_token
     fastapi_app.state.scheduler = scheduler
     fastapi_app.state.reminders_restored = False
 
 
 def create_bot_runtime(
     *,
-    bot_token: str = BOT_TOKEN,
+    bot_token: str | None = None,
     fastapi_app: FastAPI = api_app,
 ) -> BotRuntime:
-    bot = Bot(token=bot_token)
+    configured_bot_token = require_bot_token(
+        BOT_TOKEN if bot_token is None else bot_token
+    )
+    bot = Bot(token=configured_bot_token)
     dispatcher = Dispatcher()
     dispatcher.include_router(completion_router)
     dispatcher.include_router(router)
 
-    bind_api_runtime(fastapi_app, bot=bot)
+    bind_api_runtime(
+        fastapi_app,
+        bot=bot,
+        bot_token=configured_bot_token,
+    )
 
     return BotRuntime(
         bot=bot,

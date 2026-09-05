@@ -191,66 +191,7 @@ def test_readiness_endpoint_checks_runtime_and_database(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    executed_queries: list[str] = []
-
-    class FakeConnection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback) -> bool:
-            return False
-
-        def execute(self, query: str):
-            assert query in {
-                "SELECT 1 FROM reminders LIMIT 1",
-                "SELECT 1 FROM chat_settings LIMIT 1",
-            }
-            executed_queries.append(query)
-            return self
-
-        def fetchone(self) -> tuple[int]:
-            return (1,)
-
-    app.state.bot = object()
-    app.state.scheduler = SimpleNamespace(
-        running=True,
-        get_job=lambda job_id: object(),
-    )
-    app.state.reminders_restored = True
-    monkeypatch.setattr(api_module, "get_connection", FakeConnection)
-
-    response = client.get("/ready")
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "ready"}
-    assert executed_queries == [
-        "SELECT 1 FROM reminders LIMIT 1",
-        "SELECT 1 FROM chat_settings LIMIT 1",
-    ]
-
-
-@pytest.mark.parametrize("missing_table", ["reminders", "chat_settings"])
-def test_readiness_endpoint_rejects_database_without_required_schema(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    missing_table: str,
-) -> None:
-    class EmptyDatabaseConnection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback) -> bool:
-            return False
-
-        def execute(self, query: str):
-            if missing_table in query:
-                raise api_module.sqlite3.OperationalError(
-                    f"no such table: {missing_table}"
-                )
-            return self
-
-        def fetchone(self) -> tuple[int]:
-            return (1,)
+    schema_checks = []
 
     app.state.bot = object()
     app.state.scheduler = SimpleNamespace(
@@ -260,8 +201,44 @@ def test_readiness_endpoint_rejects_database_without_required_schema(
     app.state.reminders_restored = True
     monkeypatch.setattr(
         api_module,
-        "get_connection",
-        EmptyDatabaseConnection,
+        "check_required_database_schema",
+        lambda: schema_checks.append(True),
+    )
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+    assert schema_checks == [True]
+
+
+@pytest.mark.parametrize(
+    "missing_table",
+    (
+        "reminders",
+        "chat_settings",
+        "reminder_completion_occurrences",
+        "reminder_delivery_occurrences",
+    ),
+)
+def test_readiness_endpoint_rejects_database_without_required_schema(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_table: str,
+) -> None:
+    def fail_schema_check() -> None:
+        raise api_module.sqlite3.OperationalError(f"no such table: {missing_table}")
+
+    app.state.bot = object()
+    app.state.scheduler = SimpleNamespace(
+        running=True,
+        get_job=lambda job_id: object(),
+    )
+    app.state.reminders_restored = True
+    monkeypatch.setattr(
+        api_module,
+        "check_required_database_schema",
+        fail_schema_check,
     )
 
     response = client.get("/ready")

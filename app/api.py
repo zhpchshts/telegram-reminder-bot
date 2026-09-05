@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.api_auth import (
     TMA_INIT_DATA_HEADER,
-    get_tma_chat,
+    get_tma_chat_dependency,
     get_tma_chat_id,
     get_tma_init_data,
 )
@@ -44,7 +44,7 @@ from app.api_models import (
 )
 from app.config import API_ALLOWED_ORIGINS
 from app.constants import SQLITE_INT64_MAX
-from app.database import get_connection
+from app.database import check_required_database_schema
 from app.reminder_models import ReminderCreateData, ReminderReadData
 from app.reminder_service import (
     ReminderIdempotencyConflictError,
@@ -63,6 +63,7 @@ from app.reminder_service import (
 from app.schedule_calculations import get_yearly_datetime_on_or_after
 from app.scheduler import (
     get_missing_required_scheduler_job_ids,
+    get_next_run_at,
     get_next_run_at_for_schedule,
 )
 
@@ -95,6 +96,15 @@ IdempotencyKeyHeader = Annotated[
         pattern=IDEMPOTENCY_KEY_PATTERN,
     ),
 ]
+
+
+def build_current_reminder_response(
+    reminder: ReminderReadData,
+) -> ReminderResponse:
+    return build_reminder_response(
+        reminder,
+        next_run_at=get_next_run_at(reminder.id),
+    )
 
 
 def add_private_api_cache_headers(response) -> None:
@@ -418,9 +428,7 @@ def readiness(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=503, detail="Service is not ready.")
 
     try:
-        with get_connection() as connection:
-            connection.execute("SELECT 1 FROM reminders LIMIT 1").fetchone()
-            connection.execute("SELECT 1 FROM chat_settings LIMIT 1").fetchone()
+        check_required_database_schema()
     except sqlite3.Error as error:
         raise HTTPException(status_code=503, detail="Service is not ready.") from error
 
@@ -434,7 +442,7 @@ def readiness(request: Request) -> dict[str, str]:
 )
 def get_tma_bootstrap(
     init_data=Depends(get_tma_init_data),
-    tma_chat: dict[str, object] = Depends(get_tma_chat),
+    tma_chat: dict[str, object] = Depends(get_tma_chat_dependency),
     chat_id: int = Depends(get_tma_chat_id),
 ) -> TmaBootstrapResponse:
     timezone_name = get_chat_timezone_name(chat_id)
@@ -448,7 +456,9 @@ def get_tma_bootstrap(
         timezone_name=timezone_name,
         chat_type=tma_chat["type"],
         start_param=init_data.start_param,
-        active_reminders=active_reminders,
+        active_reminders=[
+            build_current_reminder_response(reminder) for reminder in active_reminders
+        ],
     )
 
 
@@ -502,7 +512,7 @@ def get_tma_reminders(
     chat_id: int = Depends(get_tma_chat_id),
 ) -> list[ReminderResponse]:
     return [
-        build_reminder_response(reminder)
+        build_current_reminder_response(reminder)
         for reminder in list_active_reminders_for_chat(chat_id)
     ]
 
@@ -658,12 +668,13 @@ def create_reminder_for_chat(
             chat_id=chat_id,
         )
         if stored_reminder is not None:
-            return build_reminder_response(stored_reminder)
+            return build_current_reminder_response(stored_reminder)
 
     return build_created_reminder_response(
         reminder_id=reminder_id,
         chat_id=chat_id,
         data=data,
+        next_run_at=get_next_run_at(reminder_id),
     )
 
 
@@ -725,7 +736,7 @@ def update_reminder_for_chat(
             detail="Reminder not found.",
         )
 
-    return build_reminder_response(reminder)
+    return build_current_reminder_response(reminder)
 
 
 def update_timezone_for_chat(

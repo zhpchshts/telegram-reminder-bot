@@ -56,6 +56,15 @@ def test_tma_is_served_from_the_same_image_as_backend() -> None:
         )
 
 
+def test_backend_workflow_watches_repository_control_files() -> None:
+    backend_workflow = (
+        PROJECT_ROOT / ".github" / "workflows" / "backend.yml"
+    ).read_text(encoding="utf-8")
+
+    assert backend_workflow.count('- ".gitignore"') == 2
+    assert backend_workflow.count('- ".gitattributes"') == 2
+
+
 def test_docker_build_context_uses_an_explicit_allowlist() -> None:
     dockerignore_path = PROJECT_ROOT / ".dockerignore"
     if not dockerignore_path.is_file():

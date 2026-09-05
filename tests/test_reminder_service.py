@@ -1,5 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import html
+from html.parser import HTMLParser
+import re
 from threading import Event, Lock
 from zoneinfo import ZoneInfoNotFoundError
 
@@ -8,11 +11,16 @@ import pytest
 from app import database as database_module
 from app import reminder_service as reminder_service_module
 from app import scheduler as scheduler_module
-from app.constants import REMINDER_KIND_TEXT, REMINDER_KIND_WEATHER
+from app.constants import (
+    REMINDER_KIND_TEXT,
+    REMINDER_KIND_WEATHER,
+    TELEGRAM_MESSAGE_MAX_LENGTH,
+)
 from app.reminder_service import (
     ReminderIdempotencyPendingError,
     ReminderSchedulingError,
-    build_active_reminders_list_text_for_chat,
+    build_active_reminders_list_messages_for_chat,
+    build_created_reminder_messages,
     build_created_reminder_text,
     create_scheduled_reminder,
     delete_active_reminder_for_chat,
@@ -24,6 +32,32 @@ from app.reminder_service import (
 from app.reminder_models import ReminderCreateData, ReminderReadData
 
 TEST_DELIVERY_TRACKING_STARTED_AT = datetime.fromisoformat("2026-07-01T00:00:00+00:00")
+
+
+class BalancedTelegramHtmlParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.open_tags: list[str] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        assert attrs == []
+        assert tag in {"b", "code"}
+        self.open_tags.append(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        assert self.open_tags
+        assert self.open_tags.pop() == tag
+
+
+def assert_valid_telegram_html(value: str) -> None:
+    parser = BalancedTelegramHtmlParser()
+    parser.feed(value)
+    parser.close()
+    assert parser.open_tags == []
 
 
 class FakeScheduler:
@@ -115,7 +149,7 @@ def test_delete_active_reminder_for_chat_marks_deleted_when_job_missing(
     assert deleted_ids == [42]
 
 
-def test_build_active_reminders_list_text_for_chat_returns_none_when_no_reminders(
+def test_build_active_reminders_list_messages_for_chat_returns_none_when_no_reminders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
@@ -131,6 +165,8 @@ def test_build_active_reminders_list_text_for_chat_returns_none_when_no_reminder
     def fake_format_reminder_read_data_for_list(
         reminder: ReminderReadData,
         next_run_line: str,
+        *,
+        text_preview_max_length: int | None = None,
     ) -> str:
         raise AssertionError("format_reminder_read_data_for_list should not be called")
 
@@ -150,12 +186,12 @@ def test_build_active_reminders_list_text_for_chat_returns_none_when_no_reminder
         fake_format_reminder_read_data_for_list,
     )
 
-    result = build_active_reminders_list_text_for_chat(chat_id=100)
+    result = build_active_reminders_list_messages_for_chat(chat_id=100)
 
     assert result is None
 
 
-def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
+def test_build_active_reminders_list_messages_for_chat_preserves_short_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reminders = [
@@ -197,7 +233,10 @@ def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
     def fake_format_reminder_read_data_for_list(
         reminder: ReminderReadData,
         next_run_line: str,
+        *,
+        text_preview_max_length: int | None = None,
     ) -> str:
+        assert text_preview_max_length is None
         formatted_reminders.append((reminder.id, next_run_line))
         return f"reminder {reminder.id} / {next_run_line}"
 
@@ -217,14 +256,16 @@ def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
         fake_format_reminder_read_data_for_list,
     )
 
-    result = build_active_reminders_list_text_for_chat(chat_id=100)
+    result = build_active_reminders_list_messages_for_chat(chat_id=100)
 
     assert result == (
-        "Активные напоминания в этом чате\n"
-        "\n\n"
-        "reminder 1 / next 1 / Asia/Yekaterinburg"
-        "\n\n"
-        "reminder 2 / next 2 / Europe/Moscow"
+        (
+            "Активные напоминания в этом чате\n"
+            "\n\n"
+            "reminder 1 / next 1 / Asia/Yekaterinburg"
+            "\n\n"
+            "reminder 2 / next 2 / Europe/Moscow"
+        ),
     )
     assert requested_chat_ids == [100]
     assert next_run_calls == [
@@ -237,13 +278,47 @@ def test_build_active_reminders_list_text_for_chat_returns_formatted_reminders(
     ]
 
 
+def test_build_active_reminders_list_messages_keeps_full_text_when_pages_fit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reminder_text = "<проверить & подтвердить> " * 15
+    assert len(reminder_text) > 240
+    reminder = ReminderReadData(
+        id=1,
+        chat_id=100,
+        reminder_text=reminder_text,
+        schedule_type="once",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "list_active_reminders_for_chat",
+        lambda chat_id: [reminder],
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "format_next_run_line",
+        lambda *args, **kwargs: "Следующее срабатывание: 10 июня в 12:12",
+    )
+
+    result = build_active_reminders_list_messages_for_chat(chat_id=100)
+
+    assert result is not None
+    assert len(result) == 1
+    assert html.escape(reminder_text) in result[0]
+    assert "Показаны " not in result[0]
+    assert_valid_telegram_html(result[0])
+
+
 def test_create_scheduled_reminder_creates_db_record_and_schedules_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created_calls: list[dict[str, object]] = []
     scheduled_calls: list[dict[str, object]] = []
     bot = object()
-    start_at = datetime(2026, 6, 10, 12, 12)
+    start_at = datetime(2099, 6, 10, 12, 12)
 
     def fake_create_reminder_in_db(**kwargs: object) -> int:
         created_calls.append(kwargs)
@@ -493,6 +568,98 @@ def test_build_created_reminder_text_for_repeating_reminder(
     ]
 
 
+def test_build_created_reminder_messages_preserves_short_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = ReminderCreateData(
+        reminder_text="Проверить релиз",
+        schedule_type="once",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "format_next_run_line",
+        lambda *args, **kwargs: "Следующее срабатывание: 10 июня в 12:12",
+    )
+
+    result = build_created_reminder_messages(reminder_id=42, data=data)
+
+    assert result == (build_created_reminder_text(reminder_id=42, data=data),)
+
+
+def test_build_created_reminder_messages_splits_max_text_without_data_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reminder_text = "<&>" * 1300
+    data = ReminderCreateData(
+        reminder_text=reminder_text,
+        schedule_type="every_week",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="America/Argentina/ComodRivadavia",
+        interval_weeks=5200,
+        day_of_week="WED",
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "format_next_run_line",
+        lambda *args, **kwargs: "Следующее срабатывание: 10 июня в 12:12",
+    )
+
+    result = build_created_reminder_messages(
+        reminder_id=(1 << 63) - 1,
+        data=data,
+    )
+
+    assert len(result) == 2
+    assert all(len(message) <= TELEGRAM_MESSAGE_MAX_LENGTH for message in result)
+    assert result[0].startswith("Повторяющееся напоминание создано.")
+    assert result[0].endswith("Текст напоминания — в следующем сообщении.")
+    assert result[1] == f"Текст: {reminder_text}"
+
+
+def test_build_active_reminders_list_messages_caps_pages_and_keeps_valid_html(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reminders = [
+        ReminderReadData(
+            id=reminder_id,
+            chat_id=100,
+            reminder_text="<&>" * 100,
+            schedule_type="once",
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+        )
+        for reminder_id in range(1, 201)
+    ]
+    monkeypatch.setattr(
+        reminder_service_module,
+        "list_active_reminders_for_chat",
+        lambda chat_id: reminders,
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "format_next_run_line",
+        lambda *args, **kwargs: "Следующее срабатывание: 10 июня в 12:12",
+    )
+
+    result = build_active_reminders_list_messages_for_chat(chat_id=100)
+
+    assert result is not None
+    assert 1 <= len(result) <= 3
+    assert all(len(message) <= TELEGRAM_MESSAGE_MAX_LENGTH for message in result)
+    for message in result:
+        assert_valid_telegram_html(message)
+
+    footer_match = re.search(r"Показаны (\d+) из 200\.", result[-1])
+    assert footer_match is not None
+    shown_count = int(footer_match.group(1))
+    assert 0 < shown_count < 200
+    assert sum(message.count("<b>") for message in result) == shown_count
+    assert "/app" in result[-1]
+
+
 def test_list_active_reminders_for_chat_returns_read_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -725,6 +892,37 @@ def test_create_scheduled_reminder_validates_data_before_db_write(
         )
 
 
+def test_create_scheduled_reminder_rejects_non_idempotent_past_start_before_db_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        reminder_service_module,
+        "create_reminder_in_db",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("Past reminder must not be saved to database.")
+        ),
+    )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "schedule_reminder",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("Past reminder must not be scheduled.")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="start_at must be in the future"):
+        create_scheduled_reminder(
+            bot=object(),
+            chat_id=100,
+            data=ReminderCreateData(
+                reminder_text="Уже поздно",
+                schedule_type="once",
+                start_at=datetime(2020, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+            ),
+        )
+
+
 def test_create_scheduled_reminder_deactivates_row_when_scheduling_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -760,7 +958,7 @@ def test_create_scheduled_reminder_deactivates_row_when_scheduling_fails(
     assert deactivated_ids == [42]
 
 
-def test_create_scheduled_reminder_replays_idempotency_without_rescheduling(
+def test_create_scheduled_reminder_replays_past_idempotent_request_without_rescheduling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scheduled: list[dict[str, object]] = []

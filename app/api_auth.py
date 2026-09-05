@@ -1,8 +1,8 @@
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 
-from app.config import BOT_TOKEN
+from app.config import BOT_TOKEN, require_bot_token
 from app.tma_auth import TelegramInitData, TelegramInitDataError
 from app.tma_auth import validate_telegram_init_data
 from app.tma_launch import (
@@ -14,7 +14,22 @@ from app.tma_launch import (
 TMA_INIT_DATA_HEADER = "X-Telegram-Init-Data"
 
 
+def require_api_bot_token(bot_token: str | None) -> str:
+    try:
+        return require_bot_token(bot_token)
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Bot token is not configured.",
+        ) from error
+
+
+def get_api_bot_token(request: Request) -> str:
+    return require_api_bot_token(getattr(request.app.state, "bot_token", BOT_TOKEN))
+
+
 def get_tma_init_data(
+    request: Request,
     x_telegram_init_data: Annotated[
         str | None,
         Header(alias=TMA_INIT_DATA_HEADER),
@@ -29,7 +44,7 @@ def get_tma_init_data(
     try:
         return validate_telegram_init_data(
             x_telegram_init_data,
-            bot_token=BOT_TOKEN,
+            bot_token=get_api_bot_token(request),
         )
     except TelegramInitDataError as error:
         raise HTTPException(
@@ -39,15 +54,34 @@ def get_tma_init_data(
 
 
 def get_tma_chat(
-    init_data: TelegramInitData = Depends(get_tma_init_data),
+    init_data: TelegramInitData,
+    *,
+    bot_token: str | None = None,
 ) -> dict[str, object]:
     return build_tma_chat_from_launch_context(
-        get_tma_launch_context(init_data),
+        get_tma_launch_context(
+            init_data,
+            bot_token=require_api_bot_token(
+                BOT_TOKEN if bot_token is None else bot_token
+            ),
+        ),
+    )
+
+
+def get_tma_chat_dependency(
+    request: Request,
+    init_data: TelegramInitData = Depends(get_tma_init_data),
+) -> dict[str, object]:
+    return get_tma_chat(
+        init_data,
+        bot_token=get_api_bot_token(request),
     )
 
 
 def get_tma_launch_context(
     init_data: TelegramInitData,
+    *,
+    bot_token: str,
 ) -> TmaLaunchContext:
     if not init_data.start_param:
         raise HTTPException(
@@ -58,7 +92,7 @@ def get_tma_launch_context(
     try:
         launch_context = validate_tma_launch_token(
             init_data.start_param,
-            secret=BOT_TOKEN,
+            secret=bot_token,
         )
     except TmaLaunchTokenError as error:
         raise HTTPException(
@@ -125,7 +159,7 @@ def build_tma_chat_from_launch_context(
 
 
 def get_tma_chat_id(
-    chat: dict[str, object] = Depends(get_tma_chat),
+    chat: dict[str, object] = Depends(get_tma_chat_dependency),
 ) -> int:
     chat_id = chat.get("id")
     if isinstance(chat_id, bool) or not isinstance(chat_id, int):

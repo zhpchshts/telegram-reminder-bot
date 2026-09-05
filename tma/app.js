@@ -5,6 +5,27 @@ function refreshTelegramWebApp() {
   return telegram;
 }
 
+function initializeTelegramWebApp() {
+  const webApp = refreshTelegramWebApp();
+  if (!webApp) {
+    return;
+  }
+
+  try {
+    webApp.ready?.();
+  } catch {
+    // Keep the page usable if a Telegram client exposes a partial SDK.
+  }
+
+  try {
+    webApp.expand?.();
+  } catch {
+    // Expanding is an enhancement and must not block application startup.
+  }
+}
+
+initializeTelegramWebApp();
+
 const DEFAULT_START_OFFSET_MINUTES = 5;
 const THEME_STORAGE_KEY = "telegram-reminder-theme";
 const DARK_THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";

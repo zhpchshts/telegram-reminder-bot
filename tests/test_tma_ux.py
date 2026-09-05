@@ -8,6 +8,37 @@ def read_tma_asset(name: str) -> str:
     return (PROJECT_ROOT / "tma" / name).read_text(encoding="utf-8")
 
 
+def test_tma_loads_and_initializes_official_telegram_sdk_before_startup() -> None:
+    html = read_tma_asset("index.html")
+    javascript = read_tma_asset("app.js")
+
+    sdk_script = (
+        '<script src="https://telegram.org/js/telegram-web-app.js?63"></script>'
+    )
+    app_script = '<script src="./app.js"></script>'
+    document_head = html[html.index("<head>") : html.index("</head>")]
+    assert sdk_script in document_head
+    assert document_head.index(sdk_script) < document_head.index("<script>")
+    assert html.index(sdk_script) < html.index(app_script)
+
+    initializer_start = javascript.index("function initializeTelegramWebApp()")
+    initializer_end = javascript.index(
+        "const DEFAULT_START_OFFSET_MINUTES",
+        initializer_start,
+    )
+    initializer = javascript[initializer_start:initializer_end]
+    assert "refreshTelegramWebApp()" in initializer
+    assert "webApp.ready?.()" in initializer
+    assert "webApp.expand?.()" in initializer
+
+    startup_call = javascript.rindex("initializeTelegramWebApp();")
+    constants_start = javascript.index("const DEFAULT_START_OFFSET_MINUTES")
+    deferred_bootstrap = javascript.index("window.setTimeout(bootstrapApp, 0)")
+    assert startup_call < constants_start
+    assert startup_call < deferred_bootstrap
+    assert "sendClientTiming" not in javascript
+
+
 def test_tma_uses_safe_area_and_stacks_datetime_on_narrow_screens() -> None:
     html = read_tma_asset("index.html")
     styles = read_tma_asset("styles.css")

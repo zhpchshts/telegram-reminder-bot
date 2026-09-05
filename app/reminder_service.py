@@ -16,6 +16,7 @@ from app.constants import (
     REMINDER_KIND_TEXT,
     REMINDER_KIND_WEATHER,
     REMINDER_TEXT_MAX_LENGTH,
+    TELEGRAM_MESSAGE_MAX_LENGTH,
     VALID_COMPLETION_REPEAT_INTERVALS,
     VALID_REMINDER_KINDS,
     VALID_WEEKDAYS,
@@ -59,6 +60,9 @@ from app.weather_service import parse_weather_locations
 LOGGER = logging.getLogger(__name__)
 ActiveReminderLimitError = DatabaseActiveReminderLimitError
 ReminderIdempotencyConflictError = DatabaseReminderIdempotencyConflictError
+ACTIVE_REMINDER_LIST_MAX_MESSAGES = 3
+ACTIVE_REMINDER_LIST_TEXT_PREVIEW_MAX_LENGTH = 240
+ACTIVE_REMINDER_LIST_HEADER = "Активные напоминания в этом чате\n"
 
 
 class ReminderSchedulingError(RuntimeError):
@@ -336,12 +340,12 @@ def create_scheduled_reminder(
             )
             return replayed_reminder_id
 
-        reminder_timezone = ZoneInfo(data.timezone_name)
-        start_at = data.start_at
-        if start_at.tzinfo is None:
-            start_at = start_at.replace(tzinfo=reminder_timezone)
-        if start_at <= datetime.now(reminder_timezone):
-            raise ValueError("start_at must be in the future.")
+    reminder_timezone = ZoneInfo(data.timezone_name)
+    start_at = data.start_at
+    if start_at.tzinfo is None:
+        start_at = start_at.replace(tzinfo=reminder_timezone)
+    if start_at <= datetime.now(reminder_timezone):
+        raise ValueError("start_at must be in the future.")
 
     # Constructing the trigger can fail for an invalid timezone or an interval
     # that cannot be represented by APScheduler. Validate it before persisting
@@ -583,11 +587,11 @@ def build_period_line_for_create_data(data: ReminderCreateData) -> str:
     return format_period_line(**period_kwargs)
 
 
-def build_created_reminder_text(
+def _build_created_reminder_lines(
     *,
     reminder_id: int,
     data: ReminderCreateData,
-) -> str:
+) -> list[str]:
     header = (
         "Одноразовое напоминание создано."
         if data.schedule_type == "once"
@@ -611,7 +615,49 @@ def build_created_reminder_text(
         ]
     )
 
-    return "\n".join(answer_lines)
+    return answer_lines
+
+
+def build_created_reminder_text(
+    *,
+    reminder_id: int,
+    data: ReminderCreateData,
+) -> str:
+    return "\n".join(
+        _build_created_reminder_lines(
+            reminder_id=reminder_id,
+            data=data,
+        )
+    )
+
+
+def build_created_reminder_messages(
+    *,
+    reminder_id: int,
+    data: ReminderCreateData,
+) -> tuple[str, ...]:
+    answer_lines = _build_created_reminder_lines(
+        reminder_id=reminder_id,
+        data=data,
+    )
+    answer_text = "\n".join(answer_lines)
+    if len(answer_text) <= TELEGRAM_MESSAGE_MAX_LENGTH:
+        return (answer_text,)
+
+    metadata_text = "\n".join(
+        [
+            *answer_lines[:-1],
+            "Текст напоминания — в следующем сообщении.",
+        ]
+    )
+    reminder_text = f"Текст: {data.reminder_text}"
+    if (
+        len(metadata_text) > TELEGRAM_MESSAGE_MAX_LENGTH
+        or len(reminder_text) > TELEGRAM_MESSAGE_MAX_LENGTH
+    ):
+        raise ValueError("Reminder confirmation exceeds the Telegram message limit.")
+
+    return metadata_text, reminder_text
 
 
 def delete_active_reminder_for_chat(
@@ -678,18 +724,104 @@ def list_active_reminders_for_chat(chat_id: int) -> list[ReminderReadData]:
     return sort_reminders_by_next_run(reminders)
 
 
-def build_active_reminders_list_text_for_chat(chat_id: int) -> str | None:
+def _build_active_reminder_list_page(
+    reminder_blocks: list[str],
+    *,
+    footer: str | None = None,
+) -> str:
+    parts = [ACTIVE_REMINDER_LIST_HEADER, *reminder_blocks]
+    if footer is not None:
+        parts.append(footer)
+    return "\n\n".join(parts)
+
+
+def _pack_active_reminder_list_blocks(
+    reminder_blocks: list[str],
+) -> tuple[list[list[str]], int]:
+    page_blocks: list[list[str]] = [[]]
+    shown_count = 0
+
+    for reminder_block in reminder_blocks:
+        candidate_blocks = [*page_blocks[-1], reminder_block]
+        candidate_page = _build_active_reminder_list_page(candidate_blocks)
+        if len(candidate_page) <= TELEGRAM_MESSAGE_MAX_LENGTH:
+            page_blocks[-1].append(reminder_block)
+            shown_count += 1
+            continue
+
+        if not page_blocks[-1] or len(page_blocks) >= ACTIVE_REMINDER_LIST_MAX_MESSAGES:
+            break
+
+        next_page = _build_active_reminder_list_page([reminder_block])
+        if len(next_page) > TELEGRAM_MESSAGE_MAX_LENGTH:
+            break
+
+        page_blocks.append([reminder_block])
+        shown_count += 1
+
+    return page_blocks, shown_count
+
+
+def build_active_reminders_list_messages_for_chat(
+    chat_id: int,
+) -> tuple[str, ...] | None:
     reminders = list_active_reminders_for_chat(chat_id)
     if not reminders:
         return None
 
-    lines = ["Активные напоминания в этом чате\n"]
-    lines.extend(
-        format_reminder_read_data_for_list(
+    reminder_views = [
+        (
             reminder,
             format_next_run_line(reminder.id, reminder.timezone_name),
         )
         for reminder in reminders
+    ]
+    full_reminder_blocks = [
+        format_reminder_read_data_for_list(reminder, next_run_line)
+        for reminder, next_run_line in reminder_views
+    ]
+    full_page_blocks, full_shown_count = _pack_active_reminder_list_blocks(
+        full_reminder_blocks
     )
+    if full_shown_count == len(full_reminder_blocks):
+        return tuple(
+            _build_active_reminder_list_page(blocks) for blocks in full_page_blocks
+        )
 
-    return "\n\n".join(lines)
+    preview_reminder_blocks = [
+        format_reminder_read_data_for_list(
+            reminder,
+            next_run_line,
+            text_preview_max_length=ACTIVE_REMINDER_LIST_TEXT_PREVIEW_MAX_LENGTH,
+        )
+        for reminder, next_run_line in reminder_views
+    ]
+    page_blocks, shown_count = _pack_active_reminder_list_blocks(
+        preview_reminder_blocks
+    )
+    total_count = len(preview_reminder_blocks)
+
+    while True:
+        footer = (
+            f"Показаны {shown_count} из {total_count}. "
+            "Полный список и полный текст — в Mini App: /app."
+        )
+        candidate_page = _build_active_reminder_list_page(
+            page_blocks[-1],
+            footer=footer,
+        )
+        if len(candidate_page) <= TELEGRAM_MESSAGE_MAX_LENGTH:
+            break
+
+        page_blocks[-1].pop()
+        shown_count -= 1
+        if not page_blocks[-1] and len(page_blocks) > 1:
+            page_blocks.pop()
+
+    return tuple(
+        _build_active_reminder_list_page(
+            blocks,
+            footer=footer if index == len(page_blocks) - 1 else None,
+        )
+        for index, blocks in enumerate(page_blocks)
+    )

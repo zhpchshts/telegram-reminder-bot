@@ -12,7 +12,7 @@ from aiogram.types import (
 )
 
 from app.constants import TIMEZONE_LOOKUP_URL, WEEKDAY_HELP
-from app.config import BOT_TOKEN, TMA_DIRECT_URL
+from app.config import TMA_DIRECT_URL
 from app.formatting import format_datetime_ru
 from app.reminder_models import ReminderCreateData
 from app.reminder_parsing import (
@@ -32,8 +32,9 @@ from app.reminder_parsing import (
 )
 from app.reminder_service import (
     ActiveReminderLimitError,
-    build_active_reminders_list_text_for_chat,
-    build_created_reminder_text,
+    ReminderSchedulingError,
+    build_active_reminders_list_messages_for_chat,
+    build_created_reminder_messages,
     create_scheduled_reminder,
     delete_active_reminder_for_chat,
     get_chat_timezone_name,
@@ -82,24 +83,31 @@ def build_tma_launch_url(
     chat_id: int,
     chat_type: str,
     chat_title: str | None,
+    bot_token: str,
 ) -> str:
     token = create_tma_launch_token(
         chat_id=chat_id,
         chat_type=chat_type,
         chat_title=chat_title,
-        secret=BOT_TOKEN,
+        secret=bot_token,
     )
     return f"{TMA_DIRECT_URL}{token}"
 
 
 def build_tma_keyboard_for_message(message: Message) -> InlineKeyboardMarkup | None:
-    if not TMA_DIRECT_URL:
+    try:
+        bot_token = message.bot.token
+    except (AttributeError, RuntimeError):
+        bot_token = None
+
+    if not TMA_DIRECT_URL or not bot_token:
         return None
 
     launch_url = build_tma_launch_url(
         chat_id=message.chat.id,
         chat_type=message.chat.type,
         chat_title=message.chat.title,
+        bot_token=bot_token,
     )
     return build_tma_keyboard(launch_url)
 
@@ -149,12 +157,23 @@ async def create_schedule_and_confirm(
     except ActiveReminderLimitError as error:
         await message.answer(str(error))
         return
-    answer_text = build_created_reminder_text(
+    except ReminderSchedulingError:
+        await message.answer(
+            "Не удалось запланировать напоминание. Попробуй ещё раз чуть позже."
+        )
+        return
+    except ValueError:
+        await message.answer(
+            "Не удалось создать напоминание. Проверь дату, время и параметры."
+        )
+        return
+    answer_messages = build_created_reminder_messages(
         reminder_id=reminder_id,
         data=data,
     )
 
-    await message.answer(answer_text)
+    for answer_text in answer_messages:
+        await message.answer(answer_text)
 
 
 async def answer_parse_error(
@@ -266,7 +285,7 @@ async def app_command(message: Message) -> None:
     if reply_markup is None:
         await message.answer(
             "Mini App пока не настроен.\n\n"
-            "Администратору нужно задать переменную окружения TMA_DIRECT_URL."
+            "Администратору нужно проверить BOT_TOKEN и TMA_DIRECT_URL."
         )
         return
 
@@ -541,13 +560,14 @@ async def monthly_day_from(message: Message, bot: Bot) -> None:
 
 @router.message(Command("list"))
 async def list_reminders(message: Message) -> None:
-    answer_text = build_active_reminders_list_text_for_chat(message.chat.id)
+    answer_messages = build_active_reminders_list_messages_for_chat(message.chat.id)
 
-    if answer_text is None:
+    if answer_messages is None:
         await message.answer("В этом чате нет активных напоминаний.")
         return
 
-    await message.answer(answer_text, parse_mode="HTML")
+    for answer_text in answer_messages:
+        await message.answer(answer_text, parse_mode="HTML")
 
 
 @router.message(Command("delete"))

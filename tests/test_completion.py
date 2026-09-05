@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -944,7 +945,7 @@ def test_delete_during_send_keeps_parent_deleted_and_deletes_extra_message(
 
 
 def test_callback_marks_current_message_and_removes_keyboard(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, caplog: pytest.LogCaptureFixture
 ) -> None:
     reminder_id = prepare_database(monkeypatch, tmp_path)
     reminder = build_reminder_read_data(get_active_reminder_from_db(reminder_id))
@@ -965,20 +966,23 @@ def test_callback_marks_current_message_and_removes_keyboard(
             == 0
         )
 
-    result = asyncio.run(
-        process_completion_callback(
-            bot,
-            occurrence_id=1,
-            chat_id=100,
-            callback_message_id=10,
-            callback_message_sent_at=bot.sent_at,
-            user_id=200,
-            display_name="Участник",
+    with caplog.at_level(logging.INFO, logger="app.completion_service"):
+        result = asyncio.run(
+            process_completion_callback(
+                bot,
+                occurrence_id=1,
+                chat_id=100,
+                callback_message_id=10,
+                callback_message_sent_at=bot.sent_at,
+                user_id=200,
+                display_name="Участник",
+            )
         )
-    )
 
     assert result == "Выполнено."
     assert bot.edited_text[0]["text"].endswith("✅ Выполнено")
+    assert "Completion occurrence completed" in caplog.text
+    assert "user_id=" not in caplog.text
     with database_module.get_connection() as connection:
         status = connection.execute(
             "SELECT status FROM reminder_completion_occurrences"

@@ -155,12 +155,79 @@ def test_tma_auth_dependency_returns_validated_init_data(
     }
 
 
+def test_tma_auth_uses_runtime_bound_bot_token(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_data = make_init_data()
+    captured_calls = patch_validated_init_data(monkeypatch, init_data)
+    client.app.state.bot_token = "runtime-bound-token"
+
+    response = client.get(
+        "/protected",
+        headers={TMA_INIT_DATA_HEADER: "test-init-data"},
+    )
+
+    assert response.status_code == 200
+    assert captured_calls == [
+        {
+            "init_data": "test-init-data",
+            "bot_token": "runtime-bound-token",
+        }
+    ]
+
+
+def test_tma_chat_dependency_uses_runtime_bound_bot_token(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_bot_token = "987654321:runtime-bound-token"
+    launch_token = create_tma_launch_token(
+        chat_id=-100,
+        chat_type="supergroup",
+        chat_title="Home",
+        secret=runtime_bot_token,
+        now=1_700_000_000,
+        max_age_seconds=1_000_000_000,
+    )
+    patch_validated_init_data(
+        monkeypatch,
+        make_init_data(start_param=launch_token),
+    )
+    client.app.state.bot_token = runtime_bot_token
+
+    response = client.get(
+        "/chat-id",
+        headers={TMA_INIT_DATA_HEADER: "test-init-data"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"chat_id": -100}
+
+
 def test_tma_auth_dependency_requires_header(client: TestClient) -> None:
     response = client.get("/protected")
 
     assert response.status_code == 401
     assert response.json() == {
         "detail": "Telegram init data is required.",
+    }
+
+
+def test_tma_auth_dependency_reports_missing_bot_configuration(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_auth_module, "BOT_TOKEN", None)
+
+    response = client.get(
+        "/protected",
+        headers={TMA_INIT_DATA_HEADER: "test-init-data"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Bot token is not configured.",
     }
 
 

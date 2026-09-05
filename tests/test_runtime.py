@@ -1,9 +1,12 @@
 import asyncio
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 import pytest
 
+from app import handlers
 from app import runtime as runtime_module
+from app.api_auth import get_tma_launch_context
 from app.runtime import (
     BotRuntime,
     bind_api_runtime,
@@ -18,9 +21,14 @@ def test_bind_api_runtime_stores_shared_bot_and_scheduler() -> None:
     fastapi_app = FastAPI()
     bot = object()
 
-    bind_api_runtime(fastapi_app, bot=bot)
+    bind_api_runtime(
+        fastapi_app,
+        bot=bot,
+        bot_token="test-token",
+    )
 
     assert fastapi_app.state.bot is bot
+    assert fastapi_app.state.bot_token == "test-token"
     assert fastapi_app.state.scheduler is runtime_module.scheduler
 
 
@@ -55,7 +63,61 @@ def test_create_bot_runtime_builds_polling_and_api_context(
     ]
     assert runtime.api_app is fastapi_app
     assert fastapi_app.state.bot is runtime.bot
+    assert fastapi_app.state.bot_token == "test-token"
     assert fastapi_app.state.scheduler is runtime_module.scheduler
+
+
+def test_runtime_token_signs_handler_launch_context_for_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeBot:
+        def __init__(self, token: str) -> None:
+            self.token = token
+
+    class FakeDispatcher:
+        def include_router(self, router) -> None:
+            pass
+
+    runtime_token = "123456789:runtime-bound-token"
+    direct_url = "https://t.me/ZhpchshtsReminderBot?startapp="
+    monkeypatch.setattr(runtime_module, "Bot", FakeBot)
+    monkeypatch.setattr(runtime_module, "Dispatcher", FakeDispatcher)
+    monkeypatch.setattr(handlers, "TMA_DIRECT_URL", direct_url)
+
+    fastapi_app = FastAPI()
+    runtime = create_bot_runtime(
+        bot_token=runtime_token,
+        fastapi_app=fastapi_app,
+    )
+    message = SimpleNamespace(
+        bot=runtime.bot,
+        chat=SimpleNamespace(id=-100, type="supergroup", title="Home"),
+    )
+
+    keyboard = handlers.build_tma_keyboard_for_message(message)
+
+    assert keyboard is not None
+    launch_url = keyboard.inline_keyboard[0][0].url
+    assert launch_url is not None
+    launch_context = get_tma_launch_context(
+        SimpleNamespace(
+            start_param=launch_url.removeprefix(direct_url),
+            chat=None,
+        ),
+        bot_token=fastapi_app.state.bot_token,
+    )
+    assert launch_context.chat_id == -100
+    assert launch_context.chat_type == "supergroup"
+    assert launch_context.chat_title == "Home"
+
+
+def test_create_bot_runtime_requires_configured_bot_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_module, "BOT_TOKEN", None)
+
+    with pytest.raises(RuntimeError, match="BOT_TOKEN is not set"):
+        create_bot_runtime(fastapi_app=FastAPI())
 
 
 def test_create_api_server_uses_runtime_api_app_and_network_settings() -> None:

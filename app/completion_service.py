@@ -770,11 +770,10 @@ async def finish_completion_callback(bot: Bot, result: dict[str, object]) -> Non
                 message_id=callback_message_id,
             )
         LOGGER.info(
-            "Completion occurrence completed: occurrence_id=%s chat_id=%s message_id=%s user_id=%s",
+            "Completion occurrence completed: occurrence_id=%s chat_id=%s message_id=%s",
             occurrence_id,
             chat_id,
             current_message_id,
-            result["user_id"],
         )
         return
 

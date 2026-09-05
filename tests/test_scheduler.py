@@ -2512,8 +2512,15 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "get_all_active_reminders",
+        "get_all_active_weather_reminders",
         lambda: [object()],
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "get_all_active_reminders",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("Weather prefetch must use the filtered database query.")
+        ),
     )
     monkeypatch.setattr(
         scheduler_module,
@@ -2615,7 +2622,7 @@ def test_prefetch_weather_reports_does_not_save_failed_report(monkeypatch) -> No
     )
     monkeypatch.setattr(
         scheduler_module,
-        "get_all_active_reminders",
+        "get_all_active_weather_reminders",
         lambda: [object()],
     )
     monkeypatch.setattr(
@@ -2673,7 +2680,7 @@ def test_prefetch_weather_reports_continues_when_cache_is_unavailable(
     )
     monkeypatch.setattr(
         scheduler_module,
-        "get_all_active_reminders",
+        "get_all_active_weather_reminders",
         lambda: [object()],
     )
     monkeypatch.setattr(

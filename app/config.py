@@ -30,5 +30,9 @@ API_ALLOWED_ORIGINS = [
     origin.strip() for origin in API_ALLOWED_ORIGINS_TEXT.split(",") if origin.strip()
 ]
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set.\nCheck your .env file.")
+
+def require_bot_token(bot_token: str | None) -> str:
+    """Return a configured bot token or fail at an explicit runtime boundary."""
+    if not bot_token:
+        raise RuntimeError("BOT_TOKEN is not set.\nCheck your .env file.")
+    return bot_token

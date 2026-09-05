@@ -189,13 +189,11 @@ def normalize_start_at(
     return start_at.astimezone(timezone)
 
 
-def get_reminder_next_run_at(reminder_id: int) -> datetime | None:
-    from app.scheduler import get_next_run_at
-
-    return get_next_run_at(reminder_id)
-
-
-def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
+def build_reminder_response(
+    reminder: ReminderReadData,
+    *,
+    next_run_at: datetime | None,
+) -> ReminderResponse:
     response_data = {
         "id": reminder.id,
         "chat_id": reminder.chat_id,
@@ -228,7 +226,6 @@ def build_reminder_response(reminder: ReminderReadData) -> ReminderResponse:
         "revision": reminder.revision,
     }
 
-    next_run_at = get_reminder_next_run_at(reminder.id)
     if next_run_at is not None:
         response_data["next_run_at"] = next_run_at
 
@@ -334,6 +331,7 @@ def build_created_reminder_response(
     reminder_id: int,
     chat_id: int,
     data: ReminderCreateData,
+    next_run_at: datetime | None,
 ) -> ReminderResponse:
     response_data = {
         "id": reminder_id,
@@ -365,7 +363,6 @@ def build_created_reminder_response(
         "revision": 1,
     }
 
-    next_run_at = get_reminder_next_run_at(reminder_id)
     if next_run_at is not None:
         response_data["next_run_at"] = next_run_at
 
@@ -459,7 +456,7 @@ def build_tma_bootstrap_response(
     timezone_name: str,
     chat_type: str | None,
     start_param: str | None,
-    active_reminders: list[ReminderReadData],
+    active_reminders: list[ReminderResponse],
 ) -> TmaBootstrapResponse:
     return TmaBootstrapResponse(
         context=build_tma_context_response(
@@ -472,7 +469,5 @@ def build_tma_bootstrap_response(
             start_param=start_param,
         ),
         reminder_options=build_reminder_form_options_response(),
-        active_reminders=[
-            build_reminder_response(reminder) for reminder in active_reminders
-        ],
+        active_reminders=active_reminders,
     )

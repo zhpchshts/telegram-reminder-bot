@@ -36,6 +36,7 @@ TEST_DELIVERY_TRACKING_STARTED_AT = datetime(2026, 7, 1, tzinfo=UTC)
 
 def test_build_reminder_response() -> None:
     start_at = datetime(2099, 6, 10, 12, 12)
+    next_run_at = datetime(2099, 6, 13, 7, 12, tzinfo=UTC)
 
     result = build_reminder_response(
         ReminderReadData(
@@ -48,7 +49,8 @@ def test_build_reminder_response() -> None:
             timezone_name="Asia/Yekaterinburg",
             delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
             interval_days=3,
-        )
+        ),
+        next_run_at=next_run_at,
     )
 
     assert result == ReminderResponse(
@@ -61,6 +63,7 @@ def test_build_reminder_response() -> None:
         timezone_name="Asia/Yekaterinburg",
         is_repeating=True,
         period="каждые 3 дн.",
+        next_run_at=next_run_at,
         interval_days=3,
     )
 
@@ -197,6 +200,7 @@ def test_reminder_create_request_rejects_oversized_text() -> None:
 
 def test_build_created_reminder_response() -> None:
     start_at = datetime.fromisoformat("2099-06-10T12:12:00+05:00")
+    next_run_at = datetime(2099, 6, 13, 7, 12, tzinfo=UTC)
 
     result = build_created_reminder_response(
         reminder_id=42,
@@ -208,6 +212,7 @@ def test_build_created_reminder_response() -> None:
             timezone_name="Asia/Yekaterinburg",
             interval_days=3,
         ),
+        next_run_at=next_run_at,
     )
 
     assert result == ReminderResponse(
@@ -219,6 +224,7 @@ def test_build_created_reminder_response() -> None:
         timezone_name="Asia/Yekaterinburg",
         is_repeating=True,
         period="каждые 3 дн.",
+        next_run_at=next_run_at,
         interval_days=3,
     )
 
@@ -373,14 +379,15 @@ def test_build_tma_bootstrap_response() -> None:
         chat_type="group",
         start_param="chat_100",
         active_reminders=[
-            ReminderReadData(
+            ReminderResponse(
                 id=42,
                 chat_id=100,
                 reminder_text="Проверить релиз",
                 schedule_type="every_days",
                 start_at=start_at,
                 timezone_name="Asia/Yekaterinburg",
-                delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+                is_repeating=True,
+                period="каждые 3 дн.",
                 interval_days=3,
             )
         ],

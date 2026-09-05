@@ -72,8 +72,17 @@ def format_period_line(
 def format_reminder_read_data_for_list(
     reminder: ReminderReadData,
     next_run_line: str,
+    *,
+    text_preview_max_length: int | None = None,
 ) -> str:
-    reminder_text = html.escape(reminder.reminder_text)
+    reminder_text = reminder.reminder_text
+    if (
+        text_preview_max_length is not None
+        and len(reminder_text) > text_preview_max_length
+    ):
+        reminder_text = reminder_text[: text_preview_max_length - 1] + "…"
+
+    reminder_text = html.escape(reminder_text)
     period = html.escape(
         format_period_line(
             schedule_type=reminder.schedule_type,
@@ -95,9 +104,9 @@ def format_reminder_read_data_for_list(
 
     return (
         f"<b>{reminder_text}</b>\n"
-        f"ID: `{reminder.id}`\n"
+        f"ID: <code>{reminder.id}</code>\n"
         f"Период: {period}\n"
         f"Первое срабатывание: {first_run}\n"
         f"{next_run}\n"
-        f"Таймзона: `{timezone_name}`"
+        f"Таймзона: <code>{timezone_name}</code>"
     )

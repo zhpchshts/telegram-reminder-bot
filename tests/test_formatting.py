@@ -1,4 +1,5 @@
 from datetime import datetime
+import html
 
 from app.formatting import (
     format_datetime_ru,
@@ -97,11 +98,11 @@ def test_format_reminder_read_data_for_list_every_days() -> None:
 
     assert result == (
         "<b>Тест every days</b>\n"
-        "ID: `11`\n"
+        "ID: <code>11</code>\n"
         "Период: каждые 3 дн.\n"
         "Первое срабатывание: 08 июня в 12:12\n"
         "Следующее срабатывание: 11 июня в 12:12\n"
-        "Таймзона: `Asia/Yekaterinburg`"
+        "Таймзона: <code>Asia/Yekaterinburg</code>"
     )
 
 
@@ -123,9 +124,32 @@ def test_format_reminder_read_data_for_list_yearly_date() -> None:
 
     assert result == (
         "<b>Поздравить с днём рождения</b>\n"
-        "ID: `12`\n"
+        "ID: <code>12</code>\n"
         "Период: каждый год 14 августа\n"
         "Первое срабатывание: 14 августа в 09:00\n"
         "Следующее срабатывание: 14 августа в 09:00\n"
-        "Таймзона: `Asia/Yekaterinburg`"
+        "Таймзона: <code>Asia/Yekaterinburg</code>"
     )
+
+
+def test_format_reminder_read_data_for_list_truncates_before_html_escape() -> None:
+    reminder_text = "<&>" * 100
+    reminder = ReminderReadData(
+        id=13,
+        chat_id=100,
+        reminder_text=reminder_text,
+        schedule_type="once",
+        start_at=datetime(2026, 8, 14, 9, 0),
+        timezone_name="Asia/Yekaterinburg",
+        delivery_tracking_started_at_utc=TEST_DELIVERY_TRACKING_STARTED_AT,
+    )
+
+    result = format_reminder_read_data_for_list(
+        reminder,
+        "Следующее срабатывание: 14 августа в 09:00",
+        text_preview_max_length=10,
+    )
+
+    expected_preview = html.escape(reminder_text[:9] + "…")
+    assert result.startswith(f"<b>{expected_preview}</b>\n")
+    assert html.escape(reminder_text[:10]) not in result

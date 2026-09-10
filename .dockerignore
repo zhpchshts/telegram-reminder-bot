@@ -13,6 +13,9 @@
 !scripts/
 !scripts/**
 
+# Browser fixtures and tooling are only used by the frontend test job.
+tests/browser/
+
 # Keep sensitive/runtime artifacts after allow rules: Docker uses the last
 # matching pattern, so this order also protects future nested files.
 .git

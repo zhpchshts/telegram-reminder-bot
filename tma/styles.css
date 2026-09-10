@@ -1384,6 +1384,12 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   }
 }
 
+@media (max-width: 360px) {
+  .header-actions {
+    flex-direction: column;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

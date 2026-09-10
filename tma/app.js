@@ -1376,6 +1376,18 @@ async function apiRequest(path, options = {}) {
       });
     }
 
+    if (
+      !contentType.includes("application/json") ||
+      body === null ||
+      typeof body !== "object"
+    ) {
+      throw new ApiRequestError("Invalid server response.", {
+        code: "invalid_response",
+        path,
+        method,
+      });
+    }
+
     return body;
   } catch (error) {
     if (error instanceof ApiRequestError) {
@@ -1910,6 +1922,9 @@ function updateConditionalFields() {
 
   for (const [field, fieldScheduleType] of fieldScheduleTypes) {
     field.hidden = scheduleType !== fieldScheduleType;
+    for (const control of field.querySelectorAll("input, select")) {
+      control.disabled = field.hidden;
+    }
   }
 }
 
@@ -2386,21 +2401,28 @@ async function saveTimezone(statusMessage = "Таймзона чата обно�
   }
 
   const timezoneName = elements.chatTimezoneName.value.trim();
-  const timezone = await apiRequest("/api/tma/timezone", {
-    method: "PUT",
-    body: JSON.stringify({
-      timezone_name: timezoneName,
-    }),
-  });
+  elements.timezoneForm.setAttribute("aria-busy", "true");
+  elements.chatTimezoneName.disabled = true;
+  try {
+    const timezone = await apiRequest("/api/tma/timezone", {
+      method: "PUT",
+      body: JSON.stringify({
+        timezone_name: timezoneName,
+      }),
+    });
 
-  state.context.timezone_name = timezone.timezone_name;
-  elements.timezoneName.value = timezone.timezone_name;
-  elements.chatTimezoneName.value = timezone.timezone_name;
+    state.context.timezone_name = timezone.timezone_name;
+    elements.timezoneName.value = timezone.timezone_name;
+    elements.chatTimezoneName.value = timezone.timezone_name;
 
-  renderContext();
-  renderDeviceTimezoneSuggestion();
-  renderReminders();
-  showStatus(statusMessage, "success", "settings");
+    renderContext();
+    renderDeviceTimezoneSuggestion();
+    renderReminders();
+    showStatus(statusMessage, "success", "settings");
+  } finally {
+    elements.chatTimezoneName.disabled = false;
+    elements.timezoneForm.setAttribute("aria-busy", "false");
+  }
 }
 
 async function useDeviceTimezone() {
@@ -2451,6 +2473,23 @@ async function saveReminder() {
 
       if (!savedReminder) {
         return;
+      }
+
+      if (
+        !Number.isInteger(savedReminder.id) ||
+        savedReminder.id < 1 ||
+        !Number.isInteger(savedReminder.revision) ||
+        savedReminder.revision < 1 ||
+        typeof savedReminder.reminder_text !== "string" ||
+        typeof savedReminder.schedule_type !== "string" ||
+        typeof savedReminder.start_at !== "string" ||
+        typeof savedReminder.timezone_name !== "string"
+      ) {
+        throw new ApiRequestError("Invalid reminder response.", {
+          code: "invalid_response",
+          path,
+          method,
+        });
       }
 
       state.reminders = sortReminders([
@@ -2753,6 +2792,8 @@ async function handleAsync(action) {
     return;
   }
 
+  const previousScreen = state.currentScreen;
+  const previousFocus = document.activeElement;
   setBusy(true);
 
   try {
@@ -2761,6 +2802,13 @@ async function handleAsync(action) {
     handleError(error);
   } finally {
     setBusy(false);
+    if (
+      state.currentScreen === previousScreen &&
+      document.activeElement === document.body &&
+      previousFocus?.isConnected
+    ) {
+      previousFocus.focus({ preventScroll: true });
+    }
   }
 }
 

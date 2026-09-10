@@ -29,3 +29,6 @@ bot_backup_*.py
 review-diff.txt
 .pytest-completion-temp/
 tmp/
+node_modules/
+test-results/
+playwright-report/

@@ -1,0 +1,12 @@
+{
+  "name": "nezabudka-browser-tests",
+  "private": true,
+  "scripts": {
+    "test:browser": "playwright test",
+    "test:browser:ui": "playwright test --ui",
+    "test:browser:serve": "node tests/browser/fixture-server.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}

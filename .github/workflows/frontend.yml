@@ -10,15 +10,24 @@ on:
       - main
     paths:
       - "tma/**"
+      - "tests/browser/**"
+      - "package.json"
+      - "package-lock.json"
+      - "playwright.config.cjs"
       - ".github/workflows/**"
   pull_request:
     paths:
       - "tma/**"
+      - "tests/browser/**"
+      - "package.json"
+      - "package-lock.json"
+      - "playwright.config.cjs"
       - ".github/workflows/**"
 
 jobs:
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -31,3 +40,23 @@ jobs:
 
       - name: Check TMA JavaScript syntax
         run: node --check tma/app.js
+
+      - name: Install browser test dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Mini App browser scenarios
+        run: npm run test:browser
+
+      - name: Upload browser failure report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-app-browser-failures
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7

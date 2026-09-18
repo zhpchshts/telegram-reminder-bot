@@ -1,5 +1,5 @@
 const { test: base, expect } = require('@playwright/test');
-const { createFixtureServer, reminder } = require('./fixture-server.cjs');
+const { createFixtureServer, reminder, INIT_DATA } = require('./fixture-server.cjs');
 
 const test = base.extend({
   fixture: async ({}, use) => {
@@ -29,11 +29,13 @@ const requests = (fixture, method, pathname) => fixture.store.requests.filter(
 const card = (page, id = 1) => page.locator(`[data-reminder-id="${id}"]`);
 const content = (page, id = 1) => page.locator(`[data-reminder-content-id="${id}"]`);
 const menu = (page, id = 1) => page.locator(`[data-reminder-menu-id="${id}"]`);
+const appUrl = (fixture) => `${fixture.url}/tma/#tgWebAppData=${encodeURIComponent(INIT_DATA)}`;
 
 async function openApp(page, fixture) {
-  await page.goto(`${fixture.url}/tma/`);
+  await page.goto(appUrl(fixture));
   await expect(page.locator('#list-screen')).toBeVisible();
   await expect(page.locator('#create-reminder-button')).toBeEnabled();
+  expect(await page.evaluate(() => typeof window.Telegram)).toBe('undefined');
 }
 
 async function createDraft(page, text = 'Купить тестовый чай') {
@@ -63,7 +65,43 @@ async function withHeldResponse(page, pathname, action) {
   try { await action(reached); } finally { release(); }
 }
 
-test('create, preview, edit and delete through visible controls', async ({ page, fixture }) => {
+for (const [source, separator] of [['hash', '#'], ['query', '?']]) {
+  test(`bootstrap uses unchanged initData from ${source} without SDK`, async ({ page, fixture }) => {
+    const initData = new URLSearchParams({
+      auth_date: '2000000000', user: JSON.stringify({ id: 123456, first_name: 'Тест + & %' }),
+      hash: 'synthetic-browser-test-signature',
+    }).toString();
+    await page.goto(`${fixture.url}/tma/${separator}tgWebAppData=${encodeURIComponent(initData)}`);
+    await expect(page.locator('#list-screen')).toBeVisible();
+    await expect(page.locator('#create-reminder-button')).toBeEnabled();
+    expect(await page.evaluate(() => typeof window.Telegram)).toBe('undefined');
+    expect(requests(fixture, 'GET', '/api/tma/bootstrap')).toHaveLength(1);
+    expect(requests(fixture, 'GET', '/api/tma/bootstrap')[0].initData).toBe(initData);
+  });
+}
+
+test('bootstrap accepts initData from an SDK already provided by the environment', async ({ page, fixture }) => {
+  await page.addInitScript((initData) => { window.Telegram = { WebApp: { initData } }; }, INIT_DATA);
+  await page.goto(`${fixture.url}/tma/`);
+  await expect(page.locator('#list-screen')).toBeVisible();
+  await expect(page.locator('#create-reminder-button')).toBeEnabled();
+  expect(requests(fixture, 'GET', '/api/tma/bootstrap')).toHaveLength(1);
+  expect(requests(fixture, 'GET', '/api/tma/bootstrap')[0].initData).toBe(INIT_DATA);
+});
+
+test('missing initData shows a launch error without making API requests', async ({ page, fixture }) => {
+  await page.goto(`${fixture.url}/tma/`);
+  await expect(page.locator('#fatal-error-screen')).toBeVisible();
+  await expect(page.locator('#fatal-error-message')).toContainText('Не удалось подтвердить запуск Mini App');
+  await expect(page.locator('#list-screen')).toBeHidden();
+  expect(await page.evaluate(() => typeof window.Telegram)).toBe('undefined');
+  expect(fixture.store.requests).toEqual([]);
+  await page.locator('#retry-bootstrap-button').click();
+  await expect(page.locator('#fatal-error-screen')).toBeVisible();
+  expect(fixture.store.requests).toEqual([]);
+});
+
+test('create, preview, edit and delete through visible controls without SDK', async ({ page, fixture }) => {
   await openApp(page, fixture);
   await expect(page.locator('#reminders-list')).toContainText('Пока нет активных напоминаний');
   const text = '<img src=x onerror=alert(1)> & тест';
@@ -89,6 +127,7 @@ test('create, preview, edit and delete through visible controls', async ({ page,
   await expect(card(page)).toHaveCount(0);
   await expect(page.locator('#create-reminder-button')).toBeFocused();
   expect(requests(fixture, 'DELETE', '/api/tma/reminders/1')[0].query.expected_revision).toBe('2');
+  expect(fixture.store.requests.every((entry) => entry.initData === INIT_DATA)).toBe(true);
 });
 
 test('weather and completion options are exclusive and preview matches saved payload', async ({ page, fixture }) => {
@@ -284,7 +323,7 @@ test('stale delete refreshes the card and requires another explicit confirmation
 test('bootstrap service failure can be retried without leaving loading controls disabled', async ({ page, fixture }) => {
   // An HTTP failure is deliberately distinct from a connection failure in the next case.
   fixture.store.queueFault('GET', '/api/tma/bootstrap', { status: 503 });
-  await page.goto(`${fixture.url}/tma/`);
+  await page.goto(appUrl(fixture));
   await expect(page.locator('#fatal-error-screen')).toBeVisible();
   await expect(page.locator('#retry-bootstrap-button')).toBeEnabled();
   await page.locator('#retry-bootstrap-button').click();
@@ -294,7 +333,7 @@ test('bootstrap service failure can be retried without leaving loading controls 
 
 test('bootstrap disconnected network reports error then retries successfully', async ({ page, fixture }) => {
   await page.route('**/api/tma/bootstrap', (route) => route.abort('internetdisconnected'), { times: 1 });
-  await page.goto(`${fixture.url}/tma/`);
+  await page.goto(appUrl(fixture));
   await expect(page.locator('#fatal-error-message')).toContainText('Не удалось связаться с сервером');
   await page.locator('#retry-bootstrap-button').click();
   await expect(page.locator('#list-screen')).toBeVisible();
@@ -302,7 +341,7 @@ test('bootstrap disconnected network reports error then retries successfully', a
 
 test('expired bootstrap session explains reopening Telegram', async ({ page, fixture }) => {
   fixture.store.queueFault('GET', '/api/tma/bootstrap', { status: 401, body: { detail: 'init_data is expired.' } });
-  await page.goto(`${fixture.url}/tma/`);
+  await page.goto(appUrl(fixture));
   await expect(page.locator('#fatal-error-screen')).toBeVisible();
   await expect(page.locator('#fatal-error-message')).toContainText('Открой Незабудку заново');
   await expect(page.locator('#list-screen')).toBeHidden();

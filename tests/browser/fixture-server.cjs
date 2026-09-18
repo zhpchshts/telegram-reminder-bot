@@ -6,10 +6,7 @@ const path = require('node:path');
 const TMA_ROOT = path.resolve(__dirname, '../../tma');
 const CHAT_ID = -1001234567890;
 const DEFAULT_TIMEZONE = 'Asia/Yekaterinburg';
-const SDK = `window.Telegram = { WebApp: {
-  initData: 'synthetic-browser-test-init-data', platform: 'test', version: 'test',
-  ready() {}, expand() {}
-} };`;
+const INIT_DATA = 'synthetic-browser-test-init-data';
 
 const OPTIONS = {
   schedule_types: [
@@ -119,17 +116,10 @@ async function createFixtureServer({ host = '127.0.0.1', port = 0 } = {}) {
         store.queueFault(targetMethod, targetPath, fault);
         return json(response, 200, { queued: true });
       }
-      if (pathname === '/telegram-web-app.js') {
-        response.writeHead(200, { 'Content-Type': 'text/javascript' });
-        return response.end(SDK);
-      }
       const asset = { '/': 'index.html', '/tma/': 'index.html', '/tma/index.html': 'index.html',
         '/tma/app.js': 'app.js', '/tma/styles.css': 'styles.css' }[pathname];
       if (asset && method === 'GET') {
-        let body = await fs.readFile(path.join(TMA_ROOT, asset), 'utf8');
-        if (asset === 'index.html') {
-          body = body.replace(/https:\/\/telegram\.org\/js\/telegram-web-app\.js\?[^"']+/, '/telegram-web-app.js');
-        }
+        const body = await fs.readFile(path.join(TMA_ROOT, asset), 'utf8');
         response.writeHead(200, { 'Content-Type': {
           'index.html': 'text/html; charset=utf-8', 'app.js': 'text/javascript; charset=utf-8',
           'styles.css': 'text/css; charset=utf-8',
@@ -139,6 +129,7 @@ async function createFixtureServer({ host = '127.0.0.1', port = 0 } = {}) {
       if (!pathname.startsWith('/api/tma/')) return json(response, 404, { detail: 'Not found' });
       const body = await readJson(request);
       const entry = { method, pathname, query: Object.fromEntries(url.searchParams), body,
+        initData: request.headers['x-telegram-init-data'] || null,
         idempotencyKey: request.headers['idempotency-key'] || null };
       store.requests.push(entry);
       const faultIndex = store.faults.findIndex((fault) => fault.method === method && fault.pathname === pathname);
@@ -227,10 +218,10 @@ async function createFixtureServer({ host = '127.0.0.1', port = 0 } = {}) {
   };
 }
 
-module.exports = { createFixtureServer, reminder };
+module.exports = { createFixtureServer, reminder, INIT_DATA };
 
 if (require.main === module) {
   createFixtureServer({ port: 4173 }).then(({ url }) => {
-    process.stdout.write(`Synthetic Mini App fixture: ${url}/tma/\n`);
+    process.stdout.write(`Synthetic Mini App fixture: ${url}/tma/#tgWebAppData=${encodeURIComponent(INIT_DATA)}\n`);
   }).catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
 }

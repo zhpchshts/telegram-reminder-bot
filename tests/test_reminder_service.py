@@ -1,9 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timezone
 import html
 from html.parser import HTMLParser
 import re
 from threading import Event, Lock
+from types import SimpleNamespace
 from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
@@ -927,6 +929,7 @@ def test_create_scheduled_reminder_deactivates_row_when_scheduling_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     deactivated_ids: list[int] = []
+    cleared_ids: list[int] = []
     monkeypatch.setattr(
         reminder_service_module,
         "create_reminder_in_db",
@@ -942,6 +945,11 @@ def test_create_scheduled_reminder_deactivates_row_when_scheduling_fails(
         "mark_reminder_as_deleted",
         deactivated_ids.append,
     )
+    monkeypatch.setattr(
+        reminder_service_module,
+        "clear_reminder_idempotency_key",
+        cleared_ids.append,
+    )
 
     with pytest.raises(ReminderSchedulingError, match="could not be scheduled"):
         create_scheduled_reminder(
@@ -956,6 +964,68 @@ def test_create_scheduled_reminder_deactivates_row_when_scheduling_fails(
         )
 
     assert deactivated_ids == [42]
+    assert cleared_ids == [42]
+
+
+def test_idempotency_hash_distinguishes_timezones_with_same_initial_offset() -> None:
+    data = ReminderCreateData(
+        reminder_text="Проверить релиз",
+        schedule_type="every_days",
+        start_at=datetime(2099, 1, 1, 9, 0),
+        timezone_name="Europe/London",
+        interval_days=1,
+    )
+    # Both zones start at UTC+0, but only London changes offset in summer.
+    other_timezone = replace(data, timezone_name="Africa/Abidjan")
+    request_hash = reminder_service_module.build_reminder_idempotency_hash(data)
+
+    assert request_hash == reminder_service_module.build_reminder_idempotency_hash(
+        replace(data)
+    )
+    assert request_hash != reminder_service_module.build_reminder_idempotency_hash(
+        other_timezone
+    )
+
+
+@pytest.mark.parametrize("job_revision", [None, 1, 2, 3])
+def test_pending_idempotent_creation_requires_matching_job_revision(
+    monkeypatch, job_revision
+) -> None:
+    job = (
+        SimpleNamespace(name=f"reminder-revision:{job_revision}")
+        if job_revision is not None
+        else None
+    )
+    fake_scheduler = FakeScheduler(job)
+    succeeded = []
+    monkeypatch.setattr(reminder_service_module, "scheduler", fake_scheduler)
+    monkeypatch.setattr(
+        reminder_service_module,
+        "mark_reminder_idempotency_succeeded",
+        lambda **kwargs: succeeded.append(kwargs),
+    )
+    record = {
+        "id": 42,
+        "revision": 2,
+        "reminder_status": "active",
+        "client_request_status": "pending",
+    }
+
+    if job_revision == 2:
+        assert (
+            reminder_service_module.resolve_reminder_idempotency_record(
+                record=record, idempotency_key="create-request"
+            )
+            == 42
+        )
+        assert succeeded == [{"reminder_id": 42, "client_request_id": "create-request"}]
+    else:
+        with pytest.raises(ReminderIdempotencyPendingError):
+            reminder_service_module.resolve_reminder_idempotency_record(
+                record=record, idempotency_key="create-request"
+            )
+        assert succeeded == []
+    assert fake_scheduler.get_job_ids == ["42"]
 
 
 def test_create_scheduled_reminder_replays_past_idempotent_request_without_rescheduling(
@@ -1368,6 +1438,51 @@ def test_validate_reminder_create_data_rejects_excessive_intervals(
                 **kwargs,
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("schedule_type", "field_name"),
+    [("every_days", "interval_days"), ("every_week", "interval_weeks")],
+)
+@pytest.mark.parametrize("field_value", [-1, 0])
+def test_validate_reminder_create_data_rejects_nonpositive_intervals(
+    schedule_type, field_name, field_value
+) -> None:
+    with pytest.raises(ValueError, match="must be greater than or equal to 1"):
+        validate_reminder_create_data(
+            ReminderCreateData(
+                reminder_text="Проверить релиз",
+                schedule_type=schedule_type,
+                start_at=datetime(2099, 6, 10, 12, 12),
+                timezone_name="Asia/Yekaterinburg",
+                day_of_week="MON" if schedule_type == "every_week" else None,
+                **{field_name: field_value},
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("schedule_type", "field_name", "field_value"),
+    [
+        ("every_days", "interval_days", 1),
+        ("every_days", "interval_days", 36_500),
+        ("every_week", "interval_weeks", 1),
+        ("every_week", "interval_weeks", 5_200),
+    ],
+)
+def test_validate_reminder_create_data_accepts_interval_boundaries(
+    schedule_type, field_name, field_value
+) -> None:
+    validate_reminder_create_data(
+        ReminderCreateData(
+            reminder_text="Проверить релиз",
+            schedule_type=schedule_type,
+            start_at=datetime(2099, 6, 10, 12, 12),
+            timezone_name="Asia/Yekaterinburg",
+            day_of_week="MON" if schedule_type == "every_week" else None,
+            **{field_name: field_value},
+        )
+    )
 
 
 def test_update_reports_failure_when_database_changed_but_rescheduling_fails(

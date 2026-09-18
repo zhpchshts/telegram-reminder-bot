@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
@@ -168,3 +171,40 @@ def test_deploy_is_fail_closed_and_checks_public_endpoints() -> None:
     assert "git ls-files --others --exclude-standard" in deploy_script
     assert "docker inspect --format '{{.Image}}'" in deploy_script
     assert "docker compose config --quiet" in deploy_script
+
+
+def test_deploy_shell_options_stop_after_a_failed_command() -> None:
+    bash = shutil.which("bash")
+    if os.name == "nt":
+        git = shutil.which("git")
+        if git is not None:
+            git_bash = Path(git).resolve().parent.parent / "bin" / "bash.exe"
+            if git_bash.is_file():
+                bash = str(git_bash)
+    if bash is None:
+        pytest.skip("Bash is required to check deployment shell error handling.")
+
+    deploy_script = (PROJECT_ROOT / "scripts" / "deploy-docker.sh").read_text(
+        encoding="utf-8"
+    )
+    shell_options = next(
+        line for line in deploy_script.splitlines() if line.startswith("set ")
+    )
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"BASH_ENV", "ENV"}
+    }
+    # Execute only the shell options and a synthetic failure, never the deploy body.
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc"],
+        input=f"{shell_options}\nfalse\nprintf 'continued-after-failure\\n'\n",
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert result.stdout == ""

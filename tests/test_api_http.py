@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.datastructures import State
 
 from app import api as api_module
 from app import api_auth as api_auth_module
@@ -132,32 +133,35 @@ def expected_reminder_options_response() -> dict[str, object]:
     }
 
 
+@pytest.fixture(autouse=True)
+def isolate_api_application() -> Iterator[None]:
+    previous_state = app.state
+    previous_overrides = app.dependency_overrides
+    previous_routes = app.router.routes.copy()
+    app.state = State()
+    app.dependency_overrides = {}
+
+    try:
+        yield
+    finally:
+        app.state = previous_state
+        app.dependency_overrides = previous_overrides
+        app.router.routes[:] = previous_routes
+
+
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    previous_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides.clear()
-
-    try:
-        with TestClient(app) as test_client:
-            yield test_client
-    finally:
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(previous_overrides)
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 @pytest.fixture
-def authenticated_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def authenticated_client(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> TestClient:
     monkeypatch.setattr(api_auth_module, "BOT_TOKEN", BOT_TOKEN)
-
-    previous_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides.clear()
-
-    try:
-        with TestClient(app) as test_client:
-            yield test_client
-    finally:
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(previous_overrides)
+    return client
 
 
 def test_health_endpoint_returns_minimal_public_status(client: TestClient) -> None:
@@ -176,15 +180,35 @@ def test_health_endpoint_supports_head(
     assert response.content == b""
 
 
-def test_readiness_endpoint_rejects_unprepared_runtime(client: TestClient) -> None:
-    app.state.bot = None
-    app.state.scheduler = None
-    app.state.reminders_restored = False
+@pytest.mark.parametrize(
+    "unready_component", ["bot", "scheduler", "scheduler_stopped", "restoration"]
+)
+def test_readiness_endpoint_rejects_unprepared_runtime(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    unready_component: str,
+) -> None:
+    app.state.bot = object()
+    app.state.scheduler = SimpleNamespace(running=True, get_job=lambda job_id: object())
+    app.state.reminders_restored = True
+    schema_checks = []
+    monkeypatch.setattr(
+        api_module,
+        "check_required_database_schema",
+        lambda: schema_checks.append(True),
+    )
+    if unready_component in {"bot", "scheduler"}:
+        setattr(app.state, unready_component, None)
+    elif unready_component == "scheduler_stopped":
+        app.state.scheduler.running = False
+    else:
+        app.state.reminders_restored = False
 
     response = client.get("/ready")
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Service is not ready."}
+    assert schema_checks == []
 
 
 def test_readiness_endpoint_checks_runtime_and_database(
@@ -870,6 +894,7 @@ def test_create_tma_reminder_reports_idempotency_request_in_progress(
 def test_create_tma_reminder_validates_idempotency_key_format(
     authenticated_client: TestClient,
 ) -> None:
+    app.state.bot = object()
     response = authenticated_client.post(
         "/api/tma/reminders",
         headers={
@@ -1005,6 +1030,7 @@ def test_update_tma_reminder_rejects_stale_revision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app.state.bot = object()
+    update_calls: list[object] = []
     current_reminder = ReminderReadData(
         id=42,
         chat_id=100,
@@ -1021,6 +1047,11 @@ def test_update_tma_reminder_rejects_stale_revision(
         "get_active_reminder_for_chat",
         lambda **kwargs: current_reminder,
     )
+    monkeypatch.setattr(
+        api_module,
+        "update_active_reminder_for_chat",
+        lambda *args, **kwargs: update_calls.append((args, kwargs)),
+    )
 
     response = authenticated_client.put(
         "/api/tma/reminders/42",
@@ -1030,6 +1061,7 @@ def test_update_tma_reminder_rejects_stale_revision(
         json=build_create_reminder_request(expected_revision=1),
     )
 
+    assert update_calls == []
     assert response.status_code == 409
     assert "changed" in response.json()["detail"]
 
@@ -1559,12 +1591,12 @@ def test_api_body_limit_delegates_receive_after_replaying_buffer() -> None:
 def test_unhandled_api_error_has_private_cache_and_allowed_cors_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    test_path = "/api/test-unhandled-audit-error"
+    test_path = "/api/test-unhandled-error"
 
     if not any(getattr(route, "path", None) == test_path for route in app.routes):
 
         @app.get(test_path)
-        def raise_unhandled_audit_error() -> None:
+        def raise_unhandled_error() -> None:
             raise RuntimeError("sensitive internal detail")
 
     monkeypatch.setattr(

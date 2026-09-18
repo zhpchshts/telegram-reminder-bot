@@ -42,20 +42,39 @@ def test_internal_completion_error_is_always_answered(monkeypatch) -> None:
     assert callback.answers == ["Не удалось обработать кнопку."]
 
 
-def test_successful_completion_callback_returns_service_text(monkeypatch) -> None:
-    async def claim(*args, **kwargs):
-        return {"response_text": "Выполнено."}
+@pytest.mark.parametrize("chat_id", [200, -100123], ids=["private", "group"])
+def test_successful_completion_callback_returns_service_text(
+    monkeypatch, chat_id
+) -> None:
+    captured = {}
+    finished = []
+    result = {"response_text": "Выполнено."}
 
-    async def finish(*args, **kwargs):
-        return None
+    async def claim(**kwargs):
+        captured.update(kwargs)
+        return result
+
+    async def finish(bot, claimed_result):
+        finished.append((bot, claimed_result))
 
     monkeypatch.setattr(handlers_module, "claim_completion_callback", claim)
     monkeypatch.setattr(handlers_module, "finish_completion_callback", finish)
     callback = FakeCallback("completion_done:1")
+    callback.message.chat.id = chat_id
+    bot = object()
 
-    asyncio.run(handlers_module.completion_done_callback(callback, object()))
+    asyncio.run(handlers_module.completion_done_callback(callback, bot))
 
     assert callback.answers == ["Выполнено."]
+    assert captured == {
+        "occurrence_id": 1,
+        "chat_id": chat_id,
+        "callback_message_id": 50,
+        "callback_message_sent_at": callback.message.date,
+        "user_id": 200,
+        "display_name": "Участник",
+    }
+    assert finished == [(bot, result)]
 
 
 @pytest.mark.parametrize(

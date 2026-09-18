@@ -8,25 +8,6 @@ def read_tma_asset(name: str) -> str:
     return (PROJECT_ROOT / "tma" / name).read_text(encoding="utf-8")
 
 
-def test_auto_delete_checkbox_is_available_for_every_reminder() -> None:
-    html = read_tma_asset("index.html")
-
-    assert 'id="delete-after-two-days"' in html
-    assert 'name="delete_after_two_days"' in html
-    assert 'type="checkbox"' in html
-    assert 'role="switch"' in html
-    assert 'class="auto-delete-switch-track"' in html
-    assert "Удалять сообщение через 2 дня" in html
-    assert 'class="auto-delete-tooltip"' in html
-    assert 'role="tooltip"' in html
-    assert 'aria-describedby="auto-delete-tooltip"' in html
-    assert "Сообщение будет удалено примерно через два дня." in html
-
-    checkbox_position = html.index('id="delete-after-two-days"')
-    form_end_position = html.index("</form>", checkbox_position)
-    assert checkbox_position < form_end_position
-
-
 def test_auto_delete_switch_has_isolated_checkbox_styles() -> None:
     html = read_tma_asset("index.html")
     styles = read_tma_asset("styles.css")

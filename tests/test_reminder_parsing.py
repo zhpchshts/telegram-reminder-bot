@@ -18,6 +18,7 @@ from app.reminder_parsing import (
     parse_monthly_day_from_command,
     parse_monthly_weekday_command,
     parse_monthly_weekday_from_command,
+    parse_min_int,
     parse_remind_command,
     parse_timezone_command,
 )
@@ -241,6 +242,25 @@ def test_parse_min_int_rejects_value_out_of_range() -> None:
             TIMEZONE_NAME,
             now=NOW,
         )
+
+
+@pytest.mark.parametrize("value", ["0", "6"])
+def test_parse_min_int_rejects_values_outside_both_bounds(value: str) -> None:
+    with pytest.raises(ReminderParseError, match="Вне диапазона"):
+        parse_min_int(value, min_value=1, max_value=5, range_error="Вне диапазона")
+
+
+@pytest.mark.parametrize("value", ["1", "5"])
+def test_parse_min_int_accepts_both_bounds(value: str) -> None:
+    assert parse_min_int(value, min_value=1, max_value=5) == int(value)
+
+
+@pytest.mark.parametrize(
+    "date_and_time", ["not-a-date 12:12", "2099-02-30 12:12", "2099-06-10 25:00"]
+)
+def test_parse_remind_command_reports_invalid_datetime(date_and_time: str) -> None:
+    with pytest.raises(ReminderParseError, match="Не смог разобрать дату и время"):
+        parse_remind_command(f"/remind {date_and_time} Проверить релиз", TIMEZONE_NAME)
 
 
 def test_normalize_weekday_rejects_unknown_value() -> None:

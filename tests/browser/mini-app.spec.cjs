@@ -102,6 +102,15 @@ test('missing initData shows a launch error without making API requests', async 
 });
 
 test('create, preview, edit and delete through visible controls without SDK', async ({ page, fixture }) => {
+  await page.addInitScript(() => {
+    const fetch = window.fetch.bind(window);
+    window.observedRequests = [];
+    window.fetch = (input, options) => {
+      const request = new Request(input, options);
+      window.observedRequests.push({ url: request.url, cache: request.cache });
+      return fetch(request);
+    };
+  });
   await openApp(page, fixture);
   await expect(page.locator('#reminders-list')).toContainText('Пока нет активных напоминаний');
   const text = '<img src=x onerror=alert(1)> & тест';
@@ -128,6 +137,9 @@ test('create, preview, edit and delete through visible controls without SDK', as
   await expect(page.locator('#create-reminder-button')).toBeFocused();
   expect(requests(fixture, 'DELETE', '/api/tma/reminders/1')[0].query.expected_revision).toBe('2');
   expect(fixture.store.requests.every((entry) => entry.initData === INIT_DATA)).toBe(true);
+  const observed = await page.evaluate(() => window.observedRequests);
+  expect(observed.length).toBeGreaterThan(0);
+  expect(observed.every((request) => request.cache === 'no-store')).toBe(true);
 });
 
 test('weather and completion options are exclusive and preview matches saved payload', async ({ page, fixture }) => {
@@ -448,6 +460,92 @@ for (const [schedule, controls, expected] of [
     await expect(page.locator('#reminder-kind')).toBeDisabled();
     await expect(page.locator('#start-date-field')).toBeHidden();
     await expect(page.locator('#start-time')).toBeVisible();
+    for (const [selector, value] of controls) {
+      await expect(page.locator(selector)).toHaveValue(value);
+    }
+    await page.locator('#reminder-text').fill('Изменён только текст');
+    await page.locator('#save-button').click();
+    await expect(content(page)).toContainText('Изменён только текст');
+    expect(requests(fixture, 'PUT', '/api/tma/reminders/1')[0].body).toMatchObject({
+      schedule_type: schedule, expected_revision: 1,
+      interval_days: null, interval_weeks: null, day_of_week: null,
+      month_week_number: null, month_day: null, ...expected,
+    });
+  });
+}
+
+test.describe('reminder timezone is independent of browser and chat timezone', () => {
+  test.use({ timezoneId: 'UTC' });
+
+  for (const [timezone, offset] of [
+    ['Asia/Yekaterinburg', '+05:00'], ['Europe/Moscow', '+03:00'], ['UTC', '+00:00'],
+  ]) {
+    test(`card and editor preserve local date and time in ${timezone}`, async ({ page, fixture }) => {
+      const startAt = `2035-05-20T00:30:00${offset}`;
+      fixture.store.reset({ timezone: 'UTC', reminders: [reminder({
+        timezone_name: timezone, start_at: startAt, next_run_at: startAt,
+      })] });
+      await openApp(page, fixture);
+      await expect(card(page).locator('.reminder-next-run')).toContainText('20 мая 2035');
+      await expect(content(page)).toContainText('00:30');
+      await content(page).click();
+      await expect(page.locator('#start-date')).toHaveValue('2035-05-20');
+      await expect(page.locator('#start-time')).toHaveValue('00:30');
+      await expect(page.locator('#timezone-name')).toHaveValue(timezone);
+      await page.locator('#reminder-text').fill('Сохранить местное время');
+      await page.locator('#save-button').click();
+      await expect(content(page)).toContainText('Сохранить местное время');
+      expect(requests(fixture, 'PUT', '/api/tma/reminders/1')[0].body).toMatchObject({
+        start_at: '2035-05-20T00:30', timezone_name: timezone,
+      });
+    });
+  }
+});
+
+test('auto-delete switch belongs to the form and is available for text and weather', async ({ page, fixture }) => {
+  await openApp(page, fixture);
+  await createDraft(page);
+  const toggle = page.locator('#delete-after-two-days');
+  await expect(toggle).toHaveAttribute('type', 'checkbox');
+  await expect(toggle).toHaveAttribute('name', 'delete_after_two_days');
+  await expect(toggle).toHaveRole('switch');
+  await expect(toggle).toHaveAccessibleName('Удалять сообщение через 2 дня');
+  expect(await toggle.evaluate((input) => input.form?.id)).toBe('reminder-form');
+  const help = page.locator('[aria-describedby="auto-delete-tooltip"]');
+  await help.focus();
+  await expect(page.locator('#auto-delete-tooltip')).toBeVisible();
+  await expect(help).toHaveAccessibleDescription('Сообщение будет удалено примерно через два дня.');
+  for (const kind of ['text', 'weather']) {
+    await page.locator('#reminder-kind').selectOption(kind);
+    await expect(toggle).toBeEnabled();
+    await toggle.check();
+    await expect(toggle).toBeChecked();
+    await toggle.uncheck();
+    await expect(toggle).not.toBeChecked();
+  }
+});
+
+for (const theme of ['light', 'dark']) {
+  test(`primary action text has readable contrast in ${theme} theme`, async ({ page, fixture }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await openApp(page, fixture);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    const contrast = await page.locator('#create-reminder-button').evaluate((button) => {
+      const style = getComputedStyle(button);
+      const luminance = (color) => {
+        const rgb = color.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
+        if (!rgb) throw new Error(`Expected opaque RGB color, received ${color}`);
+        const channels = rgb.slice(1).map((value) => {
+          const channel = Number(value) / 255;
+          return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+        });
+        return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+      };
+      const foreground = luminance(style.color);
+      const background = luminance(style.backgroundColor);
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    });
+    expect(contrast).toBeGreaterThanOrEqual(4.5);
   });
 }
 

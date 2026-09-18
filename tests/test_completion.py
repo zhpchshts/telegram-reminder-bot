@@ -126,6 +126,8 @@ def test_activation_and_watermark_are_committed_together(monkeypatch, tmp_path) 
     assert occurrence["status"] == "active"
     assert occurrence["reminder_revision"] == 1
     assert occurrence["current_message_id"] == 50
+    assert occurrence["next_repeat_at_utc"] == "2026-07-18T10:01:00+00:00"
+    assert occurrence["delivery_claim_token"] is None
     assert reminder["last_handled_scheduled_for_utc"] == "2026-07-18T08:00:00+00:00"
     assert (
         build_reminder_read_data(
@@ -254,6 +256,60 @@ def test_fast_callback_completes_pending_and_invalidates_claim(
     assert occurrence["status"] == "completed"
     assert occurrence["delivery_claim_token"] is None
     assert occurrence["completed_by_user_id"] == 200
+
+
+@pytest.mark.parametrize("activate_first", [False, True], ids=["pending", "active"])
+def test_foreign_chat_cannot_complete_occurrence(
+    monkeypatch, tmp_path, activate_first
+) -> None:
+    reminder_id = prepare_database(monkeypatch, tmp_path)
+    claim = claim_occurrence(reminder_id)
+    sent_at = datetime(2026, 7, 18, 9, 0, tzinfo=UTC)
+    if activate_first:
+        assert (
+            activate_claimed_completion_occurrence(
+                occurrence_id=claim["occurrence_id"],
+                claim_token="claim-1",
+                message_id=50,
+                sent_at=sent_at,
+            )["outcome"]
+            == "activated"
+        )
+    with database_module.get_connection() as connection:
+        before = dict(
+            connection.execute(
+                "SELECT * FROM reminder_completion_occurrences"
+            ).fetchone()
+        )
+    parent_before = dict(get_active_reminder_from_db(reminder_id))
+
+    result = complete_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        chat_id=200,
+        callback_message_id=50,
+        callback_message_sent_at=sent_at,
+        user_id=200,
+        display_name="Другой чат",
+        completed_at=sent_at + timedelta(minutes=1),
+    )
+
+    assert result["outcome"] == "wrong_chat"
+    with database_module.get_connection() as connection:
+        assert (
+            dict(
+                connection.execute(
+                    "SELECT * FROM reminder_completion_occurrences"
+                ).fetchone()
+            )
+            == before
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM reminder_message_deletion_queue"
+            ).fetchone()[0]
+            == 0
+        )
+    assert dict(get_active_reminder_from_db(reminder_id)) == parent_before
 
 
 def test_stale_pending_can_be_reclaimed_and_old_token_loses(
@@ -787,9 +843,22 @@ def test_delivery_sends_button_and_does_not_duplicate_active(
     assert first == "sent"
     assert second == "already_delivered"
     assert len(bot.sent) == 1
-    assert (
-        bot.sent[0]["reply_markup"].inline_keyboard[0][0].text == "Отметить выполненным"
-    )
+    with database_module.get_connection() as connection:
+        occurrence_id = connection.execute(
+            "SELECT id FROM reminder_completion_occurrences"
+        ).fetchone()[0]
+    assert bot.sent[0]["chat_id"] == 100
+    assert bot.sent[0]["text"] == "Проверить релиз"
+    assert bot.sent[0]["reply_markup"].model_dump(exclude_none=True) == {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "Отметить выполненным",
+                    "callback_data": f"completion_done:{occurrence_id}",
+                }
+            ]
+        ]
+    }
 
 
 def test_successful_send_with_failed_activation_is_deleted_and_not_watermarked(
@@ -980,14 +1049,55 @@ def test_callback_marks_current_message_and_removes_keyboard(
         )
 
     assert result == "Выполнено."
-    assert bot.edited_text[0]["text"].endswith("✅ Выполнено")
+    assert bot.edited_text == [
+        {
+            "chat_id": 100,
+            "message_id": 10,
+            "text": "Проверить релиз\n\n✅ Выполнено",
+            "reply_markup": None,
+        }
+    ]
     assert "Completion occurrence completed" in caplog.text
     assert "user_id=" not in caplog.text
     with database_module.get_connection() as connection:
-        status = connection.execute(
-            "SELECT status FROM reminder_completion_occurrences"
-        ).fetchone()[0]
-    assert status == "completed"
+        completed = dict(
+            connection.execute(
+                "SELECT * FROM reminder_completion_occurrences"
+            ).fetchone()
+        )
+    assert completed["status"] == "completed"
+
+    repeated = asyncio.run(
+        process_completion_callback(
+            bot,
+            occurrence_id=1,
+            chat_id=100,
+            callback_message_id=10,
+            callback_message_sent_at=bot.sent_at,
+            user_id=300,
+            display_name="Другой участник",
+        )
+    )
+
+    assert repeated == "Уже отмечено выполненным."
+    assert bot.edited_markup == [
+        {
+            "chat_id": 100,
+            "message_id": 10,
+            "reply_markup": None,
+        }
+    ]
+    assert len(bot.edited_text) == 1
+    assert len(bot.sent) == 1
+    with database_module.get_connection() as connection:
+        assert (
+            dict(
+                connection.execute(
+                    "SELECT * FROM reminder_completion_occurrences"
+                ).fetchone()
+            )
+            == completed
+        )
 
 
 def test_completion_with_auto_delete_sends_final_and_queues_both_messages(
@@ -1201,6 +1311,23 @@ def test_checkpoint_recovery_finalizes_without_resending(monkeypatch, tmp_path) 
         stale_before=datetime.now(UTC) - timedelta(minutes=2),
     )
     assert publication_claim["outcome"] == "claimed"
+    before_checkpoint = dict(publication_claim["occurrence"])
+    assert (
+        checkpoint_completion_message(
+            occurrence_id=claim["occurrence_id"],
+            claim_token="foreign-publication",
+            message_id=99,
+            sent_at=datetime(2026, 7, 18, 9, 2, tzinfo=UTC),
+        )
+        == "stale"
+    )
+    with database_module.get_connection() as connection:
+        after_rejected_checkpoint = dict(
+            connection.execute(
+                "SELECT * FROM reminder_completion_occurrences"
+            ).fetchone()
+        )
+    assert after_rejected_checkpoint == before_checkpoint
     assert (
         checkpoint_completion_message(
             occurrence_id=claim["occurrence_id"],
@@ -1515,6 +1642,99 @@ def test_final_publication_retry_after_does_not_resume_repeats(
     assert occurrence["completion_claim_token"] is None
     assert occurrence["next_repeat_at_utc"] is None
     assert retry_at >= before + timedelta(seconds=599)
+
+
+@pytest.mark.parametrize(
+    ("previous_attempts", "expected_outcome"),
+    [(8, "publication_rescheduled"), (9, "completed_with_delivery_failure")],
+    ids=["ninth-failure-retries", "tenth-failure-finishes"],
+)
+def test_transient_publication_failures_retry_until_attempt_limit(
+    monkeypatch, tmp_path, previous_attempts, expected_outcome
+) -> None:
+    reminder_id = prepare_database(monkeypatch, tmp_path, delete_after_two_days=True)
+    claim = claim_occurrence(reminder_id)
+    sent_at = datetime(2026, 7, 18, 9, 0, tzinfo=UTC)
+    activate_claimed_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        claim_token="claim-1",
+        message_id=50,
+        sent_at=sent_at,
+    )
+    result = complete_completion_occurrence(
+        occurrence_id=claim["occurrence_id"],
+        chat_id=100,
+        callback_message_id=50,
+        callback_message_sent_at=sent_at,
+        user_id=200,
+        display_name="Участник",
+        completed_at=sent_at + timedelta(minutes=1),
+    )
+    assert result["outcome"] == "completing"
+    with database_module.get_connection() as connection:
+        connection.execute(
+            "UPDATE reminder_completion_occurrences SET completion_attempts = ? "
+            "WHERE id = ?",
+            (previous_attempts, claim["occurrence_id"]),
+        )
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            fixed = datetime(2026, 7, 18, 9, 2, tzinfo=UTC)
+            return fixed if tz is not None else fixed.replace(tzinfo=None)
+
+    class FailingPublicationBot(FakeBot):
+        async def send_message(self, **kwargs):
+            self.sent.append(kwargs)
+            raise RuntimeError("temporary network failure")
+
+    monkeypatch.setattr(completion_service_module, "datetime", FrozenDateTime)
+    monkeypatch.setattr(database_module, "datetime", FrozenDateTime)
+    bot = FailingPublicationBot()
+
+    assert (
+        asyncio.run(publish_completion_occurrence(bot, claim["occurrence_id"]))
+        == expected_outcome
+    )
+
+    assert bot.sent == [
+        {
+            "chat_id": 100,
+            "text": "Проверить релиз\n\n✅ Выполнено",
+        }
+    ]
+    with database_module.get_connection() as connection:
+        occurrence = connection.execute(
+            "SELECT * FROM reminder_completion_occurrences"
+        ).fetchone()
+    assert occurrence["completion_claim_token"] is None
+    assert occurrence["completion_claimed_at_utc"] is None
+    assert occurrence["completion_message_id"] is None
+    assert occurrence["next_repeat_at_utc"] is None
+    assert occurrence["completed_by_user_id"] == 200
+    assert (
+        occurrence["completion_last_error"] == "RuntimeError: temporary network failure"
+    )
+    if previous_attempts == 8:
+        assert occurrence["status"] == "completing"
+        assert occurrence["completion_attempts"] == 9
+        assert (
+            occurrence["completion_next_attempt_at_utc"] == "2026-07-18T09:03:00+00:00"
+        )
+        assert bot.edited_text == []
+    else:
+        assert occurrence["status"] == "completed"
+        assert occurrence["completion_delivery_status"] == "fallback"
+        assert occurrence["completion_next_attempt_at_utc"] is None
+        assert bot.edited_text == [
+            {
+                "chat_id": 100,
+                "message_id": 50,
+                "text": "Проверить релиз\n\n✅ Выполнено",
+                "reply_markup": None,
+            }
+        ]
 
 
 def test_parallel_completion_publishers_create_one_final_message(

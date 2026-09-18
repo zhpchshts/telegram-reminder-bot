@@ -12,6 +12,13 @@ from app.tma_auth import (
 
 
 BOT_TOKEN = "123456789:test-token"
+# Computed independently from the fixed data-check string with HMAC-SHA256.
+SIGNED_INIT_DATA_FIELDS = {
+    "auth_date": "1700000000",
+    "query_id": "AAEAAAE",
+    "user": '{"id":123}',
+    "hash": "ab6f10b246aa743fbd5e9bf1bfc5999063eaafaf2a3f7d0e5d5d8d16e27fc095",
+}
 
 
 def build_signed_init_data(fields: dict[str, str]) -> str:
@@ -21,6 +28,55 @@ def build_signed_init_data(fields: dict[str, str]) -> str:
         bot_token=BOT_TOKEN,
     )
     return urlencode(signed_fields)
+
+
+def test_telegram_init_data_matches_fixed_signature() -> None:
+    assert (
+        calculate_init_data_hash(
+            SIGNED_INIT_DATA_FIELDS,
+            bot_token=BOT_TOKEN,
+        )
+        == SIGNED_INIT_DATA_FIELDS["hash"]
+    )
+
+    result = validate_telegram_init_data(
+        urlencode(SIGNED_INIT_DATA_FIELDS),
+        bot_token=BOT_TOKEN,
+        now=1_700_000_030,
+    )
+
+    assert result.auth_date == 1_700_000_000
+    assert result.user == {"id": 123}
+
+
+@pytest.mark.parametrize("age_seconds", [86_399, 86_400, 86_401])
+def test_telegram_init_data_default_lifetime_is_one_day(age_seconds: int) -> None:
+    init_data = urlencode(SIGNED_INIT_DATA_FIELDS)
+    now = 1_700_000_000 + age_seconds
+
+    if age_seconds > 86_400:
+        with pytest.raises(TelegramInitDataError, match="init_data is expired"):
+            validate_telegram_init_data(init_data, bot_token=BOT_TOKEN, now=now)
+    else:
+        assert validate_telegram_init_data(
+            init_data, bot_token=BOT_TOKEN, now=now
+        ).user == {"id": 123}
+
+
+@pytest.mark.parametrize("field_name", ["user", "chat"])
+@pytest.mark.parametrize("raw_value", ["[]", "null", "123", '"text"'])
+def test_telegram_init_data_requires_json_objects(
+    field_name: str,
+    raw_value: str,
+) -> None:
+    init_data = build_signed_init_data(
+        {"auth_date": "1700000000", field_name: raw_value}
+    )
+
+    with pytest.raises(
+        TelegramInitDataError, match=f"{field_name} must be a JSON object"
+    ):
+        validate_telegram_init_data(init_data, bot_token=BOT_TOKEN, now=1_700_000_030)
 
 
 def test_parse_init_data_rejects_empty_value() -> None:

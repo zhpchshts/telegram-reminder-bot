@@ -133,10 +133,13 @@ def test_get_nearest_future_datetime_for_time_same_day_future() -> None:
     assert result == datetime(2026, 6, 8, 12, 12)
 
 
-def test_get_nearest_future_datetime_for_time_next_day_when_time_passed() -> None:
+@pytest.mark.parametrize(
+    "now", [datetime(2026, 6, 8, 12, 12), datetime(2026, 6, 8, 13)]
+)
+def test_get_nearest_future_datetime_for_time_next_day_when_time_passed(now) -> None:
     result = get_nearest_future_datetime_for_time(
         "12:12",
-        now=datetime(2026, 6, 8, 13, 0),
+        now=now,
     )
 
     assert result == datetime(2026, 6, 9, 12, 12)
@@ -152,11 +155,14 @@ def test_get_nearest_future_weekday_datetime_same_day_future() -> None:
     assert result == datetime(2026, 6, 8, 12, 12)
 
 
-def test_get_nearest_future_weekday_datetime_next_week_when_time_passed() -> None:
+@pytest.mark.parametrize(
+    "now", [datetime(2026, 6, 8, 12, 12), datetime(2026, 6, 8, 13)]
+)
+def test_get_nearest_future_weekday_datetime_next_week_when_time_passed(now) -> None:
     result = get_nearest_future_weekday_datetime(
         "MON",
         "12:12",
-        now=datetime(2026, 6, 8, 13, 0),
+        now=now,
     )
 
     assert result == datetime(2026, 6, 15, 12, 12)
@@ -293,3 +299,23 @@ def test_get_yearly_datetime_on_or_after_skips_non_leap_years() -> None:
     )
 
     assert result == datetime(2028, 2, 29, 9, 30)
+
+
+def test_get_yearly_datetime_on_or_after_includes_exact_lower_bound() -> None:
+    bound = datetime(2026, 6, 8, 12, 12)
+    assert (
+        get_yearly_datetime_on_or_after(
+            selected_start_at=datetime(2000, 6, 8, 12, 12), lower_bound=bound
+        )
+        == bound
+    )
+
+
+def test_get_monthly_weekday_datetime_on_or_after_includes_exact_lower_bound() -> None:
+    bound = datetime(2026, 6, 1, 12, 12)
+    assert get_monthly_weekday_datetime_on_or_after(1, "MON", "12:12", bound) == bound
+
+
+def test_get_monthly_day_datetime_on_or_after_includes_exact_lower_bound() -> None:
+    bound = datetime(2026, 6, 11, 12, 12)
+    assert get_monthly_day_datetime_on_or_after(11, "12:12", bound) == bound

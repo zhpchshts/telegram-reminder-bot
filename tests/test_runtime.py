@@ -14,6 +14,7 @@ from app.runtime import (
     create_bot_runtime,
     prepare_bot_runtime,
     run_polling_and_api_runtime,
+    shutdown_runtime,
 )
 
 
@@ -426,3 +427,44 @@ def test_combined_runtime_bounds_stuck_polling_shutdown(monkeypatch) -> None:
 
     assert "polling_stop_requested" in calls
     assert ("runtime_stopped", runtime) in calls
+
+
+@pytest.mark.parametrize(
+    ("scheduler_running", "shutdown_raises"),
+    [(True, False), (False, False), (True, True)],
+)
+def test_shutdown_runtime_clears_readiness_and_closes_resources(
+    monkeypatch: pytest.MonkeyPatch,
+    scheduler_running: bool,
+    shutdown_raises: bool,
+) -> None:
+    calls = []
+    fastapi_app = FastAPI()
+    fastapi_app.state.reminders_restored = True
+
+    class FakeScheduler:
+        running = scheduler_running
+
+        def shutdown(self, *, wait: bool) -> None:
+            assert fastapi_app.state.reminders_restored is False
+            calls.append(("scheduler.shutdown", wait))
+            if shutdown_raises:
+                raise RuntimeError("scheduler shutdown failed")
+            self.running = False
+
+    async def close_session() -> None:
+        assert fastapi_app.state.reminders_restored is False
+        calls.append("session.close")
+
+    runtime = BotRuntime(
+        bot=SimpleNamespace(session=SimpleNamespace(close=close_session)),
+        dispatcher=object(),
+        api_app=fastapi_app,
+    )
+    monkeypatch.setattr(runtime_module, "scheduler", FakeScheduler())
+
+    asyncio.run(shutdown_runtime(runtime))
+
+    assert fastapi_app.state.reminders_restored is False
+    expected_calls = [("scheduler.shutdown", True)] if scheduler_running else []
+    assert calls == [*expected_calls, "session.close"]

@@ -1,5 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import html
+
+import pytest
 
 from app.formatting import (
     format_datetime_ru,
@@ -15,6 +17,23 @@ def test_format_datetime_ru() -> None:
     result = format_datetime_ru(datetime(2026, 6, 8, 12, 12))
 
     assert result == "08 июня в 12:12"
+
+
+@pytest.mark.parametrize(
+    ("timezone_name", "expected"),
+    [
+        ("UTC", "08 июня в 22:00"),
+        ("Europe/Moscow", "09 июня в 01:00"),
+        ("Asia/Yekaterinburg", "09 июня в 03:00"),
+    ],
+)
+def test_format_datetime_ru_converts_aware_datetime(timezone_name, expected) -> None:
+    assert (
+        format_datetime_ru(
+            datetime(2026, 6, 8, 22, 0, tzinfo=timezone.utc), timezone_name
+        )
+        == expected
+    )
 
 
 def test_format_period_line_once() -> None:

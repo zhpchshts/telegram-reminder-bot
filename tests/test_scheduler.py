@@ -143,6 +143,32 @@ def build_reminder_data(
     )
 
 
+@pytest.fixture
+def scheduler_clock(monkeypatch):
+    class Clock(datetime):
+        current = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return cls.current.replace(tzinfo=None)
+            return cls.current.astimezone(tz)
+
+    monkeypatch.setattr(scheduler_module, "datetime", Clock)
+    return Clock
+
+
+@pytest.fixture
+def expired_location_cache_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "delete_expired_weather_location_cache",
+        lambda **kwargs: calls.append(kwargs) or 0,
+    )
+    return calls
+
+
 def test_schedule_once_reminder_adds_date_job(monkeypatch) -> None:
     fake_scheduler = FakeScheduler()
     monkeypatch.setattr(scheduler_module, "scheduler", fake_scheduler)
@@ -603,6 +629,12 @@ def test_get_latest_unhandled_run_at_excludes_watermark_and_old_once() -> None:
         tracking_started_at=datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc),
         interval_days=None,
     )
+    handled_once = build_reminder_data(
+        schedule_type="once",
+        start_at=watermark.replace(tzinfo=None),
+        last_handled_at=watermark,
+        interval_days=None,
+    )
 
     assert (
         scheduler_module.get_latest_unhandled_run_at(
@@ -618,6 +650,27 @@ def test_get_latest_unhandled_run_at_excludes_watermark_and_old_once() -> None:
         )
         is None
     )
+    assert (
+        scheduler_module.get_latest_unhandled_run_at(
+            handled_once,
+            now=watermark + timedelta(hours=1),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("schedule_type", ["once", "every_days"])
+def test_get_latest_unhandled_run_at_includes_occurrence_due_now(
+    schedule_type,
+) -> None:
+    now = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+    reminder = build_reminder_data(
+        schedule_type=schedule_type,
+        start_at=now.replace(tzinfo=None),
+        interval_days=None if schedule_type == "once" else 1,
+    )
+
+    assert scheduler_module.get_latest_unhandled_run_at(reminder, now=now) == now
 
 
 def test_get_latest_unhandled_run_at_handles_dst() -> None:
@@ -822,7 +875,10 @@ def test_late_notice_uses_scheduled_time_threshold(
     )
 
 
-def test_fresh_weather_catchup_builds_new_html_report(monkeypatch) -> None:
+@pytest.mark.parametrize("age", [timedelta(hours=1), timedelta(hours=6)])
+def test_fresh_weather_catchup_builds_new_html_report(
+    monkeypatch, scheduler_clock, age
+) -> None:
     bot = FakeBot()
     build_calls = []
     monkeypatch.setattr(
@@ -845,19 +901,20 @@ def test_fresh_weather_catchup_builds_new_html_report(monkeypatch) -> None:
         lambda *args, **kwargs: True,
     )
 
-    asyncio.run(
+    outcome = asyncio.run(
         scheduler_module.deliver_reminder_occurrence(
             bot,
             build_reminder_data(
                 reminder_kind=REMINDER_KIND_WEATHER,
                 reminder_text="Екатеринбург",
             ),
-            datetime.now(timezone.utc) - timedelta(hours=1),
+            scheduler_clock.current - age,
             is_catchup=True,
         )
     )
 
     assert build_calls == ["Екатеринбург"]
+    assert outcome == scheduler_module.DELIVERY_OUTCOME_SENT
     assert bot.messages[0]["parse_mode"] == "HTML"
     assert "<b>Новый прогноз</b>" in bot.messages[0]["text"]
 
@@ -1257,15 +1314,18 @@ def test_persistent_claim_prevents_parallel_physical_send(
     assert len(bot.messages) == 1
 
 
+@pytest.mark.parametrize("reminder_kind", [REMINDER_KIND_TEXT, REMINDER_KIND_WEATHER])
 def test_delivery_claim_is_checked_immediately_before_telegram_send(
     monkeypatch,
     tmp_path,
+    reminder_kind,
 ) -> None:
     use_scheduler_test_db(monkeypatch, tmp_path)
     scheduled_for = datetime.now(timezone.utc)
     reminder_id = database_module.create_reminder_in_db(
         chat_id=100,
         reminder_text="Не отправлять после потери claim",
+        reminder_kind=reminder_kind,
         schedule_type="every_days",
         start_at=scheduled_for.replace(tzinfo=None),
         interval_days=1,
@@ -1277,6 +1337,11 @@ def test_delivery_claim_is_checked_immediately_before_telegram_send(
         scheduler_module,
         "refresh_reminder_delivery_claim",
         lambda **kwargs: False,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "build_weather_report",
+        lambda raw_locations: "<b>Прогноз</b>",
     )
     bot = FakeBot()
 
@@ -1312,51 +1377,164 @@ def test_long_delivery_refreshes_claim_until_pre_send_guard(
     refresh_calls: list[dict[str, object]] = []
     real_refresh = database_module.refresh_reminder_delivery_claim
 
-    def tracking_refresh(**kwargs) -> bool:
-        refresh_calls.append(kwargs)
-        return real_refresh(**kwargs)
+    async def run_delivery() -> str:
+        loop = asyncio.get_running_loop()
+        heartbeat_ticks = asyncio.Queue()
+        refresh_finished = asyncio.Queue()
 
-    async def slow_delivery(
-        bot,
-        received_reminder,
-        received_scheduled_for,
-        *,
-        is_catchup,
-        expected_revision,
-    ) -> str:
-        await asyncio.sleep(0.04)
-        guard = scheduler_module.CURRENT_DELIVERY_CLAIM_GUARD.get()
-        assert guard is not None
-        await guard()
-        return scheduler_module.DELIVERY_OUTCOME_SENT
+        async def wait_for_heartbeat_tick(delay: float) -> None:
+            assert delay == scheduler_module.REMINDER_DELIVERY_CLAIM_HEARTBEAT_SECONDS
+            await heartbeat_ticks.get()
 
-    monkeypatch.setattr(
-        scheduler_module,
-        "REMINDER_DELIVERY_CLAIM_HEARTBEAT_SECONDS",
-        0.01,
-    )
-    monkeypatch.setattr(
-        scheduler_module,
-        "refresh_reminder_delivery_claim",
-        tracking_refresh,
-    )
-    monkeypatch.setattr(
-        scheduler_module,
-        "deliver_reminder_occurrence",
-        slow_delivery,
-    )
+        def tracking_refresh(**kwargs) -> bool:
+            refreshed = real_refresh(**kwargs)
+            refresh_calls.append(kwargs)
+            loop.call_soon_threadsafe(refresh_finished.put_nowait, refreshed)
+            return refreshed
 
-    outcome = asyncio.run(
-        scheduler_module.deliver_persisted_reminder_occurrence(
+        async def slow_delivery(
+            bot,
+            received_reminder,
+            received_scheduled_for,
+            *,
+            is_catchup,
+            expected_revision,
+        ) -> str:
+            # Permit each heartbeat explicitly; elapsed wall time is not the oracle.
+            for _ in range(2):
+                heartbeat_ticks.put_nowait(None)
+                assert await asyncio.wait_for(refresh_finished.get(), timeout=5)
+            assert len(refresh_calls) == 2
+            guard = scheduler_module.CURRENT_DELIVERY_CLAIM_GUARD.get()
+            assert guard is not None
+            await guard()
+            assert await asyncio.wait_for(refresh_finished.get(), timeout=5)
+            assert len(refresh_calls) == 3
+            return scheduler_module.DELIVERY_OUTCOME_SENT
+
+        monkeypatch.setattr(scheduler_module.asyncio, "sleep", wait_for_heartbeat_tick)
+        monkeypatch.setattr(
+            scheduler_module, "refresh_reminder_delivery_claim", tracking_refresh
+        )
+        monkeypatch.setattr(
+            scheduler_module, "deliver_reminder_occurrence", slow_delivery
+        )
+        return await scheduler_module.deliver_persisted_reminder_occurrence(
             FakeBot(),
             reminder,
             scheduled_for,
             is_catchup=False,
         )
-    )
+
+    outcome = asyncio.run(run_delivery())
 
     assert outcome == scheduler_module.DELIVERY_OUTCOME_SENT
-    assert len(refresh_calls) >= 3
+    assert len(refresh_calls) == 3
+    assert len({call["claim_token"] for call in refresh_calls}) == 1
+
+
+@pytest.mark.parametrize(
+    ("claim_age_seconds", "expected_messages"),
+    [(119, 0), (120, 1), (121, 1)],
+)
+def test_delivery_recovers_claim_only_after_two_minutes(
+    monkeypatch, tmp_path, scheduler_clock, claim_age_seconds, expected_messages
+) -> None:
+    use_scheduler_test_db(monkeypatch, tmp_path)
+    now = scheduler_clock.current
+    scheduled_for = now - timedelta(minutes=10)
+    reminder_id = database_module.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Восстановить потерянную доставку",
+        schedule_type="once",
+        start_at=scheduled_for.replace(tzinfo=None),
+        timezone="UTC",
+    )
+    reminder = scheduler_module.build_reminder_read_data(
+        database_module.get_active_reminder_from_db(reminder_id)
+    )
+    claimed_at = now - timedelta(seconds=claim_age_seconds)
+    initial_claim = database_module.claim_reminder_delivery_occurrence(
+        reminder_id=reminder_id,
+        expected_revision=reminder.revision,
+        scheduled_for_utc=scheduled_for,
+        claim_token="previous-worker",
+        now=claimed_at,
+        stale_before=claimed_at - timedelta(minutes=2),
+        max_attempts=10,
+    )
+    assert initial_claim["outcome"] == "claimed"
+    bot = FakeBot()
+
+    outcome = asyncio.run(
+        scheduler_module.deliver_persisted_reminder_occurrence(
+            bot, reminder, scheduled_for, is_catchup=False
+        )
+    )
+
+    assert len(bot.messages) == expected_messages
+    assert outcome == (
+        scheduler_module.DELIVERY_OUTCOME_SENT
+        if expected_messages
+        else scheduler_module.DELIVERY_OUTCOME_RETRY_SCHEDULED
+    )
+
+
+@pytest.mark.parametrize(
+    ("forbidden", "attempts", "should_fail"),
+    [(True, 1, True), (False, 9, False), (False, 10, True)],
+)
+def test_delivery_error_stops_for_terminal_error_or_attempt_limit(
+    monkeypatch, scheduler_clock, forbidden, attempts, should_fail
+) -> None:
+    failed = []
+    retried = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "fail_reminder_delivery_occurrence",
+        lambda **kwargs: failed.append(kwargs),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "reschedule_reminder_delivery_occurrence",
+        lambda **kwargs: retried.append(kwargs),
+    )
+    error = (
+        TelegramForbiddenError(
+            method=SendMessage(chat_id=100, text="Напоминание"),
+            message="bot was blocked",
+        )
+        if forbidden
+        else RuntimeError("temporary failure")
+    )
+
+    outcome = asyncio.run(
+        scheduler_module.record_reminder_delivery_error(
+            occurrence_id=12,
+            claim_token="delivery-owner",
+            attempts=attempts,
+            error=error,
+        )
+    )
+
+    expected_call = {
+        "occurrence_id": 12,
+        "claim_token": "delivery-owner",
+        "last_error": f"{type(error).__name__}: {error}",
+    }
+    if should_fail:
+        assert outcome == scheduler_module.DELIVERY_OUTCOME_FAILED
+        assert failed == [expected_call]
+        assert retried == []
+    else:
+        assert outcome == scheduler_module.DELIVERY_OUTCOME_RETRY_SCHEDULED
+        assert failed == []
+        assert retried == [
+            {
+                **expected_call,
+                "next_attempt_at": scheduler_clock.current + timedelta(seconds=60),
+            }
+        ]
 
 
 def test_database_error_after_send_is_persisted_for_retry(
@@ -1855,10 +2033,12 @@ def test_restore_does_not_schedule_regular_reminder_that_became_inactive(
     assert not any(job["id"].isdigit() for job in fake_scheduler.jobs)
 
 
+@pytest.mark.parametrize("current_hour", [10, 12])
 def test_restore_sent_unrecorded_does_not_repeat_catchup(
     monkeypatch,
+    current_hour,
 ) -> None:
-    fixed_now = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+    fixed_now = datetime(2026, 7, 18, current_hour, 0, tzinfo=timezone.utc)
 
     class FrozenDateTime(datetime):
         @classmethod
@@ -2492,10 +2672,35 @@ def test_schedule_weather_report_prefetch_adds_minutely_job(monkeypatch) -> None
     assert "next_run_time" in job
 
 
+@pytest.mark.parametrize(
+    (
+        "minutes_until_due",
+        "cached",
+        "build_minutes",
+        "expected_builds",
+        "expected_saves",
+    ),
+    [
+        pytest.param(4, False, 0, 1, 1, id="upcoming"),
+        pytest.param(5, False, 0, 1, 1, id="window-boundary"),
+        pytest.param(6, False, 0, 0, 0, id="outside-window"),
+        pytest.param(4, True, 0, 0, 0, id="already-prepared"),
+        pytest.param(4, False, 4, 1, 0, id="finished-at-due-time"),
+        pytest.param(4, False, 5, 1, 0, id="finished-after-due-time"),
+    ],
+)
 def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
     monkeypatch,
+    scheduler_clock,
+    expired_location_cache_calls,
+    minutes_until_due,
+    cached,
+    build_minutes,
+    expected_builds,
+    expected_saves,
 ) -> None:
-    scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=4)
+    now = scheduler_clock.current
+    scheduled_for = now + timedelta(minutes=minutes_until_due)
     reminder_data = SimpleNamespace(
         id=12,
         revision=4,
@@ -2535,7 +2740,7 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
     monkeypatch.setattr(
         scheduler_module,
         "get_prepared_weather_report",
-        lambda *args: None,
+        lambda *args: {"report_html": "Уже подготовленный прогноз"} if cached else None,
     )
 
     def fake_build_weather_report(
@@ -2553,6 +2758,7 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
                 "request_attempts": request_attempts,
             }
         )
+        scheduler_clock.current += timedelta(minutes=build_minutes)
         return "Подготовленный прогноз"
 
     def fake_save_prepared_weather_report(
@@ -2586,27 +2792,38 @@ def test_prefetch_weather_reports_saves_report_for_upcoming_reminder(
 
     asyncio.run(scheduler_module.prefetch_weather_reports())
 
-    assert build_calls == [
-        {
-            "raw_locations": "Екатеринбург; Хургада",
-            "target_time_utc": scheduled_for,
-            "raise_on_error": True,
-            "request_attempts": 1,
-        }
+    assert expired_location_cache_calls == [
+        {"expired_before": now - timedelta(days=30), "limit": 1000}
     ]
-    assert saved_reports == [
-        {
-            "reminder_id": 12,
-            "reminder_revision": 4,
-            "scheduled_for": scheduled_for,
-            "reminder_text": "Екатеринбург; Хургада",
-            "report_html": "Подготовленный прогноз",
-        }
-    ]
+    assert (
+        build_calls
+        == [
+            {
+                "raw_locations": "Екатеринбург; Хургада",
+                "target_time_utc": scheduled_for,
+                "raise_on_error": True,
+                "request_attempts": 1,
+            }
+        ][:expected_builds]
+    )
+    assert (
+        saved_reports
+        == [
+            {
+                "reminder_id": 12,
+                "reminder_revision": 4,
+                "scheduled_for": scheduled_for,
+                "reminder_text": "Екатеринбург; Хургада",
+                "report_html": "Подготовленный прогноз",
+            }
+        ][:expected_saves]
+    )
 
 
-def test_prefetch_weather_reports_does_not_save_failed_report(monkeypatch) -> None:
-    scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=4)
+def test_prefetch_weather_reports_does_not_save_failed_report(
+    monkeypatch, scheduler_clock, expired_location_cache_calls
+) -> None:
+    scheduled_for = scheduler_clock.current + timedelta(minutes=4)
     reminder_data = SimpleNamespace(
         id=12,
         revision=4,
@@ -2656,13 +2873,18 @@ def test_prefetch_weather_reports_does_not_save_failed_report(monkeypatch) -> No
     asyncio.run(scheduler_module.prefetch_weather_reports())
 
     assert saved_reports == []
+    assert expired_location_cache_calls == [
+        {"expired_before": scheduler_clock.current - timedelta(days=30), "limit": 1000}
+    ]
 
 
 def test_prefetch_weather_reports_continues_when_cache_is_unavailable(
     monkeypatch,
     caplog,
+    scheduler_clock,
+    expired_location_cache_calls,
 ) -> None:
-    scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=4)
+    scheduled_for = scheduler_clock.current + timedelta(minutes=4)
     reminder_data = SimpleNamespace(
         id=12,
         revision=4,
@@ -2717,6 +2939,9 @@ def test_prefetch_weather_reports_continues_when_cache_is_unavailable(
         asyncio.run(scheduler_module.prefetch_weather_reports())
 
     assert len(build_calls) == 1
+    assert expired_location_cache_calls == [
+        {"expired_before": scheduler_clock.current - timedelta(days=30), "limit": 1000}
+    ]
     assert "Could not delete expired prepared weather reports" in caplog.text
     assert "Prepared weather report cache lookup failed" in caplog.text
     assert "Prepared weather report cache write failed" in caplog.text
@@ -3138,9 +3363,9 @@ def test_message_is_not_deleted_before_delete_at(monkeypatch) -> None:
     )
 
 
-def test_message_is_deleted_at_delete_at(monkeypatch) -> None:
+def test_message_is_deleted_at_delete_at(monkeypatch, scheduler_clock) -> None:
     bot = FakeBot()
-    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    sent_at = scheduler_clock.current - timedelta(hours=47, minutes=45)
     row = build_message_deletion_row(sent_at=sent_at)
     removed_ids = []
     monkeypatch.setattr(
@@ -3182,7 +3407,7 @@ def test_message_not_found_is_idempotent_success(monkeypatch) -> None:
     assert removed_ids == [1]
 
 
-def test_temporary_delete_error_is_rescheduled(monkeypatch) -> None:
+def test_temporary_delete_error_is_rescheduled(monkeypatch, scheduler_clock) -> None:
     class NetworkFailureBot(FakeBot):
         async def delete_message(self, chat_id: int, message_id: int) -> bool:
             raise TelegramNetworkError(
@@ -3190,7 +3415,7 @@ def test_temporary_delete_error_is_rescheduled(monkeypatch) -> None:
                 message="network unavailable",
             )
 
-    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    sent_at = scheduler_clock.current - timedelta(hours=47, minutes=46)
     row = build_message_deletion_row(sent_at=sent_at)
     rescheduled = []
     monkeypatch.setattr(
@@ -3208,14 +3433,12 @@ def test_temporary_delete_error_is_rescheduled(monkeypatch) -> None:
 
     assert rescheduled[0]["delete_attempts"] == 1
     assert "network unavailable" in rescheduled[0]["last_error"]
-    assert (
-        timedelta(seconds=50)
-        <= (rescheduled[0]["next_attempt_at"] - datetime.now(timezone.utc))
-        <= timedelta(seconds=60)
+    assert rescheduled[0]["next_attempt_at"] == scheduler_clock.current + timedelta(
+        seconds=60
     )
 
 
-def test_retry_after_is_respected(monkeypatch) -> None:
+def test_retry_after_is_respected(monkeypatch, scheduler_clock) -> None:
     class RetryAfterBot(FakeBot):
         async def delete_message(self, chat_id: int, message_id: int) -> bool:
             raise TelegramRetryAfter(
@@ -3224,7 +3447,7 @@ def test_retry_after_is_respected(monkeypatch) -> None:
                 retry_after=120,
             )
 
-    sent_at = datetime.now(timezone.utc) - timedelta(hours=47, minutes=46)
+    sent_at = scheduler_clock.current - timedelta(hours=47, minutes=46)
     row = build_message_deletion_row(sent_at=sent_at)
     rescheduled = []
     monkeypatch.setattr(
@@ -3237,10 +3460,8 @@ def test_retry_after_is_respected(monkeypatch) -> None:
         scheduler_module.process_reminder_message_deletion(RetryAfterBot(), row)
     )
 
-    assert (
-        timedelta(seconds=110)
-        <= (rescheduled[0]["next_attempt_at"] - datetime.now(timezone.utc))
-        <= timedelta(seconds=120)
+    assert rescheduled[0]["next_attempt_at"] == scheduler_clock.current + timedelta(
+        seconds=120
     )
 
 
@@ -3266,9 +3487,12 @@ def test_terminal_delete_error_removes_queue_item(monkeypatch) -> None:
     assert removed_ids == [1]
 
 
-def test_expired_message_is_removed_without_telegram_call(monkeypatch) -> None:
+@pytest.mark.parametrize("age", [timedelta(hours=48), timedelta(hours=48, seconds=1)])
+def test_expired_message_is_removed_without_telegram_call(
+    monkeypatch, scheduler_clock, age
+) -> None:
     bot = FakeBot()
-    sent_at = datetime.now(timezone.utc) - timedelta(hours=48, seconds=1)
+    sent_at = scheduler_clock.current - age
     row = build_message_deletion_row(sent_at=sent_at)
     removed_ids = []
     monkeypatch.setattr(
@@ -3385,6 +3609,7 @@ def test_schedule_reminder_delivery_retention_cleanup_adds_bounded_job(
 
 def test_cleanup_terminal_reminder_deliveries_uses_retention_and_batch(
     monkeypatch,
+    scheduler_clock,
 ) -> None:
     calls: list[dict[str, object]] = []
 
@@ -3402,9 +3627,7 @@ def test_cleanup_terminal_reminder_deliveries_uses_retention_and_batch(
 
     assert len(calls) == 1
     assert calls[0]["limit"] == 1000
-    expired_before = calls[0]["expired_before"]
-    assert isinstance(expired_before, datetime)
-    assert datetime.now(timezone.utc) - expired_before >= timedelta(days=7)
+    assert calls[0]["expired_before"] == scheduler_clock.current - timedelta(days=7)
 
 
 def test_cleanup_terminal_reminder_deliveries_drains_backlog_in_yielding_batches(

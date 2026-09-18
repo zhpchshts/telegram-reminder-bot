@@ -248,9 +248,21 @@ def test_create_reminder_is_idempotent_per_chat_and_payload(
 
     assert (first_id, first_created, first_status) == (1, True, "pending")
     assert (second_id, second_created, second_status) == (1, False, "pending")
+    other_id, other_created, other_status = database.create_reminder_idempotently_in_db(
+        **{**create_kwargs, "chat_id": 200}
+    )
+    assert (other_id, other_created, other_status) == (2, True, "pending")
+    assert database.create_reminder_idempotently_in_db(
+        **{**create_kwargs, "chat_id": 200}
+    ) == (other_id, False, "pending")
     with database.get_connection() as connection:
-        count = connection.execute("SELECT COUNT(*) FROM reminders").fetchone()[0]
-    assert count == 1
+        rows = connection.execute(
+            "SELECT id, chat_id, text, revision FROM reminders ORDER BY id"
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        (first_id, 100, "Не создать дважды", 1),
+        (other_id, 200, "Не создать дважды", 1),
+    ]
 
 
 def test_idempotency_key_rejects_different_payload_in_same_chat(
@@ -323,9 +335,11 @@ def test_active_reminder_limit_is_atomic_and_scoped_to_chat(
     assert replacement_id == 4
 
 
+@pytest.mark.parametrize("limit", [1, 100])
 def test_delivery_occurrence_retention_deletes_only_old_terminal_rows(
     monkeypatch,
     tmp_path,
+    limit,
 ) -> None:
     use_test_db(monkeypatch, tmp_path)
     reminder_id = database.create_reminder_in_db(
@@ -360,10 +374,10 @@ def test_delivery_occurrence_retention_deletes_only_old_terminal_rows(
 
     deleted_count = database.delete_terminal_reminder_delivery_occurrences(
         expired_before=now - timedelta(days=7),
-        limit=100,
+        limit=limit,
     )
 
-    assert deleted_count == 2
+    assert deleted_count == min(limit, 2)
     with database.get_connection() as connection:
         remaining = connection.execute(
             """
@@ -372,10 +386,13 @@ def test_delivery_occurrence_retention_deletes_only_old_terminal_rows(
             ORDER BY scheduled_for_utc
             """
         ).fetchall()
-    assert [(row["status"], row["updated_at_utc"]) for row in remaining] == [
+    expected = [
         ("failed", fresh),
         ("pending", old),
     ]
+    if limit == 1:
+        expected.insert(0, ("cancelled", old))
+    assert [(row["status"], row["updated_at_utc"]) for row in remaining] == expected
 
 
 def test_weather_location_cache_ttl_refreshes_and_cleans_derived_rows(
@@ -426,24 +443,63 @@ def test_init_db_invalidates_only_legacy_naive_weather_cache(
         schedule_type="once",
         start_at=datetime(2099, 6, 8, 12, 12),
     )
+    database.set_chat_timezone(100, "Europe/Moscow")
+    reminder_before = dict(database.get_active_reminder_from_db(reminder_id))
     with database.get_connection() as connection:
-        connection.execute(
+        connection.executemany(
             """
             INSERT INTO weather_location_cache (
                 location_key, name, latitude, longitude, updated_at
-            ) VALUES ('legacy', 'Старый кэш', 56.8, 60.6,
-                      '2026-08-26T12:00:00')
-            """
+            ) VALUES (?, ?, 56.8, 60.6, ?)
+            """,
+            [
+                ("legacy", "Старый кэш", "2026-08-26T12:00:00"),
+                ("utc", "Актуальный кэш", "2026-08-26T12:00:00+00:00"),
+            ],
         )
 
     database.init_db()
+    database.init_db()
 
-    assert database.get_active_reminder_from_db(reminder_id) is not None
+    assert dict(database.get_active_reminder_from_db(reminder_id)) == reminder_before
+    assert database.get_chat_timezone(100) == "Europe/Moscow"
     with database.get_connection() as connection:
-        cache_count = connection.execute(
-            "SELECT COUNT(*) FROM weather_location_cache"
-        ).fetchone()[0]
-    assert cache_count == 0
+        cache_rows = connection.execute(
+            "SELECT location_key, name, latitude, longitude, updated_at "
+            "FROM weather_location_cache"
+        ).fetchall()
+    assert [tuple(row) for row in cache_rows] == [
+        ("utc", "Актуальный кэш", 56.8, 60.6, "2026-08-26T12:00:00+00:00")
+    ]
+
+
+def test_init_db_preserves_existing_delivery_tracking_boundary(
+    monkeypatch, tmp_path
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    reminder_id = database.create_reminder_in_db(
+        chat_id=100,
+        reminder_text="Не сбрасывать историю доставки",
+        schedule_type="every_days",
+        start_at=datetime(2026, 7, 1, 10, 0),
+        interval_days=1,
+    )
+    with database.get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE reminders
+            SET delivery_tracking_started_at_utc = '2020-01-01T00:00:00+00:00',
+                last_handled_scheduled_for_utc = '2026-07-02T05:00:00+00:00'
+            WHERE id = ?
+            """,
+            (reminder_id,),
+        )
+    before = dict(database.get_active_reminder_from_db(reminder_id))
+
+    database.init_db()
+    database.init_db()
+
+    assert dict(database.get_active_reminder_from_db(reminder_id)) == before
 
 
 def test_init_db_adds_completion_publication_fields_without_losing_occurrence(
@@ -676,6 +732,82 @@ def test_update_reminder_resets_delivery_tracking_state(
     assert reminder["revision"] == 2
 
 
+@pytest.mark.parametrize(
+    ("chat_id", "expected_revision"),
+    [(200, 2), (100, 1)],
+    ids=["foreign-chat", "stale-revision"],
+)
+def test_rejected_update_preserves_reminders_and_delivery_claims(
+    monkeypatch, tmp_path, chat_id, expected_revision
+) -> None:
+    use_test_db(monkeypatch, tmp_path)
+    reminder_ids = [
+        database.create_reminder_in_db(
+            chat_id=owner,
+            reminder_text=f"Напоминание чата {owner}",
+            schedule_type="every_days",
+            start_at=datetime(2026, 7, 1, 10, 0),
+            interval_days=1,
+        )
+        for owner in (100, 200)
+    ]
+    reminder_id = reminder_ids[0]
+    assert database.update_reminder_in_db(
+        reminder_id=reminder_id,
+        chat_id=100,
+        reminder_text="Сохранить новую версию",
+        schedule_type="every_days",
+        start_at=datetime(2026, 7, 2, 10, 0),
+        interval_days=1,
+        expected_revision=1,
+    )
+    now = datetime(2026, 7, 2, 10, 1, tzinfo=timezone.utc)
+    claimed = database.claim_reminder_delivery_occurrence(
+        reminder_id=reminder_id,
+        expected_revision=2,
+        scheduled_for_utc=now - timedelta(minutes=1),
+        claim_token="current-owner",
+        now=now,
+        stale_before=now - timedelta(minutes=2),
+        max_attempts=10,
+    )
+    assert claimed["outcome"] == "claimed"
+    with database.get_connection() as connection:
+        reminders_before = [
+            dict(row)
+            for row in connection.execute("SELECT * FROM reminders ORDER BY id")
+        ]
+        claim_before = dict(
+            connection.execute("SELECT * FROM reminder_delivery_occurrences").fetchone()
+        )
+
+    assert (
+        database.update_reminder_in_db(
+            reminder_id=reminder_id,
+            chat_id=chat_id,
+            reminder_text="Недопустимая перезапись",
+            schedule_type="once",
+            start_at=datetime(2026, 7, 3, 12, 0),
+            expected_revision=expected_revision,
+        )
+        is False
+    )
+
+    with database.get_connection() as connection:
+        assert [
+            dict(row)
+            for row in connection.execute("SELECT * FROM reminders ORDER BY id")
+        ] == reminders_before
+        assert (
+            dict(
+                connection.execute(
+                    "SELECT * FROM reminder_delivery_occurrences"
+                ).fetchone()
+            )
+            == claim_before
+        )
+
+
 def test_mark_reminder_occurrence_handled_is_monotonic_and_atomic(
     monkeypatch,
     tmp_path,
@@ -842,6 +974,38 @@ def test_delivery_claim_serializes_processes_and_allows_stale_recovery(
     assert recovered["outcome"] == "claimed"
     assert recovered["delivery_attempts"] == 2
     assert recovered["is_recovery"] is True
+    with database.get_connection() as connection:
+        before = dict(
+            connection.execute("SELECT * FROM reminder_delivery_occurrences").fetchone()
+        )
+    parent_before = dict(database.get_active_reminder_from_db(reminder_id))
+    assert before["claim_token"] == "process-two"
+    assert (
+        database.refresh_reminder_delivery_claim(
+            occurrence_id=first["occurrence_id"],
+            claim_token="process-one",
+            now=now + timedelta(minutes=4),
+        )
+        is False
+    )
+    assert (
+        database.finalize_reminder_delivery_occurrence(
+            occurrence_id=first["occurrence_id"],
+            claim_token="process-one",
+            outcome="sent",
+        )
+        is False
+    )
+    with database.get_connection() as connection:
+        assert (
+            dict(
+                connection.execute(
+                    "SELECT * FROM reminder_delivery_occurrences"
+                ).fetchone()
+            )
+            == before
+        )
+    assert dict(database.get_active_reminder_from_db(reminder_id)) == parent_before
 
 
 def test_delivery_claim_heartbeat_prevents_stale_recovery(
@@ -1763,6 +1927,13 @@ def test_reminder_message_deletion_queue_is_persistent_and_independent(
         sent_at=sent_at,
         delete_at=delete_at,
     )
+    assert database.enqueue_reminder_message_deletion(
+        reminder_id=None,
+        chat_id=200,
+        message_id=501,
+        sent_at=sent_at,
+        delete_at=delete_at,
+    )
 
     assert database.update_reminder_in_db(
         reminder_id=reminder_id,
@@ -1778,14 +1949,20 @@ def test_reminder_message_deletion_queue_is_persistent_and_independent(
 
     with database.get_connection() as connection:
         rows = connection.execute(
-            "SELECT * FROM reminder_message_deletion_queue"
+            "SELECT * FROM reminder_message_deletion_queue ORDER BY chat_id"
         ).fetchall()
 
-    assert len(rows) == 1
+    assert [(row["chat_id"], row["message_id"]) for row in rows] == [
+        (100, 501),
+        (200, 501),
+    ]
     assert rows[0]["reminder_id"] == reminder_id
     assert rows[0]["message_id"] == 501
     assert rows[0]["delete_at_utc"] == "2026-07-09T03:45:00+00:00"
     assert rows[0]["next_attempt_at_utc"] == "2026-07-09T03:45:00+00:00"
+    assert rows[1]["reminder_id"] is None
+    assert rows[1]["delete_at_utc"] == "2026-07-09T03:45:00+00:00"
+    assert rows[1]["next_attempt_at_utc"] == "2026-07-09T03:45:00+00:00"
 
 
 def test_due_reminder_message_deletions_can_be_rescheduled_and_deleted(

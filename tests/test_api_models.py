@@ -109,6 +109,22 @@ def test_build_reminder_create_data() -> None:
     )
 
 
+def test_build_reminder_create_data_clears_disabled_completion_interval() -> None:
+    request = ReminderCreateRequest(
+        reminder_text="Проверить релиз",
+        schedule_type="once",
+        start_at=datetime(2099, 6, 10, 12, 12),
+        timezone_name="Asia/Yekaterinburg",
+        requires_completion=False,
+        repeat_interval_minutes=60,
+    )
+
+    result = build_reminder_create_data(request)
+
+    assert result.requires_completion is False
+    assert result.repeat_interval_minutes is None
+
+
 def test_reminder_create_request_defaults_auto_delete_to_false() -> None:
     request = ReminderCreateRequest(
         reminder_text="Проверить релиз",

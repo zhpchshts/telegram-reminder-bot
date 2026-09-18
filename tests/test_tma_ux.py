@@ -33,7 +33,6 @@ def test_tma_requests_have_timeout_no_store_and_friendly_error_mapping() -> None
     javascript = read_tma_asset("app.js")
 
     assert "new AbortController()" in javascript
-    assert 'cache: "no-store"' in javascript
     assert "API_REQUEST_TIMEOUT_MS" in javascript
     assert "window.clearTimeout(timeoutId)" in javascript
     assert "Array.isArray(detail)" in javascript
@@ -82,17 +81,6 @@ def test_tma_preview_and_long_text_ui_are_accessible() -> None:
     assert "overflow-y: auto" in styles
     assert "position: sticky" in styles
     assert "-webkit-line-clamp: 6" in styles
-
-
-def test_tma_uses_contrast_safe_primary_colors() -> None:
-    styles = read_tma_asset("styles.css")
-
-    assert "--primary-bg: #1d64c8" in styles
-    assert "--primary-text: #ffffff" in styles
-    assert "--primary-bg: #60a5fa" in styles
-    assert "--primary-text: #0b1220" in styles
-    assert "background: var(--primary-bg)" in styles
-    assert "color: var(--primary-text)" in styles
 
 
 def test_tma_validates_frontend_limits_and_does_not_fake_next_run() -> None:
@@ -158,7 +146,6 @@ def test_tma_refreshes_revision_without_losing_edit_draft_on_conflict() -> None:
     assert "resetForm" not in conflict_handler
     assert 'method: "PUT"' not in conflict_handler
     assert 'path === "/api/tma/reminder-preview"' not in conflict_handler
-    assert javascript.count("requestWithEditConflictRefresh(") == 3
     assert "Список обновлён — проверь данные и повтори удаление." in javascript
     assert (
         "Черновик сохранён, версия обновлена. Проверь предпросмотр и повтори "

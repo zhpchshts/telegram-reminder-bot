@@ -30,6 +30,61 @@ class FakeResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_fetch_json_retries_server_errors(monkeypatch, status) -> None:
+    requests = []
+    delays = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request.full_url)
+        if len(requests) == 1:
+            raise weather_service.urllib.error.HTTPError(
+                request.full_url, status, "Unavailable", {}, None
+            )
+        return FakeResponse({"ok": True})
+
+    monkeypatch.setattr(weather_service.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(weather_service.time, "sleep", delays.append)
+
+    assert weather_service.fetch_json(
+        "https://weather.example.test/forecast", {}, attempts=2
+    ) == {"ok": True}
+    assert requests == ["https://weather.example.test/forecast?"] * 2
+    assert delays == [1]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [("1.2", 2), ("1", 1), ("0.1", 1), ("120", 30)]
+)
+def test_retry_after_rounds_up_and_caps_delay(value, expected) -> None:
+    assert weather_service.parse_retry_after_seconds({"Retry-After": value}) == expected
+
+
+@pytest.mark.parametrize(
+    ("latitude", "longitude"),
+    [(91, 0), (-91, 0), (0, 181), (0, -181), (float("nan"), 0), (0, float("inf"))],
+)
+def test_location_rejects_invalid_coordinates(latitude, longitude) -> None:
+    with pytest.raises(
+        weather_service.WeatherServiceError, match="координаты"
+    ) as error:
+        weather_service.normalize_location_coordinates(
+            {"name": "Тестовый город", "latitude": latitude, "longitude": longitude}
+        )
+    assert error.value.retryable is True
+
+
+@pytest.mark.parametrize(("latitude", "longitude"), [(90, 180), (-90, -180), (0, 0)])
+def test_location_accepts_coordinate_boundaries(latitude, longitude) -> None:
+    assert weather_service.normalize_location_coordinates(
+        {
+            "name": "Тестовый город",
+            "latitude": str(latitude),
+            "longitude": str(longitude),
+        }
+    ) == {"name": "Тестовый город", "latitude": latitude, "longitude": longitude}
+
+
 def test_fetch_json_retries_after_timeout(monkeypatch) -> None:
     timeouts = []
     retry_delays = []
@@ -221,6 +276,12 @@ def test_find_location_saves_new_location_to_cache(monkeypatch) -> None:
     assert location == found_location
     assert saved_locations == [("хургада", found_location)]
     assert fetch_calls[0][0][0] == weather_service.GEOCODING_API_URL
+    assert fetch_calls[0][0][1] == {
+        "name": "Хургада",
+        "count": 1,
+        "language": "ru",
+        "format": "json",
+    }
     assert fetch_calls[0][1]["stage"] == "geocoding"
     assert fetch_calls[0][1]["location_name"] == "Хургада"
 
@@ -430,9 +491,15 @@ def test_format_location_forecast_includes_two_precipitation_periods() -> None:
     )
 
 
-def test_format_location_forecast_describes_current_not_daily_weather() -> None:
+@pytest.mark.parametrize(
+    ("name", "escaped_name"),
+    [("Екатеринбург", "Екатеринбург"), ("Город <&>", "Город &lt;&amp;&gt;")],
+)
+def test_format_location_forecast_describes_current_not_daily_weather(
+    name, escaped_name
+) -> None:
     result = weather_service.format_location_forecast(
-        {"name": "Екатеринбург"},
+        {"name": name},
         {
             "current": {
                 "temperature_2m": 17.2,
@@ -451,7 +518,7 @@ def test_format_location_forecast_describes_current_not_daily_weather() -> None:
         },
     )
 
-    assert result.startswith("🌧 <b>Екатеринбург</b>\n")
+    assert result.startswith(f"🌧 <b>{escaped_name}</b>\n")
     assert "Сейчас 17°, слабый дождь. Днём до 21°." in result
     assert "ясно" not in result
 
@@ -485,6 +552,9 @@ def test_fetch_forecast_requests_hourly_probability_for_two_days(
 
     params = captured["params"]
     assert isinstance(params, dict)
+    assert captured["base_url"] == weather_service.FORECAST_API_URL
+    assert params["latitude"] == 56.84
+    assert params["longitude"] == 60.61
     assert params["hourly"] == "precipitation_probability"
     assert params["forecast_days"] == 2
     assert params["timezone"] == "auto"
@@ -520,7 +590,7 @@ def test_build_weather_report_raises_when_every_location_fails_transiently(
         raise weather_service.WeatherServiceError(
             f"Временный сбой: {location_name}",
             retryable=True,
-            retry_after_seconds=12,
+            retry_after_seconds={"Первый": 5, "Второй": 12}[location_name],
         )
 
     monkeypatch.setattr(weather_service, "find_location", fail_find_location)

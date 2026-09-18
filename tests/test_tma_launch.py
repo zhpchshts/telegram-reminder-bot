@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 import pytest
@@ -11,6 +12,45 @@ from app.tma_launch import (
 )
 
 SECRET = "test-secret"
+# Fixed canonical JSON/HMAC-SHA256/base32 vector, generated without app helpers.
+SIGNED_LAUNCH_TOKEN = (
+    "PMRHAYLZNRXWCZBCHJ5SEY3IMF2F62LEEI5C2MJQGAWCEY3IMF2F65DJORWGKIR2"
+    "EJEG63LFEIWCEY3IMF2F65DZOBSSEORCON2XAZLSM5ZG65LQEIWCEZLYOBUXEZLTL5QX"
+    "IIR2GE3TAMBQGAYDANRQPUWCE43JM5XGC5DVOJSSEORCGFGGO3SEONMF6VKOMV3DMMRY"
+    "L4ZVA52CHBRU2MTBGZ2WEYKEHF3GIUSNO5NGOYLBLA2GOIT5"
+)
+
+
+def test_tma_launch_token_matches_fixed_signature() -> None:
+    assert (
+        create_tma_launch_token(
+            chat_id=-100,
+            chat_type="supergroup",
+            chat_title="Home",
+            secret=SECRET,
+            now=1_700_000_000,
+            max_age_seconds=60,
+        )
+        == SIGNED_LAUNCH_TOKEN
+    )
+    assert validate_tma_launch_token(
+        SIGNED_LAUNCH_TOKEN, secret=SECRET, now=1_700_000_030
+    ) == TmaLaunchContext(chat_id=-100, chat_type="supergroup", chat_title="Home")
+
+
+def test_tma_launch_token_rejects_another_secret() -> None:
+    token = create_tma_launch_token(
+        chat_id=-100,
+        chat_type="supergroup",
+        secret=SECRET,
+        now=1_700_000_000,
+        max_age_seconds=60,
+    )
+
+    with pytest.raises(TmaLaunchTokenError, match="TMA launch token is invalid"):
+        validate_tma_launch_token(
+            token, secret="another-test-secret", now=1_700_000_030
+        )
 
 
 def test_create_and_validate_tma_launch_token() -> None:
@@ -85,18 +125,22 @@ def test_create_tma_launch_token_without_chat_title() -> None:
 
 
 def test_validate_tma_launch_token_rejects_tampered_token() -> None:
-    token = create_tma_launch_token(
-        chat_id=-100,
-        chat_type="supergroup",
-        secret=SECRET,
-        now=1_700_000_000,
-        max_age_seconds=60,
+    envelope = json.loads(
+        base64.b32decode(SIGNED_LAUNCH_TOKEN + "=" * (-len(SIGNED_LAUNCH_TOKEN) % 8))
     )
-    replacement = "A" if token[-1] != "A" else "B"
+    # Keep valid JSON and the original signature, changing only the signed chat.
+    envelope["payload"]["chat_id"] = -200
+    tampered_token = (
+        base64.b32encode(
+            json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
 
     with pytest.raises(TmaLaunchTokenError) as error:
         validate_tma_launch_token(
-            token[:-1] + replacement,
+            tampered_token,
             secret=SECRET,
             now=1_700_000_030,
         )

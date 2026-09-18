@@ -39,6 +39,10 @@ def test_build_reminder_read_data_maps_row_to_read_model() -> None:
         "month_day": None,
         "timezone": "Asia/Yekaterinburg",
         "delete_after_two_days": 1,
+        "revision": 7,
+        "requires_completion": 1,
+        "repeat_interval_minutes": 30,
+        "awaiting_completion": 1,
         "delivery_tracking_started_at_utc": "2026-07-01T05:00:00",
         "last_handled_scheduled_for_utc": "2026-07-02T10:00:00+05:00",
     }
@@ -56,6 +60,10 @@ def test_build_reminder_read_data_maps_row_to_read_model() -> None:
         ),
         last_handled_scheduled_for_utc=datetime(2026, 7, 2, 5, 0, tzinfo=timezone.utc),
         delete_after_two_days=True,
+        revision=7,
+        requires_completion=True,
+        repeat_interval_minutes=30,
+        awaiting_completion=True,
         interval_days=3,
     )
 

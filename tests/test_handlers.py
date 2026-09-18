@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -364,10 +364,18 @@ def test_create_schedule_and_confirm_sends_all_confirmation_messages(
         start_at=make_datetime(2099, 6, 10),
         timezone_name=TIMEZONE_NAME,
     )
+    created = []
+
+    def fake_create_scheduled_reminder(*, bot, chat_id, data):
+        assert bot is BOT
+        assert data is reminder_data
+        created.append(chat_id)
+        return 42
+
     monkeypatch.setattr(
         handlers,
         "create_scheduled_reminder",
-        lambda **kwargs: 42,
+        fake_create_scheduled_reminder,
     )
 
     def fake_build_created_reminder_messages(
@@ -387,10 +395,47 @@ def test_create_schedule_and_confirm_sends_all_confirmation_messages(
 
     asyncio.run(handlers.create_schedule_and_confirm(message, BOT, data=reminder_data))
 
+    assert created == [CHAT_ID]
     assert message.answers == [
         ("Напоминание создано.", {}),
         ("Текст: полный текст", {}),
     ]
+
+
+@pytest.mark.parametrize("seconds_from_now", [-1, 0, 1])
+def test_reject_past_datetime_includes_present_boundary(
+    monkeypatch: pytest.MonkeyPatch, seconds_from_now: int
+) -> None:
+    now = make_datetime(2026, 6, 8)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz)
+
+    monkeypatch.setattr(handlers, "datetime", FrozenDateTime)
+    message = FakeMessage("/remind")
+
+    rejected = asyncio.run(
+        handlers.reject_past_datetime(
+            message,
+            start_at=now + timedelta(seconds=seconds_from_now),
+            heading="Дата и время должны быть в будущем.",
+            timezone_name=TIMEZONE_NAME,
+        )
+    )
+
+    assert rejected is (seconds_from_now <= 0)
+    if rejected:
+        assert message.answers == [
+            (
+                "Дата и время должны быть в будущем.\n\n"
+                "Сейчас в таймзоне Asia/Yekaterinburg: 08 июня в 12:12",
+                {},
+            )
+        ]
+    else:
+        assert message.answers == []
 
 
 @pytest.mark.parametrize(

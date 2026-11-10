@@ -360,6 +360,18 @@ test('expired bootstrap session explains reopening Telegram', async ({ page, fix
   expect(requests(fixture, 'POST', '/api/tma/reminders')).toHaveLength(0);
 });
 
+test('expired launch link explains getting a fresh button in the required chat', async ({ page, fixture }) => {
+  fixture.store.queueFault('GET', '/api/tma/bootstrap', { status: 401, body: { detail: 'TMA launch token is expired.' } });
+  await page.goto(appUrl(fixture));
+  await expect(page.locator('#fatal-error-screen')).toBeVisible();
+  const message = page.locator('#fatal-error-message');
+  await expect(message).toContainText('Срок действия ссылки истёк.');
+  await expect(message).toContainText('Отправь /app в нужном Telegram-чате, чтобы получить свежую кнопку');
+  await expect(page.locator('#list-screen')).toBeHidden();
+  expect(await page.evaluate(() => typeof window.Telegram)).toBe('undefined');
+  expect(fixture.store.requests.filter((entry) => entry.method !== 'GET')).toHaveLength(0);
+});
+
 test('timezone field locks while pending and error leaves its draft available', async ({ page, fixture }) => {
   await openApp(page, fixture);
   await page.locator('#settings-button').click();

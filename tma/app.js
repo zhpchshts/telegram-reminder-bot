@@ -367,6 +367,8 @@ function showFatalError(error) {
 
   if (isMissingChatContextError(error)) {
     message = "Открой Незабудку из нужного Telegram-чата и попробуй ещё раз.";
+  } else if (isExpiredLaunchTokenError(error)) {
+    message = "Срок действия ссылки истёк. Отправь /app в нужном Telegram-чате, чтобы получить свежую кнопку, и открой Незабудку через неё.";
   } else if (isTelegramSessionError(error)) {
     message = "Сессия устарела. Открой Незабудку заново из Telegram-чата.";
   } else if (isTelegramLaunchContextError(error)) {
